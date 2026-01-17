@@ -204,33 +204,53 @@ async function resolveOnuAlLink(shortLink) {
         // User agent ayarla
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0');
 
-        // Sayfaya git ve tüm redirect'leri takip et
-        await page.goto(shortLink, { waitUntil: 'domcontentloaded' });
+        // Request interceptor - zxro.com URL'ini yakala
+        let capturedZxroUrl = null;
+        await page.setRequestInterception(true);
 
-        // Biraz bekle (JavaScript redirect'ler için)
-        await new Promise(r => setTimeout(r, 2000));
+        page.on('request', (request) => {
+            const url = request.url();
 
-        // Son URL'i al
-        const finalUrl = page.url();
+            // zxro.com URL'ini yakala
+            if (url.includes('zxro.com') && !capturedZxroUrl) {
+                capturedZxroUrl = url;
+                console.log(`🎯 zxro.com yakalandı: ${url.substring(0, 80)}...`);
+
+                // URL parametresini hemen decode et
+                try {
+                    const zxroUrl = new URL(url);
+                    const encodedUrl = zxroUrl.searchParams.get('url');
+                    if (encodedUrl) {
+                        capturedZxroUrl = decodeURIComponent(encodedUrl);
+                        console.log(`✅ Gerçek link decode edildi: ${capturedZxroUrl.substring(0, 60)}...`);
+                    }
+                } catch (e) { }
+
+                // Request'i iptal et - daha fazla yükleme gerekmiyor
+                request.abort();
+            } else {
+                request.continue();
+            }
+        });
+
+        // Sayfaya git
+        try {
+            await page.goto(shortLink, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        } catch (e) {
+            // Navigation abort bekleniyor, sorun değil
+        }
 
         await page.close();
 
-        // zxro.com ise içindeki URL'i çıkar
-        if (finalUrl.includes('zxro.com')) {
-            try {
-                const zxroUrl = new URL(finalUrl);
-                const encodedUrl = zxroUrl.searchParams.get('url');
-                if (encodedUrl) {
-                    const decodedUrl = decodeURIComponent(encodedUrl);
-                    console.log(`✅ zxro.com'dan çözümlendi: ${decodedUrl.substring(0, 60)}...`);
-                    return decodedUrl;
-                }
-            } catch (e) { }
+        // zxro.com'dan decode edilmiş URL varsa döndür
+        if (capturedZxroUrl && !capturedZxroUrl.includes('onu.al') && !capturedZxroUrl.includes('onual.com') && !capturedZxroUrl.includes('zxro.com')) {
+            return capturedZxroUrl;
         }
 
-        // Farklı bir site ise direkt döndür
-        if (!finalUrl.includes('onu.al') && !finalUrl.includes('onual.com')) {
-            console.log(`✅ Puppeteer ile çözümlendi: ${finalUrl.substring(0, 60)}...`);
+        // Alternatif: Son URL'i kontrol et
+        const finalUrl = page.url ? page.url() : shortLink;
+        if (finalUrl && !finalUrl.includes('onu.al') && !finalUrl.includes('onual.com')) {
+            console.log(`✅ Final URL: ${finalUrl.substring(0, 60)}...`);
             return finalUrl;
         }
 
