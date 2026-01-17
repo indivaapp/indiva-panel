@@ -172,62 +172,87 @@ async function resolveOnuAlLink(shortLink) {
 
     console.log(`🔗 Link çözümleniyor: ${shortLink}`);
 
-    try {
-        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(shortLink)}&_t=${Date.now()}`;
-        const response = await fetchWithTimeout(proxyUrl, 10000);
+    // Birden fazla proxy dene
+    const proxies = [
+        `https://api.allorigins.win/get?url=${encodeURIComponent(shortLink)}&_t=${Date.now()}`,
+        `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(shortLink)}&_t=${Date.now()}`,
+    ];
 
-        if (!response.ok) return shortLink;
+    for (const proxyUrl of proxies) {
+        try {
+            const response = await fetchWithTimeout(proxyUrl, 25000); // 25 saniye timeout
 
-        const json = await response.json();
-        const html = json.contents || '';
+            if (!response.ok) continue;
 
-        if (html.length < 100) return shortLink;
+            let html = '';
+            const contentType = response.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+                const json = await response.json();
+                html = json.contents || json.body || '';
+            } else {
+                html = await response.text();
+            }
 
-        // Pattern 1: zxro.com redirect (YENİ FORMAT)
-        const zxroMatch = html.match(/href=['"]?(https?:\/\/zxro\.com\/u\/\?[^'">\s]+)['"]?/i);
-        if (zxroMatch && zxroMatch[1]) {
-            try {
-                const zxroUrl = new URL(zxroMatch[1]);
-                const encodedUrl = zxroUrl.searchParams.get('url');
-                if (encodedUrl) {
-                    const decodedUrl = decodeURIComponent(encodedUrl);
-                    console.log(`✅ zxro.com'dan çözümlendi: ${decodedUrl.substring(0, 50)}...`);
-                    return decodedUrl;
-                }
-            } catch (e) { }
+            if (html.length < 100) continue;
+
+            // Pattern 1: zxro.com redirect (YENİ FORMAT)
+            const zxroMatch = html.match(/href=['"]?(https?:\/\/zxro\.com\/u\/\?[^'">\s]+)['"]?/i);
+            if (zxroMatch && zxroMatch[1]) {
+                try {
+                    const zxroUrl = new URL(zxroMatch[1]);
+                    const encodedUrl = zxroUrl.searchParams.get('url');
+                    if (encodedUrl) {
+                        const decodedUrl = decodeURIComponent(encodedUrl);
+                        console.log(`✅ zxro.com'dan çözümlendi: ${decodedUrl.substring(0, 50)}...`);
+                        return decodedUrl;
+                    }
+                } catch (e) { }
+            }
+
+            // Pattern 2: id="buton" (ESKİ FORMAT)
+            const butonMatch = html.match(/id=['"]buton['"][^>]*href=['"]([^'"]+)['"]/i) ||
+                html.match(/href=['"]([^'"]+)['"][^>]*id=['"]buton['"]/i);
+            if (butonMatch && butonMatch[1] && !butonMatch[1].includes('onual')) {
+                console.log(`✅ #buton'dan çözümlendi`);
+                return butonMatch[1];
+            }
+
+            // Pattern 3: ty.gl (Trendyol)
+            const tyMatch = html.match(/href=['"]?(https?:\/\/ty\.gl\/[A-Za-z0-9]+)['"]?/i);
+            if (tyMatch) {
+                console.log(`✅ ty.gl bulundu`);
+                return tyMatch[1];
+            }
+
+            // Pattern 4: app.hb.biz (Hepsiburada)
+            const hbMatch = html.match(/href=['"]?(https?:\/\/app\.hb\.biz\/[A-Za-z0-9]+)['"]?/i);
+            if (hbMatch) {
+                console.log(`✅ hb.biz bulundu`);
+                return hbMatch[1];
+            }
+
+            // Pattern 5: amazon.com.tr
+            const amzMatch = html.match(/href=['"]?(https?:\/\/(?:www\.)?amazon\.com\.tr\/[^'">\s]+)['"]?/i);
+            if (amzMatch) {
+                console.log(`✅ amazon.com.tr bulundu`);
+                return amzMatch[1];
+            }
+
+            // Pattern 6: n11.com
+            const n11Match = html.match(/href=['"]?(https?:\/\/(?:www\.)?n11\.com\/[^'">\s]+)['"]?/i);
+            if (n11Match) {
+                console.log(`✅ n11.com bulundu`);
+                return n11Match[1];
+            }
+
+        } catch (error) {
+            console.log(`⚠️ Proxy hatası, sonraki deneniyor...`);
+            continue;
         }
-
-        // Pattern 2: id="buton" (ESKİ FORMAT)
-        const butonMatch = html.match(/id=['"]buton['"][^>]*href=['"]([^'"]+)['"]/i) ||
-            html.match(/href=['"]([^'"]+)['"][^>]*id=['"]buton['"]/i);
-        if (butonMatch && butonMatch[1] && !butonMatch[1].includes('onual')) {
-            console.log(`✅ #buton'dan çözümlendi`);
-            return butonMatch[1];
-        }
-
-        // Pattern 3: ty.gl (Trendyol)
-        const tyMatch = html.match(/href=['"]?(https?:\/\/ty\.gl\/[A-Za-z0-9]+)['"]?/i);
-        if (tyMatch) return tyMatch[1];
-
-        // Pattern 4: app.hb.biz (Hepsiburada)
-        const hbMatch = html.match(/href=['"]?(https?:\/\/app\.hb\.biz\/[A-Za-z0-9]+)['"]?/i);
-        if (hbMatch) return hbMatch[1];
-
-        // Pattern 5: amazon.com.tr
-        const amzMatch = html.match(/href=['"]?(https?:\/\/(?:www\.)?amazon\.com\.tr\/[^'">\s]+)['"]?/i);
-        if (amzMatch) return amzMatch[1];
-
-        // Pattern 6: n11.com
-        const n11Match = html.match(/href=['"]?(https?:\/\/(?:www\.)?n11\.com\/[^'">\s]+)['"]?/i);
-        if (n11Match) return n11Match[1];
-
-        console.log(`⚠️ Link çözümlenemedi`);
-        return shortLink;
-
-    } catch (error) {
-        console.log(`❌ Link hatası: ${error.message}`);
-        return shortLink;
     }
+
+    console.log(`⚠️ Link çözümlenemedi`);
+    return shortLink;
 }
 
 // ===== MAIN FUNCTION =====
