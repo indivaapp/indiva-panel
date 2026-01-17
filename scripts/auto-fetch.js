@@ -163,7 +163,29 @@ function parseTelegramHtml(html) {
     return deals.slice(0, MAX_DEALS_PER_RUN);
 }
 
-// ===== LINK RESOLVER =====
+// ===== LINK RESOLVER (PUPPETEER) =====
+
+let browser = null;
+
+async function initBrowser() {
+    if (!browser) {
+        const puppeteer = require('puppeteer');
+        browser = await puppeteer.launch({
+            headless: 'new',
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+        console.log('🌐 Puppeteer browser başlatıldı');
+    }
+    return browser;
+}
+
+async function closeBrowser() {
+    if (browser) {
+        await browser.close();
+        browser = null;
+        console.log('🌐 Browser kapatıldı');
+    }
+}
 
 async function resolveOnuAlLink(shortLink) {
     if (!shortLink || !shortLink.includes('onu.al')) {
@@ -173,86 +195,47 @@ async function resolveOnuAlLink(shortLink) {
     console.log(`🔗 Link çözümleniyor: ${shortLink}`);
 
     try {
-        // Yöntem 1: HTTP redirect takibi
-        // onu.al aslında bir redirect yapıyor, Location header'ı takip edelim
-        const response = await fetch(shortLink, {
-            method: 'HEAD',
-            redirect: 'manual', // Redirect'i takip etme, header'ı al
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0'
-            }
-        });
+        const browser = await initBrowser();
+        const page = await browser.newPage();
 
-        // Location header'ında yönlendirme URL'i var mı?
-        let locationHeader = response.headers.get('location');
-        if (locationHeader) {
-            // zxro.com redirect ise, içindeki gerçek URL'i çıkar
-            if (locationHeader.includes('zxro.com')) {
-                try {
-                    const zxroUrl = new URL(locationHeader);
-                    const encodedUrl = zxroUrl.searchParams.get('url');
-                    if (encodedUrl) {
-                        const decodedUrl = decodeURIComponent(encodedUrl);
-                        console.log(`✅ zxro.com'dan gerçek link çözümlendi: ${decodedUrl.substring(0, 60)}...`);
-                        return decodedUrl;
-                    }
-                } catch (e) {
-                    console.log(`⚠️ zxro.com parse hatası`);
+        // Timeout ayarla
+        page.setDefaultNavigationTimeout(30000);
+
+        // User agent ayarla
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0');
+
+        // Sayfaya git ve tüm redirect'leri takip et
+        await page.goto(shortLink, { waitUntil: 'domcontentloaded' });
+
+        // Biraz bekle (JavaScript redirect'ler için)
+        await new Promise(r => setTimeout(r, 2000));
+
+        // Son URL'i al
+        const finalUrl = page.url();
+
+        await page.close();
+
+        // zxro.com ise içindeki URL'i çıkar
+        if (finalUrl.includes('zxro.com')) {
+            try {
+                const zxroUrl = new URL(finalUrl);
+                const encodedUrl = zxroUrl.searchParams.get('url');
+                if (encodedUrl) {
+                    const decodedUrl = decodeURIComponent(encodedUrl);
+                    console.log(`✅ zxro.com'dan çözümlendi: ${decodedUrl.substring(0, 60)}...`);
+                    return decodedUrl;
                 }
-            }
-
-            // Diğer durumlar (doğrudan mağaza linki)
-            if (!locationHeader.includes('onu.al') && !locationHeader.includes('onual.com')) {
-                console.log(`✅ HTTP redirect ile çözümlendi: ${locationHeader.substring(0, 50)}...`);
-                return locationHeader;
-            }
+            } catch (e) { }
         }
 
-        // Yöntem 2: Sayfa içeriğini scrape et (proxy ile)
-        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(shortLink)}&_t=${Date.now()}`;
-        const proxyResponse = await fetchWithTimeout(proxyUrl, 20000);
-
-        if (proxyResponse.ok) {
-            const json = await proxyResponse.json();
-            const html = json.contents || '';
-
-            if (html.length > 100) {
-                // zxro.com redirect pattern
-                const zxroMatch = html.match(/href=['"]?(https?:\/\/zxro\.com\/u\/\?[^'">\s]+)['"]?/i);
-                if (zxroMatch && zxroMatch[1]) {
-                    try {
-                        const zxroUrl = new URL(zxroMatch[1]);
-                        const encodedUrl = zxroUrl.searchParams.get('url');
-                        if (encodedUrl) {
-                            const decodedUrl = decodeURIComponent(encodedUrl);
-                            console.log(`✅ zxro.com'dan çözümlendi: ${decodedUrl.substring(0, 50)}...`);
-                            return decodedUrl;
-                        }
-                    } catch (e) { }
-                }
-
-                // Diğer mağaza linkleri
-                const storePatterns = [
-                    /href=['"]?(https?:\/\/ty\.gl\/[A-Za-z0-9]+)['"]?/i,
-                    /href=['"]?(https?:\/\/app\.hb\.biz\/[A-Za-z0-9]+)['"]?/i,
-                    /href=['"]?(https?:\/\/(?:www\.)?amazon\.com\.tr\/[^'">\s]+)['"]?/i,
-                    /href=['"]?(https?:\/\/(?:www\.)?n11\.com\/[^'">\s]+)['"]?/i,
-                    /href=['"]?(https?:\/\/(?:www\.)?trendyol\.com\/[^'">\s]+)['"]?/i,
-                    /href=['"]?(https?:\/\/(?:www\.)?hepsiburada\.com\/[^'">\s]+)['"]?/i,
-                ];
-
-                for (const pattern of storePatterns) {
-                    const match = html.match(pattern);
-                    if (match && match[1]) {
-                        console.log(`✅ Mağaza linki bulundu: ${match[1].substring(0, 50)}...`);
-                        return match[1];
-                    }
-                }
-            }
+        // Farklı bir site ise direkt döndür
+        if (!finalUrl.includes('onu.al') && !finalUrl.includes('onual.com')) {
+            console.log(`✅ Puppeteer ile çözümlendi: ${finalUrl.substring(0, 60)}...`);
+            return finalUrl;
         }
 
     } catch (error) {
-        console.log(`⚠️ Link çözümleme hatası: ${error.message}`);
+        console.log(`⚠️ Puppeteer hatası: ${error.message}`);
     }
 
     console.log(`⚠️ Link çözümlenemedi, orijinal kullanılıyor`);
@@ -355,8 +338,12 @@ async function main() {
 
     } catch (error) {
         console.error('❌ Hata:', error.message);
+        await closeBrowser();
         process.exit(1);
     }
+
+    // Browser'ı kapat
+    await closeBrowser();
 }
 
 main();
