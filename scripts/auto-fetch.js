@@ -184,10 +184,28 @@ async function resolveOnuAlLink(shortLink) {
         });
 
         // Location header'ında yönlendirme URL'i var mı?
-        const locationHeader = response.headers.get('location');
-        if (locationHeader && !locationHeader.includes('onu.al') && !locationHeader.includes('onual.com')) {
-            console.log(`✅ HTTP redirect ile çözümlendi: ${locationHeader.substring(0, 50)}...`);
-            return locationHeader;
+        let locationHeader = response.headers.get('location');
+        if (locationHeader) {
+            // zxro.com redirect ise, içindeki gerçek URL'i çıkar
+            if (locationHeader.includes('zxro.com')) {
+                try {
+                    const zxroUrl = new URL(locationHeader);
+                    const encodedUrl = zxroUrl.searchParams.get('url');
+                    if (encodedUrl) {
+                        const decodedUrl = decodeURIComponent(encodedUrl);
+                        console.log(`✅ zxro.com'dan gerçek link çözümlendi: ${decodedUrl.substring(0, 60)}...`);
+                        return decodedUrl;
+                    }
+                } catch (e) {
+                    console.log(`⚠️ zxro.com parse hatası`);
+                }
+            }
+
+            // Diğer durumlar (doğrudan mağaza linki)
+            if (!locationHeader.includes('onu.al') && !locationHeader.includes('onual.com')) {
+                console.log(`✅ HTTP redirect ile çözümlendi: ${locationHeader.substring(0, 50)}...`);
+                return locationHeader;
+            }
         }
 
         // Yöntem 2: Sayfa içeriğini scrape et (proxy ile)
