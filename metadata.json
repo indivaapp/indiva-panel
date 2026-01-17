@@ -1,0 +1,5 @@
+{
+  "name": "İNDİVA Admin Panel",
+  "description": "An administrative panel for managing the İNDİVA application. This panel allows for uploading discount announcements, managing market brochures, reviewing user-submitted deals, publishing advertisements, and sending push notifications to users.",
+  "requestFramePermissions": []
+}
