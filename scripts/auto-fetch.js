@@ -126,37 +126,66 @@ function parseTelegramHtml(html) {
     return deals.slice(0, MAX_DEALS_PER_RUN);
 }
 
-// ===== LINK RESOLVER (SIMPLE) =====
+// ===== LINK RESOLVER (HTML PARSING) =====
 async function resolveOnuAlLink(shortLink) {
     if (!shortLink || !shortLink.includes('onu.al')) return shortLink;
     console.log(`🔗 Link çözümleniyor: ${shortLink}`);
 
     try {
-        // HTTP HEAD ile redirect'i yakala
-        const response = await fetch(shortLink, {
-            method: 'HEAD',
-            redirect: 'manual',
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0' }
-        });
+        // onu.al sayfasını proxy ile çek
+        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(shortLink)}&_t=${Date.now()}`;
+        const response = await fetchWithTimeout(proxyUrl, 20000);
 
-        const location = response.headers.get('location');
-        if (location && location.includes('zxro.com')) {
-            // zxro.com URL'inden gerçek linki çıkar
+        if (!response.ok) {
+            console.log(`⚠️ Proxy yanıt vermedi`);
+            return shortLink;
+        }
+
+        const json = await response.json();
+        const html = json.contents || '';
+
+        if (html.length < 100) {
+            console.log(`⚠️ HTML içeriği çok kısa`);
+            return shortLink;
+        }
+
+        // zxro.com/u/?...url=... linkini bul
+        const zxroMatch = html.match(/href=['"]?(https?:\/\/zxro\.com\/u\/\?[^'">\s]+)/i);
+        if (zxroMatch && zxroMatch[1]) {
             try {
-                const zxroUrl = new URL(location);
+                // HTML entities decode et
+                const zxroLink = zxroMatch[1].replace(/&amp;/g, '&');
+                const zxroUrl = new URL(zxroLink);
                 const encodedUrl = zxroUrl.searchParams.get('url');
+
                 if (encodedUrl) {
                     const decodedUrl = decodeURIComponent(encodedUrl);
-                    console.log(`✅ Gerçek link: ${decodedUrl.substring(0, 60)}...`);
+                    console.log(`✅ Gerçek mağaza linki: ${decodedUrl.substring(0, 70)}...`);
                     return decodedUrl;
                 }
-            } catch (e) { }
+            } catch (e) {
+                console.log(`⚠️ URL parse hatası: ${e.message}`);
+            }
         }
 
-        if (location && !location.includes('onu.al') && !location.includes('onual.com')) {
-            console.log(`✅ Redirect link: ${location.substring(0, 60)}...`);
-            return location;
+        // Alternatif: Direkt mağaza linkleri ara
+        const storePatterns = [
+            /href=['"]?(https?:\/\/ty\.gl\/[A-Za-z0-9]+)/i,
+            /href=['"]?(https?:\/\/(?:www\.)?trendyol\.com\/[^'">\s]+)/i,
+            /href=['"]?(https?:\/\/(?:www\.)?n11\.com\/[^'">\s]+)/i,
+            /href=['"]?(https?:\/\/(?:www\.)?hepsiburada\.com\/[^'">\s]+)/i,
+            /href=['"]?(https?:\/\/(?:www\.)?amazon\.com\.tr\/[^'">\s]+)/i,
+        ];
+
+        for (const pattern of storePatterns) {
+            const match = html.match(pattern);
+            if (match && match[1]) {
+                console.log(`✅ Mağaza linki bulundu: ${match[1].substring(0, 60)}...`);
+                return match[1];
+            }
         }
+
+        console.log(`⚠️ zxro.com linki bulunamadı`);
     } catch (error) {
         console.log(`⚠️ Link hatası: ${error.message}`);
     }
