@@ -2,8 +2,9 @@ name: INDIVA Auto-Fetch Deals
 
 on:
   schedule:
-    # Her 10 dakikada bir çalış (7/24)
-    - cron: '*/10 * * * *'
+    # Her 30 dakikada bir, saat 10:00-00:00 arası (Türkiye saati)
+    # UTC: 07:00-21:00 (Türkiye = UTC+3)
+    - cron: '0,30 7-20 * * *'
   workflow_dispatch: # Manuel tetikleme
 
 jobs:
