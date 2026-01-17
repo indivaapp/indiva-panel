@@ -3,9 +3,8 @@ name: INDIVA Auto-Fetch Deals
 on:
   schedule:
     # Her 30 dakikada bir, saat 10:00-00:00 arası (Türkiye saati)
-    # UTC: 07:00-21:00 (Türkiye = UTC+3)
     - cron: '0,30 7-20 * * *'
-  workflow_dispatch: # Manuel tetikleme
+  workflow_dispatch:
 
 jobs:
   fetch-deals:
@@ -24,7 +23,7 @@ jobs:
         run: |
           cd scripts
           npm init -y
-          npm install firebase-admin puppeteer
+          npm install firebase-admin
       
       - name: Run Auto-Fetch Script
         env:
