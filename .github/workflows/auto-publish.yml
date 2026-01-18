@@ -19,15 +19,36 @@ jobs:
         with:
           node-version: '20'
       
+      - name: Install Chrome dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libnss3 \
+            libnspr4 \
+            libatk1.0-0 \
+            libatk-bridge2.0-0 \
+            libcups2 \
+            libdrm2 \
+            libxkbcommon0 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxfixes3 \
+            libxrandr2 \
+            libgbm1 \
+            libasound2 \
+            libpango-1.0-0 \
+            libcairo2
+      
       - name: Install dependencies
         run: |
           cd scripts
           npm init -y
-          npm install firebase-admin
+          npm install firebase-admin puppeteer
       
       - name: Run Auto-Fetch Script
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'false'
         run: node scripts/auto-fetch.js
       
       - name: Log completion
