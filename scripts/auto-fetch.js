@@ -193,26 +193,27 @@ async function resolveOnuAlLink(shortLink) {
         await new Promise(r => setTimeout(r, 2000));
 
         // #buton elementinden href al
-        let storeLink = null;
+        let intermediateLink = null;
         try {
-            storeLink = await page.$eval('#buton', el => el.href);
-            console.log(`✅ #buton linki: ${storeLink}`);
+            intermediateLink = await page.$eval('#buton', el => el.href);
+            console.log(`✅ #buton linki: ${intermediateLink}`);
         } catch (e) {
             console.log(`⚠️ #buton bulunamadı, alternatif yöntemler deneniyor...`);
         }
 
         // Alternatif: data-url veya onclick içinden
-        if (!storeLink) {
+        if (!intermediateLink) {
             try {
-                storeLink = await page.$eval('[data-url]', el => el.getAttribute('data-url'));
-                console.log(`✅ data-url linki: ${storeLink}`);
+                intermediateLink = await page.$eval('[data-url]', el => el.getAttribute('data-url'));
+                console.log(`✅ data-url linki: ${intermediateLink}`);
             } catch (e) { }
         }
 
-        // Alternatif: Tüm linkleri tara
-        if (!storeLink) {
+        // Alternatif: Sayfa içindeki zxro.com veya mağaza linklerini tara
+        if (!intermediateLink) {
             const allLinks = await page.$$eval('a[href]', links =>
                 links.map(a => a.href).filter(href =>
+                    href.includes('zxro.com') ||
                     href.includes('trendyol.com') ||
                     href.includes('hepsiburada.com') ||
                     href.includes('amazon.com.tr') ||
@@ -222,34 +223,114 @@ async function resolveOnuAlLink(shortLink) {
                 )
             );
             if (allLinks.length > 0) {
-                storeLink = allLinks[0];
-                console.log(`✅ Sayfa içi link: ${storeLink}`);
+                intermediateLink = allLinks[0];
+                console.log(`✅ Sayfa içi link: ${intermediateLink}`);
             }
         }
 
-        // Alternatif: Request intercept ile redirect yakalamaya çalış
-        if (!storeLink) {
-            // Mevcut URL'i kontrol et (belki redirect olmuştur)
+        // Alternatif: Mevcut URL'i kontrol et (redirect olmuştur)
+        if (!intermediateLink) {
             const currentUrl = page.url();
             if (!currentUrl.includes('onu.al') && !currentUrl.includes('onual.com')) {
-                storeLink = currentUrl;
-                console.log(`✅ Redirect URL: ${storeLink}`);
+                intermediateLink = currentUrl;
+                console.log(`✅ Redirect URL: ${intermediateLink}`);
             }
         }
 
         await page.close();
 
-        if (storeLink && !storeLink.includes('onu.al') && !storeLink.includes('onual.com')) {
-            return storeLink;
+        // Eğer zxro.com veya benzeri bir ara link ise, onu da takip et
+        if (intermediateLink && isIntermediateRedirect(intermediateLink)) {
+            console.log(`🔄 Ara link tespit edildi, takip ediliyor: ${intermediateLink}`);
+            const finalLink = await followRedirectChain(intermediateLink);
+            if (finalLink && isRealStoreLink(finalLink)) {
+                console.log(`✅ Gerçek mağaza linki: ${finalLink}`);
+                return finalLink;
+            }
         }
 
-        // Son çare: en azından onual.com linkini döndür
+        // Zaten gerçek mağaza linki ise döndür
+        if (intermediateLink && isRealStoreLink(intermediateLink)) {
+            return intermediateLink;
+        }
+
+        // Son çare: orijinal link
         console.log(`⚠️ Gerçek link bulunamadı, orijinal kullanılıyor`);
         return shortLink;
 
     } catch (error) {
         console.log(`❌ Puppeteer hatası: ${error.message}`);
         return shortLink;
+    }
+}
+
+// Ara redirect linklerini tespit et
+function isIntermediateRedirect(url) {
+    if (!url) return false;
+    const intermediates = ['zxro.com', 'bit.ly', 'tinyurl.com', 'ow.ly', 'goo.gl'];
+    return intermediates.some(domain => url.includes(domain));
+}
+
+// Gerçek mağaza linki mi kontrol et
+function isRealStoreLink(url) {
+    if (!url) return false;
+    const stores = [
+        'trendyol.com', 'hepsiburada.com', 'amazon.com.tr', 'n11.com',
+        'ty.gl', 'app.hb.biz', 'amzn.to', 'gittigidiyor.com'
+    ];
+    return stores.some(store => url.includes(store));
+}
+
+// Redirect zincirini takip et (zxro.com -> gerçek mağaza)
+async function followRedirectChain(url) {
+    console.log(`🔗 Redirect zinciri takip ediliyor: ${url}`);
+
+    try {
+        const browserInstance = await initBrowser();
+        const page = await browserInstance.newPage();
+
+        // Request interception ile redirect'leri yakala
+        let finalUrl = url;
+
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            const resourceType = req.resourceType();
+            if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
+
+        // Response'ları izle
+        page.on('response', (response) => {
+            const responseUrl = response.url();
+            if (isRealStoreLink(responseUrl)) {
+                finalUrl = responseUrl;
+            }
+        });
+
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
+
+        await page.goto(url, {
+            waitUntil: 'networkidle2',
+            timeout: LINK_RESOLVE_TIMEOUT
+        });
+
+        // Son URL'i kontrol et
+        const pageUrl = page.url();
+        if (isRealStoreLink(pageUrl)) {
+            finalUrl = pageUrl;
+        }
+
+        await page.close();
+
+        console.log(`✅ Final URL: ${finalUrl}`);
+        return finalUrl;
+
+    } catch (error) {
+        console.log(`⚠️ Redirect takip hatası: ${error.message}`);
+        return url;
     }
 }
 
@@ -291,8 +372,8 @@ async function main() {
             // Puppeteer ile link çözümle
             let productLink = await resolveOnuAlLink(deal.onualLink);
 
-            // Çözümleme başarılı mı kontrol et
-            const wasResolved = productLink && !productLink.includes('onu.al') && !productLink.includes('onual.com');
+            // Çözümleme başarılı mı kontrol et - SADECE gerçek mağaza linkleri
+            const wasResolved = isRealStoreLink(productLink);
             if (wasResolved) {
                 resolvedLinksCount++;
             }
