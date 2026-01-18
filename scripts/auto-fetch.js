@@ -86,7 +86,11 @@ async function fetchWithProxy(targetUrl) {
 }
 
 // ===== GEMINI AI =====
-async function callGeminiAPI(prompt) {
+// Free tier: 15 requests per minute (RPM) = 4 saniye minimum bekleme
+const GEMINI_DELAY_MS = 5000; // 5 saniye (güvenli limit)
+const MAX_RETRIES = 3;
+
+async function callGeminiAPI(prompt, retryCount = 0) {
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
@@ -106,6 +110,18 @@ async function callGeminiAPI(prompt) {
                 }
             })
         });
+
+        // Rate limit hatası - retry with backoff
+        if (response.status === 429) {
+            if (retryCount < MAX_RETRIES) {
+                const waitTime = (retryCount + 1) * 10000; // 10, 20, 30 saniye
+                console.log(`⏳ Rate limit - ${waitTime / 1000}s bekleniyor... (Deneme ${retryCount + 1}/${MAX_RETRIES})`);
+                await new Promise(r => setTimeout(r, waitTime));
+                return callGeminiAPI(prompt, retryCount + 1);
+            }
+            console.log('❌ Rate limit aşıldı, AI atlanıyor');
+            return null;
+        }
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -483,8 +499,8 @@ async function main() {
             const aiStatus = enriched.description !== getDefaultDescription(deal) ? '✓AI' : '⚠️AI';
             console.log(`✅ Kaydedildi: ${enriched.title.substring(0, 40)}... [${status}] [${aiStatus}]`);
 
-            // Rate limiting - API quota koruma
-            await new Promise(r => setTimeout(r, 2000));
+            // Rate limiting - API quota koruma (Gemini free tier: 15 RPM)
+            await new Promise(r => setTimeout(r, GEMINI_DELAY_MS));
         }
 
         console.log(`\n🎉 SONUÇ:`);
