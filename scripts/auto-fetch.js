@@ -1,13 +1,13 @@
-// ===== INDIVA AUTO-FETCH =====
-// GitHub Actions'da çalışan basit script
-// dealFinder.ts'den kopyalanan çalışan link çözümleme mantığı
+// ===== INDIVA AUTO-FETCH WITH GEMINI AI =====
+// GitHub Actions'da çalışan AI destekli script
+// Telegram'dan fırsatları çeker, Gemini ile zenginleştirir
 
 const admin = require('firebase-admin');
 
 // ===== CONFIG =====
 const TELEGRAM_URL = 'https://t.me/s/onual_firsat';
 const MAX_DEALS_PER_RUN = 15;
-const LINK_RESOLVE_TIMEOUT = 15000;
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
 // ===== FIREBASE =====
 function initFirebase() {
@@ -41,7 +41,6 @@ async function fetchWithTimeout(url, timeout = 15000) {
 
 // ===== CORS PROXY İLE FETCH =====
 async function fetchWithProxy(targetUrl) {
-    // allorigins.win proxy - dealFinder.ts'de çalışıyor
     const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}&_t=${Date.now()}`;
 
     try {
@@ -57,92 +56,149 @@ async function fetchWithProxy(targetUrl) {
     }
 }
 
-// ===== TELEGRAM PARSE =====
-function parseTelegramHtml(html) {
-    const deals = [];
+// ===== GEMINI AI =====
+async function callGeminiAPI(prompt) {
+    const apiKey = process.env.GEMINI_API_KEY;
 
-    // Mesaj bloklarını bul
-    const messagePattern = /<div class="tgme_widget_message[^"]*"[^>]*data-post="[^"]*\/(\d+)"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/gi;
-
-    // Alternatif: Daha basit pattern
-    const linkPattern = /href="(https?:\/\/onu\.al\/[^"]+)"/gi;
-    const pricePattern = /(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)\s*(?:TL|₺)/gi;
-    const titlePattern = /<div class="tgme_widget_message_text[^"]*">([^<]+)/gi;
-    const imagePattern = /background-image:url\('([^']+)'\)/gi;
-
-    // Tüm onu.al linklerini bul
-    const links = [...html.matchAll(linkPattern)];
-    const prices = [...html.matchAll(pricePattern)];
-    const titles = [...html.matchAll(titlePattern)];
-    const images = [...html.matchAll(imagePattern)];
-
-    let msgIndex = 0;
-    for (const linkMatch of links) {
-        const link = linkMatch[1];
-
-        // Fiyat bul
-        let price = 0;
-        if (prices[msgIndex]) {
-            const priceStr = prices[msgIndex][1].replace(/[.,]/g, '').replace(',', '.');
-            price = parseFloat(priceStr) || 0;
-            if (price > 10000) price = price / 100; // TL kuruş düzeltme
-        }
-
-        // Başlık
-        let title = 'İndirim Fırsatı';
-        if (titles[msgIndex]) {
-            title = titles[msgIndex][1].trim().substring(0, 200);
-        }
-
-        // Görsel
-        let imageUrl = '';
-        if (images[msgIndex]) {
-            imageUrl = images[msgIndex][1];
-        }
-
-        // Mağaza tespiti
-        let source = 'other';
-        const lowerText = html.toLowerCase();
-        if (lowerText.includes('trendyol')) source = 'trendyol';
-        else if (lowerText.includes('hepsiburada')) source = 'hepsiburada';
-        else if (lowerText.includes('amazon')) source = 'amazon';
-        else if (lowerText.includes('n11')) source = 'n11';
-
-        deals.push({
-            id: `auto_${Date.now()}_${msgIndex}`,
-            title,
-            price,
-            source,
-            onualLink: link,
-            imageUrl
-        });
-
-        msgIndex++;
+    if (!apiKey) {
+        console.log('⚠️ GEMINI_API_KEY tanımlı değil, AI atlanıyor');
+        return null;
     }
 
-    console.log(`📦 ${deals.length} indirim parse edildi`);
-    return deals.slice(0, MAX_DEALS_PER_RUN);
+    try {
+        const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: {
+                    temperature: 0.8,
+                    maxOutputTokens: 500
+                }
+            })
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.log(`❌ Gemini HTTP ${response.status}: ${errorText.substring(0, 100)}`);
+            return null;
+        }
+
+        const data = await response.json();
+        return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
+    } catch (error) {
+        console.log(`❌ Gemini hatası: ${error.message}`);
+        return null;
+    }
 }
 
-// ===== ÇALIŞAN LINK ÇÖZÜMLEME (dealFinder.ts'den kopyalandı) =====
+// ===== AI İLE LİNK ÇÖZÜMLEME =====
+async function resolveOnuAlLinkWithAI(shortLink) {
+    if (!shortLink || !shortLink.includes('onu.al')) {
+        return shortLink;
+    }
 
-// zxro.com/u/?url= formatından gerçek linki çıkar
+    console.log(`🔗 AI ile link çözümleniyor: ${shortLink}`);
+
+    try {
+        // HTML'i al
+        const html = await fetchWithProxy(shortLink);
+
+        if (!html || html.length < 100) {
+            console.log(`⚠️ HTML içeriği çok kısa`);
+            return shortLink;
+        }
+
+        // Önce klasik yöntemlerle dene
+        const classicResult = extractLinkFromHtml(html);
+        if (classicResult && isRealStoreLink(classicResult)) {
+            console.log(`✅ Klasik yöntem başarılı: ${classicResult.substring(0, 60)}...`);
+            return classicResult;
+        }
+
+        // Klasik yöntem başarısızsa AI'a gönder
+        // HTML'i kısalt (token tasarrufu için)
+        const truncatedHtml = html.substring(0, 8000);
+
+        const prompt = `Bu HTML içeriğinden gerçek mağaza linkini bul ve SADECE linki döndür.
+
+Aradığım linkler:
+- id="buton" elementindeki href
+- app.hb.biz (Hepsiburada)
+- ty.gl (Trendyol)
+- amazon.com.tr
+- n11.com, sl.n11.com
+- trendyol.com
+- hepsiburada.com
+
+Eğer zxro.com/u/?url= formatında link varsa, url parametresini decode et.
+
+SADECE LİNKİ DÖNDÜR, BAŞKA BİR ŞEY YAZMA.
+Bulamazsan "BULUNAMADI" yaz.
+
+HTML:
+${truncatedHtml}`;
+
+        const aiResult = await callGeminiAPI(prompt);
+
+        if (aiResult && !aiResult.includes('BULUNAMADI') && aiResult.startsWith('http')) {
+            const cleanLink = aiResult.trim().split('\n')[0];
+            if (isRealStoreLink(cleanLink)) {
+                console.log(`✅ AI link buldu: ${cleanLink.substring(0, 60)}...`);
+                return cleanLink;
+            }
+        }
+
+        console.log(`⚠️ Link çözümlenemedi, orijinal kullanılıyor`);
+        return shortLink;
+
+    } catch (error) {
+        console.log(`❌ Link çözümleme hatası: ${error.message}`);
+        return shortLink;
+    }
+}
+
+// ===== KLASİK LİNK ÇIKARMA =====
+function extractLinkFromHtml(html) {
+    // Pattern 1: id="buton"
+    const butonMatch = html.match(/id=["']buton["'][^>]*href=["']([^"']+)["']/i) ||
+        html.match(/href=["']([^"']+)["'][^>]*id=["']buton["']/i);
+
+    if (butonMatch) {
+        return extractFinalUrl(butonMatch[1]);
+    }
+
+    // Pattern 2: Mağaza domain'leri
+    const storePatterns = [
+        /href=["'](https?:\/\/[^"']*(?:ty\.gl|trendyol\.com\/[^"']*-p-)[^"']*)["']/i,
+        /href=["'](https?:\/\/[^"']*(?:app\.hb\.biz|hepsiburada\.com)[^"']*)["']/i,
+        /href=["'](https?:\/\/[^"']*(?:sl\.n11\.com|n11\.com\/urun)[^"']*)["']/i,
+        /href=["'](https?:\/\/[^"']*amazon\.com\.tr[^"']*)["']/i,
+        /href=["'](https?:\/\/zxro\.com\/u\/\?[^"']+)["']/i
+    ];
+
+    for (const pattern of storePatterns) {
+        const match = html.match(pattern);
+        if (match && !match[1].includes('onu.al')) {
+            return extractFinalUrl(match[1]);
+        }
+    }
+
+    return null;
+}
+
 function extractFinalUrl(url) {
     if (!url) return url;
 
     try {
-        // zxro.com/u/?redirect=1&url=ENCODED_URL formatı
         if (url.includes('zxro.com')) {
             const urlObj = new URL(url);
             const encodedUrl = urlObj.searchParams.get('url');
             if (encodedUrl) {
-                const decoded = decodeURIComponent(encodedUrl);
-                console.log(`🔓 zxro.com decode: ${decoded.substring(0, 60)}...`);
-                return decoded;
+                return decodeURIComponent(encodedUrl);
             }
         }
 
-        // Genel ?url= pattern
         if (url.includes('url=')) {
             const match = url.match(/[?&](?:url|redirect_url|goto)=([^&]+)/i);
             if (match) {
@@ -156,146 +212,159 @@ function extractFinalUrl(url) {
     return url;
 }
 
-// URL'in gerçek mağaza linki olup olmadığını kontrol et
-function isProductUrl(url) {
-    if (!url || url.length < 10) return false;
-
-    const productDomains = ['amazon', 'trendyol', 'hepsiburada', 'n11.com', 'hb.biz', 'ty.gl', 'sl.n11'];
-    const redirectServices = ['zxro.com'];
-
-    const lowerUrl = url.toLowerCase();
-
-    // Direkt ürün linki mi?
-    if (productDomains.some(domain => lowerUrl.includes(domain))) {
-        return true;
-    }
-
-    // Redirect servisi mi? (içinde gerçek ürün linki var mı kontrol et)
-    if (redirectServices.some(service => lowerUrl.includes(service))) {
-        const finalUrl = extractFinalUrl(url);
-        return productDomains.some(domain => finalUrl.toLowerCase().includes(domain));
-    }
-
-    return false;
-}
-
-// Gerçek mağaza linki mi
 function isRealStoreLink(url) {
     if (!url) return false;
     const stores = [
         'trendyol.com', 'hepsiburada.com', 'amazon.com.tr', 'n11.com',
-        'ty.gl', 'app.hb.biz', 'amzn.to', 'gittigidiyor.com', 'sl.n11.com'
+        'ty.gl', 'app.hb.biz', 'amzn.to', 'sl.n11.com'
     ];
     return stores.some(store => url.includes(store));
 }
 
-// ===== ANA LINK ÇÖZÜMLEME FONKSİYONU =====
-async function resolveOnuAlLink(shortLink) {
-    if (!shortLink || !shortLink.includes('onu.al')) {
-        return shortLink;
-    }
+// ===== AI İLE İÇERİK ZENGİNLEŞTİRME =====
+async function enrichDealWithAI(deal) {
+    const prompt = `Sen deneyimli bir e-ticaret içerik yazarısın. Kullanıcıları eğlenceli ve samimi bir dille alışverişe teşvik ediyorsun.
 
-    console.log(`🔗 Link çözümleniyor: ${shortLink}`);
+ÜRÜN:
+- Başlık: "${deal.title}"
+- Fiyat: ${deal.price} TL
+- Mağaza: ${deal.source}
+
+GÖREVLER:
+1. BAŞLIK: Emojiyi ve pazarlama kelimelerini (FIRSAT, SÜPER, KAÇIRMA, İNANILMAZ, MEGA vb.) kaldır. Sadece ürün adını bırak.
+
+2. KATEGORİ: Şunlardan birini seç: Gıda, Elektronik, Giyim, Kozmetik, Ev & Yaşam, Anne & Bebek, Spor, Kitap, Oyuncak, Diğer
+
+3. MARKA: Başlıktan markayı çıkar (bulamazsan boş bırak)
+
+4. AÇIKLAMA (50-100 kelime):
+   - Samimi ve eğlenceli dil kullan 🎉
+   - Ürünün özelliklerini ve faydalarını anlat
+   - Bu fiyatın neden iyi olduğunu vurgula
+   - Aciliyet hissi yarat (sınırlı stok, kaçırılmayacak fırsat vb.)
+   - 2-3 emoji kullan (🔥 💰 ⭐ ✨ 🎁 gibi)
+   - İlk cümle dikkat çekici olsun
+   - Son cümle aksiyon çağrısı olsun
+
+SADECE JSON DÖNDÜR, BAŞKA BİR ŞEY YAZMA:
+{"title":"temiz başlık","category":"kategori","brand":"marka veya boş","description":"50-100 kelimelik eğlenceli açıklama"}`;
+
+    const result = await callGeminiAPI(prompt);
+
+    if (!result) {
+        return getDefaultEnrichment(deal);
+    }
 
     try {
-        // ADIM 1: onu.al kısa linkini fetch et (proxy ile)
-        const html = await fetchWithProxy(shortLink);
+        // JSON parse
+        let jsonStr = result.trim();
+        if (jsonStr.startsWith('```json')) jsonStr = jsonStr.slice(7);
+        if (jsonStr.startsWith('```')) jsonStr = jsonStr.slice(3);
+        if (jsonStr.endsWith('```')) jsonStr = jsonStr.slice(0, -3);
+        jsonStr = jsonStr.trim();
 
-        if (!html || html.length < 100) {
-            console.log(`⚠️ HTML içeriği çok kısa veya boş`);
-            return shortLink;
-        }
+        const parsed = JSON.parse(jsonStr);
 
-        // ADIM 2: id="buton" elementinden href çıkar (EN GÜVENİLİR)
-        const butonIdMatch = html.match(/id=["']buton["'][^>]*href=["']([^"']+)["']/i) ||
-            html.match(/href=["']([^"']+)["'][^>]*id=["']buton["']/i);
-
-        if (butonIdMatch) {
-            const rawUrl = butonIdMatch[1];
-            const storeUrl = extractFinalUrl(rawUrl);
-
-            if (isRealStoreLink(storeUrl)) {
-                console.log(`✅ #buton + extractFinalUrl: ${storeUrl.substring(0, 60)}...`);
-                return storeUrl;
-            }
-
-            if (isRealStoreLink(rawUrl)) {
-                console.log(`✅ #buton direkt: ${rawUrl.substring(0, 60)}...`);
-                return rawUrl;
-            }
-        }
-
-        // ADIM 3: class="btn" içeren mağaza linklerini ara
-        const btnClassMatch = html.match(/class=["'][^"']*btn[^"']*["'][^>]*href=["']([^"']+)["']/gi);
-        if (btnClassMatch) {
-            for (const match of btnClassMatch) {
-                const hrefMatch = match.match(/href=["']([^"']+)["']/i);
-                if (hrefMatch && isProductUrl(hrefMatch[1])) {
-                    const storeUrl = extractFinalUrl(hrefMatch[1]);
-                    console.log(`✅ class="btn": ${storeUrl.substring(0, 60)}...`);
-                    return storeUrl;
-                }
-            }
-        }
-
-        // ADIM 4: Bilinen mağaza domain'lerini içeren href
-        const storePatterns = [
-            /href=["'](https?:\/\/[^"']*(?:sl\.n11\.com|n11\.com\/urun)[^"']*)[" ']/gi,
-            /href=["'](https?:\/\/[^"']*(?:ty\.gl|trendyol\.com\/[^"']*-p-)[^"']*)[" ']/gi,
-            /href=["'](https?:\/\/[^"']*(?:app\.hb\.biz|hepsiburada\.com)[^"']*)[" ']/gi,
-            /href=["'](https?:\/\/[^"']*amazon\.com\.tr[^"']*)[" ']/gi,
-            /href=["'](https?:\/\/zxro\.com\/u\/\?[^"']+)["']/gi  // zxro.com/u/?url=... formatı
-        ];
-
-        for (const pattern of storePatterns) {
-            const matches = [...html.matchAll(pattern)];
-            for (const match of matches) {
-                const rawUrl = match[1];
-                // onu.al/onual.com linklerini atla
-                if (rawUrl.includes('onu.al') || rawUrl.includes('onual.com')) continue;
-
-                const storeUrl = extractFinalUrl(rawUrl);
-                if (isRealStoreLink(storeUrl)) {
-                    console.log(`✅ Pattern match: ${storeUrl.substring(0, 60)}...`);
-                    return storeUrl;
-                }
-            }
-        }
-
-        // ADIM 5: Eğer onual.com/fiyat/ sayfasına yönlendiyse, onu da dene
-        const onualLinkMatch = html.match(/href=["'](https?:\/\/onual\.com\/fiyat\/[^"']+)["']/i);
-        if (onualLinkMatch) {
-            console.log(`🔄 onual.com sayfası fetch ediliyor...`);
-            const onualHtml = await fetchWithProxy(onualLinkMatch[1]);
-
-            if (onualHtml && onualHtml.length > 100) {
-                // Bu sayfadan #buton ara
-                const butonMatch2 = onualHtml.match(/id=["']buton["'][^>]*href=["']([^"']+)["']/i) ||
-                    onualHtml.match(/href=["']([^"']+)["'][^>]*id=["']buton["']/i);
-
-                if (butonMatch2) {
-                    const storeUrl = extractFinalUrl(butonMatch2[1]);
-                    if (isRealStoreLink(storeUrl)) {
-                        console.log(`✅ onual.com #buton: ${storeUrl.substring(0, 60)}...`);
-                        return storeUrl;
-                    }
-                }
-            }
-        }
-
-        console.log(`⚠️ Link çözümlenemedi, orijinal kullanılıyor`);
-        return shortLink;
-
-    } catch (error) {
-        console.log(`❌ Link çözümleme hatası: ${error.message}`);
-        return shortLink;
+        return {
+            title: parsed.title || deal.title,
+            category: parsed.category || 'Diğer',
+            brand: parsed.brand || '',
+            description: parsed.description || getDefaultDescription(deal)
+        };
+    } catch (e) {
+        console.log(`⚠️ JSON parse hatası: ${e.message}`);
+        return getDefaultEnrichment(deal);
     }
+}
+
+function getDefaultEnrichment(deal) {
+    return {
+        title: deal.title.replace(/[🔥🏷️📦🛍️⭐💥🎁🛒📢✨💰]+/g, '').replace(/\s+/g, ' ').trim(),
+        category: 'Diğer',
+        brand: '',
+        description: getDefaultDescription(deal)
+    };
+}
+
+function getDefaultDescription(deal) {
+    const storeName = deal.source === 'trendyol' ? 'Trendyol' :
+        deal.source === 'hepsiburada' ? 'Hepsiburada' :
+            deal.source === 'amazon' ? 'Amazon' :
+                deal.source === 'n11' ? 'N11' : 'Online Mağaza';
+
+    return `🔥 ${storeName}'da bu ürün için özel indirim fırsatı! Bu fiyat gerçekten kaçırılmayacak bir fırsat. Stoklar sınırlı olabilir, acele edin! ✨`;
+}
+
+// ===== TELEGRAM PARSE =====
+function parseTelegramHtml(html) {
+    const deals = [];
+    const linkPattern = /href="(https?:\/\/onu\.al\/[^"]+)"/gi;
+    const pricePattern = /(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)\s*(?:TL|₺)/gi;
+
+    const links = [...html.matchAll(linkPattern)];
+    const uniqueLinks = [...new Set(links.map(m => m[1]))];
+
+    let msgIndex = 0;
+    for (const link of uniqueLinks) {
+        // Linki içeren bloğu bul
+        const linkIndex = html.indexOf(`href="${link}"`);
+        if (linkIndex === -1) continue;
+
+        const start = Math.max(0, linkIndex - 2000);
+        const end = Math.min(html.length, linkIndex + 500);
+        const block = html.substring(start, end);
+
+        // Metin
+        const textMatch = block.match(/tgme_widget_message_text[^>]*>([^<]+)/);
+        let title = textMatch ? textMatch[1].trim() : 'İndirim Fırsatı';
+        title = title.substring(0, 200);
+
+        // Fiyat
+        let price = 0;
+        const priceMatch = block.match(pricePattern);
+        if (priceMatch) {
+            const priceStr = priceMatch[0].replace(/[^\d]/g, '');
+            price = parseInt(priceStr) || 0;
+            if (price > 100000) price = Math.round(price / 100);
+        }
+
+        // Görsel
+        let imageUrl = '';
+        const imgMatch = block.match(/background-image:url\('([^']+)'\)/);
+        if (imgMatch) imageUrl = imgMatch[1];
+
+        // Mağaza
+        let source = 'other';
+        const lowerBlock = block.toLowerCase();
+        if (lowerBlock.includes('trendyol')) source = 'trendyol';
+        else if (lowerBlock.includes('hepsiburada')) source = 'hepsiburada';
+        else if (lowerBlock.includes('amazon')) source = 'amazon';
+        else if (lowerBlock.includes('n11')) source = 'n11';
+
+        deals.push({
+            id: `auto_${Date.now()}_${msgIndex}`,
+            title,
+            price,
+            source,
+            onualLink: link,
+            imageUrl
+        });
+
+        msgIndex++;
+        if (msgIndex >= MAX_DEALS_PER_RUN) break;
+    }
+
+    console.log(`📦 ${deals.length} indirim parse edildi`);
+    return deals;
 }
 
 // ===== MAIN =====
 async function main() {
-    console.log('🚀 INDIVA Auto-Fetch başlatıldı (HTTP + allorigins)');
+    console.log('🚀 INDIVA Auto-Fetch + Gemini AI başlatıldı');
     console.log(`⏰ ${new Date().toISOString()}`);
+
+    const hasGemini = !!process.env.GEMINI_API_KEY;
+    console.log(`🤖 Gemini AI: ${hasGemini ? 'AKTİF' : 'DEVRE DIŞI'}`);
 
     const db = initFirebase();
 
@@ -317,7 +386,7 @@ async function main() {
 
         // Duplicate kontrolü
         const existingSnapshot = await db.collection('discounts')
-            .orderBy('createdAt', 'desc').limit(100).select('link').get();
+            .orderBy('createdAt', 'desc').limit(200).select('link').get();
         const existingLinks = new Set();
         existingSnapshot.docs.forEach(doc => {
             const link = doc.data().link;
@@ -325,32 +394,32 @@ async function main() {
         });
 
         let savedCount = 0;
+        let aiEnrichedCount = 0;
         let resolvedLinksCount = 0;
 
         for (const deal of deals) {
             if (existingLinks.has(deal.onualLink)) {
-                console.log(`⏭️ Zaten var: ${deal.title.substring(0, 30)}...`);
+                console.log(`⏭️ Zaten var (onualLink): ${deal.title.substring(0, 30)}...`);
                 continue;
             }
 
-            // Link çözümle
-            let productLink = await resolveOnuAlLink(deal.onualLink);
-
-            // Çözümleme başarılı mı?
+            // 1. Link çözümle (AI destekli)
+            const productLink = await resolveOnuAlLinkWithAI(deal.onualLink);
             const wasResolved = isRealStoreLink(productLink);
-            if (wasResolved) {
-                resolvedLinksCount++;
-            }
+            if (wasResolved) resolvedLinksCount++;
 
             if (existingLinks.has(productLink)) {
-                console.log(`⏭️ Zaten var: ${deal.title.substring(0, 30)}...`);
+                console.log(`⏭️ Zaten var (productLink): ${deal.title.substring(0, 30)}...`);
                 continue;
             }
 
-            const cleanTitle = deal.title
-                .replace(/[🔥🏷️📦🛍️⭐💥🎁🛒📢✨💰]+/g, '')
-                .replace(/\b(FIRSAT|SÜPER|KAÇIRMA)\b/gi, '')
-                .replace(/\s+/g, ' ').trim();
+            // 2. AI ile içerik zenginleştir
+            console.log(`🤖 AI zenginleştirme: ${deal.title.substring(0, 40)}...`);
+            const enriched = await enrichDealWithAI(deal);
+
+            if (enriched.description !== getDefaultDescription(deal)) {
+                aiEnrichedCount++;
+            }
 
             // Mağaza adı
             const storeName = deal.source === 'trendyol' ? 'Trendyol' :
@@ -358,10 +427,12 @@ async function main() {
                     deal.source === 'amazon' ? 'Amazon' :
                         deal.source === 'n11' ? 'N11' : 'Mağaza';
 
+            // 3. Firebase'e kaydet
             await db.collection('discounts').add({
-                title: cleanTitle,
-                description: `🔥 ${storeName}'da bu ürün için özel indirim fırsatı! Stoklar sınırlı.`,
-                brand: '',
+                title: enriched.title,
+                description: enriched.description,
+                brand: enriched.brand,
+                category: enriched.category,
                 link: productLink,
                 originalStoreLink: productLink,
                 newPrice: deal.price || 0,
@@ -372,23 +443,25 @@ async function main() {
                 originalSource: 'AutoPublish',
                 submittedBy: 'AutoPublish',
                 needsReview: !wasResolved,
-                affiliateLinkUpdated: wasResolved
+                affiliateLinkUpdated: wasResolved,
+                aiEnriched: aiEnrichedCount > 0
             });
 
             existingLinks.add(productLink);
             savedCount++;
 
-            const status = wasResolved ? 'Çözümlendi' : 'Orijinal';
-            console.log(`✅ Kaydedildi: ${cleanTitle.substring(0, 40)}... [${status}]`);
+            const status = wasResolved ? '✓Link' : '⚠️Link';
+            const aiStatus = enriched.description !== getDefaultDescription(deal) ? '✓AI' : '⚠️AI';
+            console.log(`✅ Kaydedildi: ${enriched.title.substring(0, 40)}... [${status}] [${aiStatus}]`);
 
-            // Rate limiting
-            await new Promise(r => setTimeout(r, 1500));
+            // Rate limiting - API quota koruma
+            await new Promise(r => setTimeout(r, 2000));
         }
 
         console.log(`\n🎉 SONUÇ:`);
         console.log(`   📦 ${savedCount} yeni indirim kaydedildi`);
         console.log(`   🔗 ${resolvedLinksCount} link çözümlendi`);
-        console.log(`   ⚠️ ${savedCount - resolvedLinksCount} link çözümlenemedi`);
+        console.log(`   🤖 ${aiEnrichedCount} AI ile zenginleştirildi`);
 
     } catch (error) {
         console.error('❌ Hata:', error);
