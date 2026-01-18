@@ -39,21 +39,50 @@ async function fetchWithTimeout(url, timeout = 15000) {
     }
 }
 
-// ===== CORS PROXY İLE FETCH =====
-async function fetchWithProxy(targetUrl) {
-    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}&_t=${Date.now()}`;
+// ===== CORS PROXY İLE FETCH (ÇOKLU PROXY DESTEĞİ) =====
+const CORS_PROXIES = [
+    { name: 'allorigins', fn: (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}&_t=${Date.now()}` },
+    { name: 'corsproxy.io', fn: (url) => `https://corsproxy.io/?${encodeURIComponent(url)}` },
+    { name: 'cors.lol', fn: (url) => `https://api.cors.lol/?url=${encodeURIComponent(url)}` },
+    { name: 'thingproxy', fn: (url) => `https://thingproxy.freeboard.io/fetch/${url}` },
+];
 
-    try {
-        const response = await fetchWithTimeout(proxyUrl);
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+async function fetchWithProxy(targetUrl) {
+    for (const proxy of CORS_PROXIES) {
+        try {
+            console.log(`🔄 Proxy deneniyor: ${proxy.name}...`);
+            const proxyUrl = proxy.fn(targetUrl);
+            const response = await fetchWithTimeout(proxyUrl, 12000);
+
+            if (!response.ok) {
+                console.log(`⚠️ ${proxy.name}: HTTP ${response.status}`);
+                continue;
+            }
+
+            const contentType = response.headers.get('content-type') || '';
+            let html = '';
+
+            if (contentType.includes('application/json')) {
+                const json = await response.json();
+                html = json.contents || json.body || '';
+            } else {
+                html = await response.text();
+            }
+
+            if (html && html.length > 500) {
+                console.log(`✅ ${proxy.name} başarılı: ${html.length} karakter`);
+                return html;
+            } else {
+                console.log(`⚠️ ${proxy.name}: İçerik çok kısa (${html?.length || 0})`);
+            }
+        } catch (error) {
+            console.log(`❌ ${proxy.name}: ${error.message}`);
+            continue;
         }
-        const json = await response.json();
-        return json.contents || '';
-    } catch (error) {
-        console.log(`⚠️ Proxy hatası: ${error.message}`);
-        return '';
     }
+
+    console.log('❌ Tüm proxy\'ler başarısız oldu');
+    return '';
 }
 
 // ===== GEMINI AI =====
