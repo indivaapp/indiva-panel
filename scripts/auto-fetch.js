@@ -268,31 +268,57 @@ function isRealStoreLink(url) {
 
 // ===== AI İLE İÇERİK ZENGİNLEŞTİRME =====
 async function enrichDealWithAI(deal) {
-    const prompt = `Sen deneyimli bir e-ticaret içerik yazarısın. Kullanıcıları eğlenceli ve samimi bir dille alışverişe teşvik ediyorsun.
+    // Ürün hakkında daha fazla bilgi topla
+    const storeName = deal.source === 'trendyol' ? 'Trendyol' :
+        deal.source === 'hepsiburada' ? 'Hepsiburada' :
+            deal.source === 'amazon' ? 'Amazon' :
+                deal.source === 'n11' ? 'N11' : 'Online Mağaza';
 
-ÜRÜN:
-- Başlık: "${deal.title}"
+    const prompt = `Sen profesyonel bir Türk e-ticaret pazarlamacısısın. Her ürünü benzersiz ve çekici bir şekilde tanıtıyorsun.
+
+ÜRÜN BİLGİLERİ:
+- Orijinal Başlık: "${deal.title}"
 - Fiyat: ${deal.price} TL
-- Mağaza: ${deal.source}
+- Mağaza: ${storeName}
 
 GÖREVLER:
-1. BAŞLIK: Emojiyi ve pazarlama kelimelerini (FIRSAT, SÜPER, KAÇIRMA, İNANILMAZ, MEGA vb.) kaldır. Sadece ürün adını bırak.
 
-2. KATEGORİ: Şunlardan birini seç: Gıda, Elektronik, Giyim, Kozmetik, Ev & Yaşam, Anne & Bebek, Spor, Kitap, Oyuncak, Diğer
+1. BAŞLIK TEMİZLE:
+   - Emoji, FIRSAT, SÜPER, KAÇIRMA, MEGA, İNANILMAZ gibi pazarlama kelimelerini SİL
+   - Sadece ürün adını ve markasını bırak
+   - SADECE TÜRKÇE KARAKTERLER KULLAN (ş, ğ, ü, ö, ç, ı, İ)
+   - Yabancı karakter veya garip sembol EKLEME
 
-3. MARKA: Başlıktan markayı çıkar (bulamazsan boş bırak)
+2. KATEGORİ (sadece biri):
+   Gıda, Elektronik, Giyim, Kozmetik, Ev & Yaşam, Anne & Bebek, Spor, Kitap, Oyuncak, Diğer
 
-4. AÇIKLAMA (50-100 kelime):
-   - Samimi ve eğlenceli dil kullan 🎉
-   - Ürünün özelliklerini ve faydalarını anlat
-   - Bu fiyatın neden iyi olduğunu vurgula
-   - Aciliyet hissi yarat (sınırlı stok, kaçırılmayacak fırsat vb.)
-   - 2-3 emoji kullan (🔥 💰 ⭐ ✨ 🎁 gibi)
-   - İlk cümle dikkat çekici olsun
-   - Son cümle aksiyon çağrısı olsun
+3. MARKA:
+   Başlıktaki markayı bul (yoksa boş bırak)
 
-SADECE JSON DÖNDÜR, BAŞKA BİR ŞEY YAZMA:
-{"title":"temiz başlık","category":"kategori","brand":"marka veya boş","description":"50-100 kelimelik eğlenceli açıklama"}`;
+4. AÇIKLAMA (ÇOK ÖNEMLİ - 60-90 KELİME):
+   Bu açıklama HER ÜRÜN İÇİN BENZERSİZ olmalı! 
+   
+   Açıklamada şunları yap:
+   - Bu ÖZEL ürünün faydalarını anlat (örn: kulaklık ise ses kalitesi, telefon ise kamera özellikleri)
+   - ${deal.price} TL fiyatın neden iyi bir fırsat olduğunu vurgula
+   - ${storeName}'dan alışverişin güvenilirliğini belirt
+   - Ürüne özel özellikler ekle (tahmini de olabilir)
+   - Aciliyet hissi yarat
+   - 2-3 emoji kullan (🔥 💰 ⭐ ✨ 🎁 🛒)
+   
+   YASAK: 
+   - "Bu ürün için özel indirim" gibi genel cümleler KULLANMA
+   - Her üründe aynı açıklamayı yazma
+   - Kopyala-yapıştır açıklamalar YASAK
+   
+   ÖRNEK İYİ AÇIKLAMA (Kulaklık için):
+   "🎧 Bu kablosuz kulaklık, aktif gürültü engelleme teknolojisiyle müzik deneyiminizi üst seviyeye taşıyor! 40 saate varan pil ömrü sayesinde gün boyu kesintisiz kullanabilirsiniz. Ergonomik tasarımı uzun süreli kullanımda bile maksimum konfor sağlıyor. ${deal.price} TL'ye bu kalitede kulaklık bulmak gerçekten zor! 🔥 Stoklar sınırlı, fırsatı kaçırmayın!"
+   
+   ÖRNEK İYİ AÇIKLAMA (Çanta için):
+   "👜 Şık tasarımı ve geniş iç hacmiyle günlük kullanım için ideal! Premium malzeme kalitesi sayesinde uzun ömürlü ve dayanıklı. Hem iş hem günlük hayat için mükemmel bir tercih. ${storeName} güvencesiyle ${deal.price} TL'ye kendinize harika bir hediye alın! ✨"
+
+SADECE JSON DÖNDÜR (BAŞKA HİÇBİR ŞEY YAZMA):
+{"title":"temizlenmiş türkçe başlık","category":"kategori","brand":"marka","description":"bu ürüne özel 60-90 kelimelik benzersiz açıklama"}`;
 
     const result = await callGeminiAPI(prompt);
 
@@ -451,7 +477,15 @@ async function main() {
             // 1. Link çözümle (AI destekli)
             const productLink = await resolveOnuAlLinkWithAI(deal.onualLink);
             const wasResolved = isRealStoreLink(productLink);
-            if (wasResolved) resolvedLinksCount++;
+
+            // ⚠️ ÖNEMLI: Eğer hala onu.al/onual.com linkiyse KAYDETME
+            if (!wasResolved || productLink.includes('onu.al') || productLink.includes('onual.com')) {
+                console.log(`⏭️ Link çözümlenemedi, atlanıyor: ${deal.title.substring(0, 30)}...`);
+                console.log(`   Çözümlenen link: ${productLink.substring(0, 50)}...`);
+                continue;
+            }
+
+            resolvedLinksCount++;
 
             if (existingLinks.has(productLink)) {
                 console.log(`⏭️ Zaten var (productLink): ${deal.title.substring(0, 30)}...`);
