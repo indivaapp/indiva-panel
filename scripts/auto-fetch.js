@@ -1,29 +1,18 @@
-/**
- * INDIVA Auto-Fetch Script with Puppeteer
- * 
- * Telegram @onual_firsat kanalından indirimleri çeker,
- * onu.al linklerini Puppeteer ile gerçek mağaza linklerine çözümler
- * ve Firebase'e kaydeder.
- */
+// ===== INDIVA AUTO-FETCH =====
+// GitHub Actions'da çalışan basit script
+// dealFinder.ts'den kopyalanan çalışan link çözümleme mantığı
 
 const admin = require('firebase-admin');
-const puppeteer = require('puppeteer');
 
-// ===== CONFIGURATION =====
+// ===== CONFIG =====
 const TELEGRAM_URL = 'https://t.me/s/onual_firsat';
-const MAX_DEALS_PER_RUN = 10;
-const LINK_RESOLVE_TIMEOUT = 20000; // 20 saniye
+const MAX_DEALS_PER_RUN = 15;
+const LINK_RESOLVE_TIMEOUT = 15000;
 
-// CORS Proxy'ler (Telegram için)
-const CORS_PROXIES = [
-    (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}&_t=${Date.now()}`,
-    (url) => `https://corsproxy.io/?${encodeURIComponent(url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now())}`,
-];
-
-// ===== FIREBASE SETUP =====
+// ===== FIREBASE =====
 function initFirebase() {
-    if (admin.apps.length === 0) {
-        const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
+    if (!admin.apps.length) {
+        const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
         admin.initializeApp({
             credential: admin.credential.cert(serviceAccount)
         });
@@ -31,16 +20,17 @@ function initFirebase() {
     return admin.firestore();
 }
 
-// ===== FETCH HELPERS =====
-async function fetchWithTimeout(url, timeout = 20000) {
+// ===== HTTP FETCH =====
+async function fetchWithTimeout(url, timeout = 15000) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
+
     try {
         const response = await fetch(url, {
             signal: controller.signal,
             headers: {
-                'Accept': 'application/json, text/html, */*',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
             }
         });
         return response;
@@ -49,246 +39,94 @@ async function fetchWithTimeout(url, timeout = 20000) {
     }
 }
 
+// ===== CORS PROXY İLE FETCH =====
 async function fetchWithProxy(targetUrl) {
-    for (const proxyFn of CORS_PROXIES) {
-        try {
-            const proxyUrl = proxyFn(targetUrl);
-            console.log(`🔄 Proxy deneniyor...`);
-            const response = await fetchWithTimeout(proxyUrl, 15000);
-            if (!response.ok) continue;
-            const contentType = response.headers.get('content-type') || '';
-            let html = '';
-            if (contentType.includes('application/json')) {
-                const json = await response.json();
-                html = json.contents || json.body || '';
-            } else {
-                html = await response.text();
-            }
-            if (html && html.length > 500) {
-                console.log(`✅ Proxy başarılı: ${html.length} karakter`);
-                return html;
-            }
-        } catch (e) {
-            console.log(`⚠️ Proxy hatası: ${e.message}`);
+    // allorigins.win proxy - dealFinder.ts'de çalışıyor
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}&_t=${Date.now()}`;
+
+    try {
+        const response = await fetchWithTimeout(proxyUrl);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
         }
+        const json = await response.json();
+        return json.contents || '';
+    } catch (error) {
+        console.log(`⚠️ Proxy hatası: ${error.message}`);
+        return '';
     }
-    throw new Error('Tüm proxy\'ler başarısız');
 }
 
-// ===== HTML PARSING =====
-function decodeHtmlEntities(text) {
-    if (!text) return '';
-    return text
-        .replace(/&#(\d+);/g, (_, num) => String.fromCharCode(parseInt(num, 10)))
-        .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-        .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&nbsp;/g, ' ');
-}
-
+// ===== TELEGRAM PARSE =====
 function parseTelegramHtml(html) {
     const deals = [];
-    const priceRegex = /(\d[\d.,]*)\s*TL/i;
-    const allLinks = html.matchAll(/href="(https?:\/\/onu\.al\/[^"]+)"/g);
-    const linkSet = new Set();
-    for (const m of allLinks) linkSet.add(m[1]);
-    console.log(`🔗 ${linkSet.size} benzersiz onu.al linki bulundu`);
+
+    // Mesaj bloklarını bul
+    const messagePattern = /<div class="tgme_widget_message[^"]*"[^>]*data-post="[^"]*\/(\d+)"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/gi;
+
+    // Alternatif: Daha basit pattern
+    const linkPattern = /href="(https?:\/\/onu\.al\/[^"]+)"/gi;
+    const pricePattern = /(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)\s*(?:TL|₺)/gi;
+    const titlePattern = /<div class="tgme_widget_message_text[^"]*">([^<]+)/gi;
+    const imagePattern = /background-image:url\('([^']+)'\)/gi;
+
+    // Tüm onu.al linklerini bul
+    const links = [...html.matchAll(linkPattern)];
+    const prices = [...html.matchAll(pricePattern)];
+    const titles = [...html.matchAll(titlePattern)];
+    const images = [...html.matchAll(imagePattern)];
 
     let msgIndex = 0;
-    for (const link of linkSet) {
-        const linkIndex = html.indexOf(`href="${link}"`);
-        if (linkIndex === -1) continue;
-        const start = Math.max(0, linkIndex - 3000);
-        const end = Math.min(html.length, linkIndex + 500);
-        const msgBlock = html.substring(start, end);
+    for (const linkMatch of links) {
+        const link = linkMatch[1];
 
-        const textMatch = msgBlock.match(/tgme_widget_message_text[^>]*>([\s\S]*?)<\/div>/);
-        const rawText = textMatch ? textMatch[1] : '';
-        const text = decodeHtmlEntities(rawText.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+        // Fiyat bul
+        let price = 0;
+        if (prices[msgIndex]) {
+            const priceStr = prices[msgIndex][1].replace(/[.,]/g, '').replace(',', '.');
+            price = parseFloat(priceStr) || 0;
+            if (price > 10000) price = price / 100; // TL kuruş düzeltme
+        }
 
-        const priceMatch = text.match(priceRegex);
-        const price = priceMatch ? parseInt(priceMatch[1].replace(/[.,]/g, ''), 10) : 0;
+        // Başlık
+        let title = 'İndirim Fırsatı';
+        if (titles[msgIndex]) {
+            title = titles[msgIndex][1].trim().substring(0, 200);
+        }
 
-        let imageUrl;
-        const photoMatch = msgBlock.match(/background-image:\s*url\(['"]?(https?:\/\/[^'")\s]+)['"]?\)/i);
-        if (photoMatch) imageUrl = photoMatch[1];
+        // Görsel
+        let imageUrl = '';
+        if (images[msgIndex]) {
+            imageUrl = images[msgIndex][1];
+        }
 
-        const lines = text.split(/[.\n]/).filter(l => l.trim().length > 3);
-        let title = lines[0]?.replace(/^[🔥🏷️📦🛍️⭐💥🎁🛒📢✨💰]+\s*/, '').trim() || '';
-        if (!title || title.length < 5) continue;
-        if (title.length > 150) title = title.substring(0, 147) + '...';
-
+        // Mağaza tespiti
         let source = 'other';
-        const textLower = text.toLowerCase();
-        if (textLower.includes('amazon')) source = 'amazon';
-        else if (textLower.includes('trendyol')) source = 'trendyol';
-        else if (textLower.includes('hepsiburada')) source = 'hepsiburada';
-        else if (textLower.includes('n11')) source = 'n11';
+        const lowerText = html.toLowerCase();
+        if (lowerText.includes('trendyol')) source = 'trendyol';
+        else if (lowerText.includes('hepsiburada')) source = 'hepsiburada';
+        else if (lowerText.includes('amazon')) source = 'amazon';
+        else if (lowerText.includes('n11')) source = 'n11';
 
-        deals.push({ id: `auto_${Date.now()}_${msgIndex++}`, title, price, source, onualLink: link, imageUrl });
+        deals.push({
+            id: `auto_${Date.now()}_${msgIndex}`,
+            title,
+            price,
+            source,
+            onualLink: link,
+            imageUrl
+        });
+
+        msgIndex++;
     }
+
     console.log(`📦 ${deals.length} indirim parse edildi`);
     return deals.slice(0, MAX_DEALS_PER_RUN);
 }
 
-// ===== PUPPETEER LINK RESOLVER =====
-let browser = null;
+// ===== ÇALIŞAN LINK ÇÖZÜMLEME (dealFinder.ts'den kopyalandı) =====
 
-async function initBrowser() {
-    if (!browser) {
-        console.log('🚀 Puppeteer başlatılıyor...');
-        browser = await puppeteer.launch({
-            headless: 'new',
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--no-first-run',
-                '--no-zygote',
-                '--disable-gpu'
-            ]
-        });
-        console.log('✅ Puppeteer hazır');
-    }
-    return browser;
-}
-
-async function closeBrowser() {
-    if (browser) {
-        await browser.close();
-        browser = null;
-        console.log('🛑 Puppeteer kapatıldı');
-    }
-}
-
-async function resolveOnuAlLink(shortLink) {
-    if (!shortLink || !shortLink.includes('onu.al')) return shortLink;
-    console.log(`🔗 Link çözümleniyor: ${shortLink}`);
-
-    try {
-        const browserInstance = await initBrowser();
-        const page = await browserInstance.newPage();
-
-        // Gereksiz kaynakları engelle (hızlandırma)
-        await page.setRequestInterception(true);
-        page.on('request', (req) => {
-            const resourceType = req.resourceType();
-            if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
-                req.abort();
-            } else {
-                req.continue();
-            }
-        });
-
-        // User agent ayarla
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
-
-        // Sayfaya git
-        await page.goto(shortLink, {
-            waitUntil: 'networkidle2',
-            timeout: LINK_RESOLVE_TIMEOUT
-        });
-
-        // Biraz bekle (JS'nin çalışması için)
-        await new Promise(r => setTimeout(r, 2000));
-
-        // #buton elementinden href al
-        let rawLink = null;
-        try {
-            rawLink = await page.$eval('#buton', el => el.href);
-            console.log(`✅ #buton linki bulundu: ${rawLink}`);
-        } catch (e) {
-            console.log(`⚠️ #buton bulunamadı, alternatif yöntemler deneniyor...`);
-        }
-
-        // Alternatif: data-url veya onclick içinden
-        if (!rawLink) {
-            try {
-                rawLink = await page.$eval('[data-url]', el => el.getAttribute('data-url'));
-                console.log(`✅ data-url linki: ${rawLink}`);
-            } catch (e) { }
-        }
-
-        // Alternatif: Sayfa içindeki zxro.com veya mağaza linklerini tara
-        if (!rawLink) {
-            const allLinks = await page.$$eval('a[href]', links =>
-                links.map(a => a.href).filter(href =>
-                    href.includes('zxro.com') ||
-                    href.includes('trendyol.com') ||
-                    href.includes('hepsiburada.com') ||
-                    href.includes('amazon.com.tr') ||
-                    href.includes('n11.com') ||
-                    href.includes('ty.gl') ||
-                    href.includes('app.hb.biz')
-                )
-            );
-            if (allLinks.length > 0) {
-                rawLink = allLinks[0];
-                console.log(`✅ Sayfa içi link: ${rawLink}`);
-            }
-        }
-
-        // Alternatif: Mevcut URL'i kontrol et (redirect olmuştur)
-        if (!rawLink) {
-            const currentUrl = page.url();
-            if (!currentUrl.includes('onu.al') && !currentUrl.includes('onual.com')) {
-                rawLink = currentUrl;
-                console.log(`✅ Redirect URL: ${rawLink}`);
-            }
-        }
-
-        await page.close();
-
-        // Link bulunduysa, hemen extractFinalUrl ile gerçek mağaza linkini çıkar
-        if (rawLink) {
-            const storeLink = extractFinalUrl(rawLink);
-            if (isRealStoreLink(storeLink)) {
-                console.log(`✅ Gerçek mağaza linki: ${storeLink}`);
-                return storeLink;
-            }
-            // extractFinalUrl işe yaramadı, ara link olarak takip et
-            if (isIntermediateRedirect(rawLink)) {
-                console.log(`🔄 Ara link tespit edildi, takip ediliyor: ${rawLink}`);
-                const finalLink = await followRedirectChain(rawLink);
-                if (finalLink && isRealStoreLink(finalLink)) {
-                    console.log(`✅ Gerçek mağaza linki (redirect sonrası): ${finalLink}`);
-                    return finalLink;
-                }
-            }
-            // En azından bulunan linki döndür
-            if (!rawLink.includes('onu.al') && !rawLink.includes('onual.com')) {
-                return rawLink;
-            }
-        }
-
-        // Son çare: orijinal link
-        console.log(`⚠️ Gerçek link bulunamadı, orijinal kullanılıyor`);
-        return shortLink;
-
-    } catch (error) {
-        console.log(`❌ Puppeteer hatası: ${error.message}`);
-        return shortLink;
-    }
-}
-
-// Ara redirect linklerini tespit et
-function isIntermediateRedirect(url) {
-    if (!url) return false;
-    const intermediates = ['zxro.com', 'bit.ly', 'tinyurl.com', 'ow.ly', 'goo.gl'];
-    return intermediates.some(domain => url.includes(domain));
-}
-
-// Gerçek mağaza linki mi kontrol et
-function isRealStoreLink(url) {
-    if (!url) return false;
-    const stores = [
-        'trendyol.com', 'hepsiburada.com', 'amazon.com.tr', 'n11.com',
-        'ty.gl', 'app.hb.biz', 'amzn.to', 'gittigidiyor.com', 'sl.n11.com'
-    ];
-    return stores.some(store => url.includes(store));
-}
-
-// ===== ÇALIŞAN KOD: zxro.com/u/?url= formatından gerçek linki çıkar =====
+// zxro.com/u/?url= formatından gerçek linki çıkar
 function extractFinalUrl(url) {
     if (!url) return url;
 
@@ -299,20 +137,16 @@ function extractFinalUrl(url) {
             const encodedUrl = urlObj.searchParams.get('url');
             if (encodedUrl) {
                 const decoded = decodeURIComponent(encodedUrl);
-                console.log(`🔓 zxro.com URL decode edildi: ${decoded.substring(0, 50)}...`);
+                console.log(`🔓 zxro.com decode: ${decoded.substring(0, 60)}...`);
                 return decoded;
             }
         }
 
-        // Genel redirect pattern: ?url= veya ?redirect_url=
+        // Genel ?url= pattern
         if (url.includes('url=')) {
             const match = url.match(/[?&](?:url|redirect_url|goto)=([^&]+)/i);
             if (match) {
-                const decoded = decodeURIComponent(match[1]);
-                if (isRealStoreLink(decoded)) {
-                    console.log(`🔓 URL parametresinden decode edildi: ${decoded.substring(0, 50)}...`);
-                    return decoded;
-                }
+                return decodeURIComponent(match[1]);
             }
         }
     } catch (e) {
@@ -322,99 +156,145 @@ function extractFinalUrl(url) {
     return url;
 }
 
-// Redirect zincirini takip et veya URL parametresinden parse et
-async function followRedirectChain(url) {
-    console.log(`🔗 Redirect zinciri çözümleniyor: ${url}`);
+// URL'in gerçek mağaza linki olup olmadığını kontrol et
+function isProductUrl(url) {
+    if (!url || url.length < 10) return false;
 
-    // HIZLI YOL: zxro.com/u/?...url=... formatını direkt parse et
-    if (url.includes('zxro.com/u/') && url.includes('url=')) {
-        try {
-            const urlObj = new URL(url);
-            let encodedStoreUrl = urlObj.searchParams.get('url');
-            if (encodedStoreUrl) {
-                const decodedUrl = decodeURIComponent(encodedStoreUrl);
-                console.log(`✅ URL parametresinden parse edildi: ${decodedUrl}`);
-                return decodedUrl;
-            }
-        } catch (e) {
-            console.log(`⚠️ URL parse hatası: ${e.message}`);
-        }
+    const productDomains = ['amazon', 'trendyol', 'hepsiburada', 'n11.com', 'hb.biz', 'ty.gl', 'sl.n11'];
+    const redirectServices = ['zxro.com'];
+
+    const lowerUrl = url.toLowerCase();
+
+    // Direkt ürün linki mi?
+    if (productDomains.some(domain => lowerUrl.includes(domain))) {
+        return true;
     }
 
-    // YAVAŞ YOL: zxro.com kısa linkini (#buton içinden) Puppeteer ile takip et
+    // Redirect servisi mi? (içinde gerçek ürün linki var mı kontrol et)
+    if (redirectServices.some(service => lowerUrl.includes(service))) {
+        const finalUrl = extractFinalUrl(url);
+        return productDomains.some(domain => finalUrl.toLowerCase().includes(domain));
+    }
+
+    return false;
+}
+
+// Gerçek mağaza linki mi
+function isRealStoreLink(url) {
+    if (!url) return false;
+    const stores = [
+        'trendyol.com', 'hepsiburada.com', 'amazon.com.tr', 'n11.com',
+        'ty.gl', 'app.hb.biz', 'amzn.to', 'gittigidiyor.com', 'sl.n11.com'
+    ];
+    return stores.some(store => url.includes(store));
+}
+
+// ===== ANA LINK ÇÖZÜMLEME FONKSİYONU =====
+async function resolveOnuAlLink(shortLink) {
+    if (!shortLink || !shortLink.includes('onu.al')) {
+        return shortLink;
+    }
+
+    console.log(`🔗 Link çözümleniyor: ${shortLink}`);
+
     try {
-        const browserInstance = await initBrowser();
-        const page = await browserInstance.newPage();
+        // ADIM 1: onu.al kısa linkini fetch et (proxy ile)
+        const html = await fetchWithProxy(shortLink);
 
-        // Request interception
-        let finalUrl = url;
-
-        await page.setRequestInterception(true);
-        page.on('request', (req) => {
-            const resourceType = req.resourceType();
-            if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
-                req.abort();
-            } else {
-                req.continue();
-            }
-        });
-
-        // Response'ları izle - gerçek mağaza linkini yakala
-        page.on('response', (response) => {
-            const responseUrl = response.url();
-            if (isRealStoreLink(responseUrl)) {
-                finalUrl = responseUrl;
-            }
-        });
-
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
-
-        await page.goto(url, {
-            waitUntil: 'networkidle2',
-            timeout: LINK_RESOLVE_TIMEOUT
-        });
-
-        // Sayfa yüklendikten sonra URL'i kontrol et (belki yönlendi)
-        const pageUrl = page.url();
-        if (isRealStoreLink(pageUrl)) {
-            finalUrl = pageUrl;
+        if (!html || html.length < 100) {
+            console.log(`⚠️ HTML içeriği çok kısa veya boş`);
+            return shortLink;
         }
 
-        // Eğer onual.com'a yönlendiyse, #buton'dan URL al
-        if (pageUrl.includes('onual.com/fiyat/')) {
-            console.log(`🔄 onual.com sayfasına yönlenildi, #buton aranıyor...`);
-            try {
-                const butonHref = await page.$eval('#buton', el => el.href);
-                if (butonHref && butonHref.includes('url=')) {
-                    // zxro.com/u/?...url=... formatından URL parse et
-                    const butonUrl = new URL(butonHref);
-                    const encodedStoreUrl = butonUrl.searchParams.get('url');
-                    if (encodedStoreUrl) {
-                        finalUrl = decodeURIComponent(encodedStoreUrl);
-                        console.log(`✅ #buton'dan URL parse edildi: ${finalUrl}`);
-                    }
-                } else if (isRealStoreLink(butonHref)) {
-                    finalUrl = butonHref;
+        // ADIM 2: id="buton" elementinden href çıkar (EN GÜVENİLİR)
+        const butonIdMatch = html.match(/id=["']buton["'][^>]*href=["']([^"']+)["']/i) ||
+            html.match(/href=["']([^"']+)["'][^>]*id=["']buton["']/i);
+
+        if (butonIdMatch) {
+            const rawUrl = butonIdMatch[1];
+            const storeUrl = extractFinalUrl(rawUrl);
+
+            if (isRealStoreLink(storeUrl)) {
+                console.log(`✅ #buton + extractFinalUrl: ${storeUrl.substring(0, 60)}...`);
+                return storeUrl;
+            }
+
+            if (isRealStoreLink(rawUrl)) {
+                console.log(`✅ #buton direkt: ${rawUrl.substring(0, 60)}...`);
+                return rawUrl;
+            }
+        }
+
+        // ADIM 3: class="btn" içeren mağaza linklerini ara
+        const btnClassMatch = html.match(/class=["'][^"']*btn[^"']*["'][^>]*href=["']([^"']+)["']/gi);
+        if (btnClassMatch) {
+            for (const match of btnClassMatch) {
+                const hrefMatch = match.match(/href=["']([^"']+)["']/i);
+                if (hrefMatch && isProductUrl(hrefMatch[1])) {
+                    const storeUrl = extractFinalUrl(hrefMatch[1]);
+                    console.log(`✅ class="btn": ${storeUrl.substring(0, 60)}...`);
+                    return storeUrl;
                 }
-            } catch (e) {
-                console.log(`⚠️ #buton bulunamadı: ${e.message}`);
             }
         }
 
-        await page.close();
+        // ADIM 4: Bilinen mağaza domain'lerini içeren href
+        const storePatterns = [
+            /href=["'](https?:\/\/[^"']*(?:sl\.n11\.com|n11\.com\/urun)[^"']*)[" ']/gi,
+            /href=["'](https?:\/\/[^"']*(?:ty\.gl|trendyol\.com\/[^"']*-p-)[^"']*)[" ']/gi,
+            /href=["'](https?:\/\/[^"']*(?:app\.hb\.biz|hepsiburada\.com)[^"']*)[" ']/gi,
+            /href=["'](https?:\/\/[^"']*amazon\.com\.tr[^"']*)[" ']/gi,
+            /href=["'](https?:\/\/zxro\.com\/u\/\?[^"']+)["']/gi  // zxro.com/u/?url=... formatı
+        ];
 
-        console.log(`✅ Final URL: ${finalUrl}`);
-        return finalUrl;
+        for (const pattern of storePatterns) {
+            const matches = [...html.matchAll(pattern)];
+            for (const match of matches) {
+                const rawUrl = match[1];
+                // onu.al/onual.com linklerini atla
+                if (rawUrl.includes('onu.al') || rawUrl.includes('onual.com')) continue;
+
+                const storeUrl = extractFinalUrl(rawUrl);
+                if (isRealStoreLink(storeUrl)) {
+                    console.log(`✅ Pattern match: ${storeUrl.substring(0, 60)}...`);
+                    return storeUrl;
+                }
+            }
+        }
+
+        // ADIM 5: Eğer onual.com/fiyat/ sayfasına yönlendiyse, onu da dene
+        const onualLinkMatch = html.match(/href=["'](https?:\/\/onual\.com\/fiyat\/[^"']+)["']/i);
+        if (onualLinkMatch) {
+            console.log(`🔄 onual.com sayfası fetch ediliyor...`);
+            const onualHtml = await fetchWithProxy(onualLinkMatch[1]);
+
+            if (onualHtml && onualHtml.length > 100) {
+                // Bu sayfadan #buton ara
+                const butonMatch2 = onualHtml.match(/id=["']buton["'][^>]*href=["']([^"']+)["']/i) ||
+                    onualHtml.match(/href=["']([^"']+)["'][^>]*id=["']buton["']/i);
+
+                if (butonMatch2) {
+                    const storeUrl = extractFinalUrl(butonMatch2[1]);
+                    if (isRealStoreLink(storeUrl)) {
+                        console.log(`✅ onual.com #buton: ${storeUrl.substring(0, 60)}...`);
+                        return storeUrl;
+                    }
+                }
+            }
+        }
+
+        console.log(`⚠️ Link çözümlenemedi, orijinal kullanılıyor`);
+        return shortLink;
 
     } catch (error) {
-        console.log(`⚠️ Redirect takip hatası: ${error.message}`);
-        return url;
+        console.log(`❌ Link çözümleme hatası: ${error.message}`);
+        return shortLink;
     }
 }
 
 // ===== MAIN =====
 async function main() {
-    console.log('🚀 INDIVA Auto-Fetch başlatıldı (Puppeteer ile)');
+    console.log('🚀 INDIVA Auto-Fetch başlatıldı (HTTP + allorigins)');
     console.log(`⏰ ${new Date().toISOString()}`);
 
     const db = initFirebase();
@@ -422,6 +302,12 @@ async function main() {
     try {
         console.log('\n📱 Telegram verisi çekiliyor...');
         const html = await fetchWithProxy(TELEGRAM_URL);
+
+        if (!html || html.length < 1000) {
+            console.log('❌ Telegram verisi alınamadı');
+            return;
+        }
+
         const deals = parseTelegramHtml(html);
 
         if (deals.length === 0) {
@@ -447,10 +333,10 @@ async function main() {
                 continue;
             }
 
-            // Puppeteer ile link çözümle
+            // Link çözümle
             let productLink = await resolveOnuAlLink(deal.onualLink);
 
-            // Çözümleme başarılı mı kontrol et - SADECE gerçek mağaza linkleri
+            // Çözümleme başarılı mı?
             const wasResolved = isRealStoreLink(productLink);
             if (wasResolved) {
                 resolvedLinksCount++;
@@ -466,7 +352,7 @@ async function main() {
                 .replace(/\b(FIRSAT|SÜPER|KAÇIRMA)\b/gi, '')
                 .replace(/\s+/g, ' ').trim();
 
-            // Mağaza adını belirle
+            // Mağaza adı
             const storeName = deal.source === 'trendyol' ? 'Trendyol' :
                 deal.source === 'hepsiburada' ? 'Hepsiburada' :
                     deal.source === 'amazon' ? 'Amazon' :
@@ -476,43 +362,38 @@ async function main() {
                 title: cleanTitle,
                 description: `🔥 ${storeName}'da bu ürün için özel indirim fırsatı! Stoklar sınırlı.`,
                 brand: '',
-                category: 'Diğer',
                 link: productLink,
                 originalStoreLink: productLink,
-                oldPrice: 0,
                 newPrice: deal.price || 0,
+                oldPrice: 0,
                 imageUrl: deal.imageUrl || '',
-                submittedBy: 'AutoPublish',
-                originalSource: 'AutoPublish',
                 storeName,
-                affiliateLinkUpdated: wasResolved, // Çözümlendiyse true
-                needsReview: !wasResolved, // Çözümlenemzse review gerekir
-                createdAt: admin.firestore.FieldValue.serverTimestamp()
+                createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                originalSource: 'AutoPublish',
+                submittedBy: 'AutoPublish',
+                needsReview: !wasResolved,
+                affiliateLinkUpdated: wasResolved
             });
 
-            existingLinks.add(deal.onualLink);
             existingLinks.add(productLink);
             savedCount++;
-            console.log(`✅ Kaydedildi: ${cleanTitle.substring(0, 40)}... [Link: ${wasResolved ? 'Çözümlendi' : 'Orijinal'}]`);
 
-            // Rate limiting - Puppeteer yormasın diye bekle
-            await new Promise(r => setTimeout(r, 1000));
+            const status = wasResolved ? 'Çözümlendi' : 'Orijinal';
+            console.log(`✅ Kaydedildi: ${cleanTitle.substring(0, 40)}... [${status}]`);
+
+            // Rate limiting
+            await new Promise(r => setTimeout(r, 1500));
         }
-
-        // Browser'ı kapat
-        await closeBrowser();
 
         console.log(`\n🎉 SONUÇ:`);
         console.log(`   📦 ${savedCount} yeni indirim kaydedildi`);
-        console.log(`   🔗 ${resolvedLinksCount} link başarıyla çözümlendi`);
-        console.log(`   ⚠️ ${savedCount - resolvedLinksCount} link çözümlenemedi (manuel güncelleme gerekebilir)`);
+        console.log(`   🔗 ${resolvedLinksCount} link çözümlendi`);
+        console.log(`   ⚠️ ${savedCount - resolvedLinksCount} link çözümlenemedi`);
 
     } catch (error) {
-        console.error('❌ Hata:', error.message);
-        await closeBrowser();
+        console.error('❌ Hata:', error);
         process.exit(1);
     }
 }
 
 main();
-
