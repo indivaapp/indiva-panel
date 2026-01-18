@@ -281,15 +281,31 @@ function isRealStoreLink(url) {
     return stores.some(store => url.includes(store));
 }
 
-// Redirect zincirini takip et (zxro.com -> gerçek mağaza)
+// Redirect zincirini takip et veya URL parametresinden parse et
 async function followRedirectChain(url) {
-    console.log(`🔗 Redirect zinciri takip ediliyor: ${url}`);
+    console.log(`🔗 Redirect zinciri çözümleniyor: ${url}`);
 
+    // HIZLI YOL: zxro.com/u/?...url=... formatını direkt parse et
+    if (url.includes('zxro.com/u/') && url.includes('url=')) {
+        try {
+            const urlObj = new URL(url);
+            let encodedStoreUrl = urlObj.searchParams.get('url');
+            if (encodedStoreUrl) {
+                const decodedUrl = decodeURIComponent(encodedStoreUrl);
+                console.log(`✅ URL parametresinden parse edildi: ${decodedUrl}`);
+                return decodedUrl;
+            }
+        } catch (e) {
+            console.log(`⚠️ URL parse hatası: ${e.message}`);
+        }
+    }
+
+    // YAVAŞ YOL: zxro.com kısa linkini (#buton içinden) Puppeteer ile takip et
     try {
         const browserInstance = await initBrowser();
         const page = await browserInstance.newPage();
 
-        // Request interception ile redirect'leri yakala
+        // Request interception
         let finalUrl = url;
 
         await page.setRequestInterception(true);
@@ -302,7 +318,7 @@ async function followRedirectChain(url) {
             }
         });
 
-        // Response'ları izle
+        // Response'ları izle - gerçek mağaza linkini yakala
         page.on('response', (response) => {
             const responseUrl = response.url();
             if (isRealStoreLink(responseUrl)) {
@@ -317,10 +333,31 @@ async function followRedirectChain(url) {
             timeout: LINK_RESOLVE_TIMEOUT
         });
 
-        // Son URL'i kontrol et
+        // Sayfa yüklendikten sonra URL'i kontrol et (belki yönlendi)
         const pageUrl = page.url();
         if (isRealStoreLink(pageUrl)) {
             finalUrl = pageUrl;
+        }
+
+        // Eğer onual.com'a yönlendiyse, #buton'dan URL al
+        if (pageUrl.includes('onual.com/fiyat/')) {
+            console.log(`🔄 onual.com sayfasına yönlenildi, #buton aranıyor...`);
+            try {
+                const butonHref = await page.$eval('#buton', el => el.href);
+                if (butonHref && butonHref.includes('url=')) {
+                    // zxro.com/u/?...url=... formatından URL parse et
+                    const butonUrl = new URL(butonHref);
+                    const encodedStoreUrl = butonUrl.searchParams.get('url');
+                    if (encodedStoreUrl) {
+                        finalUrl = decodeURIComponent(encodedStoreUrl);
+                        console.log(`✅ #buton'dan URL parse edildi: ${finalUrl}`);
+                    }
+                } else if (isRealStoreLink(butonHref)) {
+                    finalUrl = butonHref;
+                }
+            } catch (e) {
+                console.log(`⚠️ #buton bulunamadı: ${e.message}`);
+            }
         }
 
         await page.close();
