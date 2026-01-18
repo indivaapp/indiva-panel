@@ -137,68 +137,101 @@ async function callGeminiAPI(prompt, retryCount = 0) {
     }
 }
 
-// ===== AI İLE LİNK ÇÖZÜMLEME =====
-async function resolveOnuAlLinkWithAI(shortLink) {
+// ===== NODE.JS DİREKT LİNK ÇÖZÜMLEME (CORS PROXY GEREKMİYOR!) =====
+async function resolveOnuAlLink(shortLink) {
     if (!shortLink || !shortLink.includes('onu.al')) {
         return shortLink;
     }
 
-    console.log(`🔗 AI ile link çözümleniyor: ${shortLink}`);
+    console.log(`🔗 Link çözümleniyor: ${shortLink}`);
 
     try {
-        // HTML'i al
-        const html = await fetchWithProxy(shortLink);
+        // Node.js'de CORS yok - direkt istek yapabiliriz!
+        const response = await fetchWithTimeout(shortLink, 10000);
+
+        if (!response.ok) {
+            console.log(`⚠️ HTTP ${response.status}`);
+            return shortLink;
+        }
+
+        const html = await response.text();
 
         if (!html || html.length < 100) {
             console.log(`⚠️ HTML içeriği çok kısa`);
             return shortLink;
         }
 
-        // Önce klasik yöntemlerle dene
-        const classicResult = extractLinkFromHtml(html);
-        if (classicResult && isRealStoreLink(classicResult)) {
-            console.log(`✅ Klasik yöntem başarılı: ${classicResult.substring(0, 60)}...`);
-            return classicResult;
+        console.log(`📄 HTML alındı: ${html.length} karakter`);
+
+        // Pattern 1: zxro.com redirect URL (EN ÖNCELİKLİ)
+        const zxroMatch = html.match(/href=['"]?(https?:\/\/zxro\.com\/u\/\?[^'">\s]+)['"]?/i);
+        if (zxroMatch && zxroMatch[1]) {
+            try {
+                const zxroUrl = new URL(zxroMatch[1]);
+                const encodedUrl = zxroUrl.searchParams.get('url');
+                if (encodedUrl) {
+                    const decodedUrl = decodeURIComponent(encodedUrl);
+                    console.log(`✅ zxro.com'dan link: ${decodedUrl.substring(0, 60)}...`);
+                    return decodedUrl;
+                }
+            } catch (e) { /* devam */ }
         }
 
-        // Klasik yöntem başarısızsa AI'a gönder
-        // HTML'i kısalt (token tasarrufu için)
-        const truncatedHtml = html.substring(0, 8000);
-
-        const prompt = `Bu HTML içeriğinden gerçek mağaza linkini bul ve SADECE linki döndür.
-
-Aradığım linkler:
-- id="buton" elementindeki href
-- app.hb.biz (Hepsiburada)
-- ty.gl (Trendyol)
-- amazon.com.tr
-- n11.com, sl.n11.com
-- trendyol.com
-- hepsiburada.com
-
-Eğer zxro.com/u/?url= formatında link varsa, url parametresini decode et.
-
-SADECE LİNKİ DÖNDÜR, BAŞKA BİR ŞEY YAZMA.
-Bulamazsan "BULUNAMADI" yaz.
-
-HTML:
-${truncatedHtml}`;
-
-        const aiResult = await callGeminiAPI(prompt);
-
-        if (aiResult && !aiResult.includes('BULUNAMADI') && aiResult.startsWith('http')) {
-            const cleanLink = aiResult.trim().split('\n')[0];
-            if (isRealStoreLink(cleanLink)) {
-                console.log(`✅ AI link buldu: ${cleanLink.substring(0, 60)}...`);
-                return cleanLink;
-            }
+        // Pattern 2: id="buton" elementi
+        const butonMatch = html.match(/id=['"]buton['"][^>]*href=['"]([^'"]+)['"]/i) ||
+            html.match(/href=['"]([^'"]+)['"][^>]*id=['"]buton['"]/i);
+        if (butonMatch && butonMatch[1] && !butonMatch[1].includes('onu')) {
+            console.log(`✅ Buton linki: ${butonMatch[1].substring(0, 60)}...`);
+            return butonMatch[1];
         }
 
-        console.log(`⚠️ Link çözümlenemedi, orijinal kullanılıyor`);
+        // Pattern 3: Trendyol doğrudan
+        const trendyolMatch = html.match(/href=['"]?(https?:\/\/(?:www\.)?trendyol\.com\/[^'">\s]+)['"]?/i);
+        if (trendyolMatch) {
+            console.log(`✅ Trendyol: ${trendyolMatch[1].substring(0, 60)}...`);
+            return trendyolMatch[1];
+        }
+
+        // Pattern 4: ty.gl (Trendyol affiliate)
+        const tyMatch = html.match(/href=['"]?(https?:\/\/ty\.gl\/[A-Za-z0-9]+)['"]?/i);
+        if (tyMatch) {
+            console.log(`✅ ty.gl: ${tyMatch[1]}`);
+            return tyMatch[1];
+        }
+
+        // Pattern 5: Hepsiburada doğrudan
+        const hbMatch = html.match(/href=['"]?(https?:\/\/(?:www\.)?hepsiburada\.com\/[^'">\s]+)['"]?/i);
+        if (hbMatch) {
+            console.log(`✅ Hepsiburada: ${hbMatch[1].substring(0, 60)}...`);
+            return hbMatch[1];
+        }
+
+        // Pattern 6: app.hb.biz (Hepsiburada affiliate)
+        const hbAffMatch = html.match(/href=['"]?(https?:\/\/app\.hb\.biz\/[A-Za-z0-9]+)['"]?/i);
+        if (hbAffMatch) {
+            console.log(`✅ app.hb.biz: ${hbAffMatch[1]}`);
+            return hbAffMatch[1];
+        }
+
+        // Pattern 7: Amazon
+        const amzMatch = html.match(/href=['"]?(https?:\/\/(?:www\.)?amazon\.com\.tr\/[^'">\s]+)['"]?/i);
+        if (amzMatch) {
+            console.log(`✅ Amazon: ${amzMatch[1].substring(0, 60)}...`);
+            return amzMatch[1];
+        }
+
+        // Pattern 8: N11
+        const n11Match = html.match(/href=['"]?(https?:\/\/(?:www\.)?n11\.com\/[^'">\s]+)['"]?/i);
+        if (n11Match) {
+            console.log(`✅ N11: ${n11Match[1].substring(0, 60)}...`);
+            return n11Match[1];
+        }
+
+        console.log(`⚠️ Mağaza linki bulunamadı`);
         return shortLink;
 
     } catch (error) {
-        console.log(`❌ Link çözümleme hatası: ${error.message}`);
+        console.log(`❌ Link hatası: ${error.message}`);
         return shortLink;
     }
 }
@@ -474,10 +507,10 @@ async function main() {
                 continue;
             }
 
-            // 1. Link çözümle (hızlı - sadece klasik yöntemler)
+            // 1. Link çözümle (direkt HTTP - CORS proxy yok!)
             let productLink = deal.onualLink;
             try {
-                const resolved = await resolveOnuAlLinkWithAI(deal.onualLink);
+                const resolved = await resolveOnuAlLink(deal.onualLink);
                 if (resolved && resolved !== deal.onualLink) {
                     productLink = resolved;
                 }
