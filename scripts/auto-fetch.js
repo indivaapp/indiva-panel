@@ -193,24 +193,24 @@ async function resolveOnuAlLink(shortLink) {
         await new Promise(r => setTimeout(r, 2000));
 
         // #buton elementinden href al
-        let intermediateLink = null;
+        let rawLink = null;
         try {
-            intermediateLink = await page.$eval('#buton', el => el.href);
-            console.log(`✅ #buton linki: ${intermediateLink}`);
+            rawLink = await page.$eval('#buton', el => el.href);
+            console.log(`✅ #buton linki bulundu: ${rawLink}`);
         } catch (e) {
             console.log(`⚠️ #buton bulunamadı, alternatif yöntemler deneniyor...`);
         }
 
         // Alternatif: data-url veya onclick içinden
-        if (!intermediateLink) {
+        if (!rawLink) {
             try {
-                intermediateLink = await page.$eval('[data-url]', el => el.getAttribute('data-url'));
-                console.log(`✅ data-url linki: ${intermediateLink}`);
+                rawLink = await page.$eval('[data-url]', el => el.getAttribute('data-url'));
+                console.log(`✅ data-url linki: ${rawLink}`);
             } catch (e) { }
         }
 
         // Alternatif: Sayfa içindeki zxro.com veya mağaza linklerini tara
-        if (!intermediateLink) {
+        if (!rawLink) {
             const allLinks = await page.$$eval('a[href]', links =>
                 links.map(a => a.href).filter(href =>
                     href.includes('zxro.com') ||
@@ -223,35 +223,42 @@ async function resolveOnuAlLink(shortLink) {
                 )
             );
             if (allLinks.length > 0) {
-                intermediateLink = allLinks[0];
-                console.log(`✅ Sayfa içi link: ${intermediateLink}`);
+                rawLink = allLinks[0];
+                console.log(`✅ Sayfa içi link: ${rawLink}`);
             }
         }
 
         // Alternatif: Mevcut URL'i kontrol et (redirect olmuştur)
-        if (!intermediateLink) {
+        if (!rawLink) {
             const currentUrl = page.url();
             if (!currentUrl.includes('onu.al') && !currentUrl.includes('onual.com')) {
-                intermediateLink = currentUrl;
-                console.log(`✅ Redirect URL: ${intermediateLink}`);
+                rawLink = currentUrl;
+                console.log(`✅ Redirect URL: ${rawLink}`);
             }
         }
 
         await page.close();
 
-        // Eğer zxro.com veya benzeri bir ara link ise, onu da takip et
-        if (intermediateLink && isIntermediateRedirect(intermediateLink)) {
-            console.log(`🔄 Ara link tespit edildi, takip ediliyor: ${intermediateLink}`);
-            const finalLink = await followRedirectChain(intermediateLink);
-            if (finalLink && isRealStoreLink(finalLink)) {
-                console.log(`✅ Gerçek mağaza linki: ${finalLink}`);
-                return finalLink;
+        // Link bulunduysa, hemen extractFinalUrl ile gerçek mağaza linkini çıkar
+        if (rawLink) {
+            const storeLink = extractFinalUrl(rawLink);
+            if (isRealStoreLink(storeLink)) {
+                console.log(`✅ Gerçek mağaza linki: ${storeLink}`);
+                return storeLink;
             }
-        }
-
-        // Zaten gerçek mağaza linki ise döndür
-        if (intermediateLink && isRealStoreLink(intermediateLink)) {
-            return intermediateLink;
+            // extractFinalUrl işe yaramadı, ara link olarak takip et
+            if (isIntermediateRedirect(rawLink)) {
+                console.log(`🔄 Ara link tespit edildi, takip ediliyor: ${rawLink}`);
+                const finalLink = await followRedirectChain(rawLink);
+                if (finalLink && isRealStoreLink(finalLink)) {
+                    console.log(`✅ Gerçek mağaza linki (redirect sonrası): ${finalLink}`);
+                    return finalLink;
+                }
+            }
+            // En azından bulunan linki döndür
+            if (!rawLink.includes('onu.al') && !rawLink.includes('onual.com')) {
+                return rawLink;
+            }
         }
 
         // Son çare: orijinal link
@@ -276,9 +283,43 @@ function isRealStoreLink(url) {
     if (!url) return false;
     const stores = [
         'trendyol.com', 'hepsiburada.com', 'amazon.com.tr', 'n11.com',
-        'ty.gl', 'app.hb.biz', 'amzn.to', 'gittigidiyor.com'
+        'ty.gl', 'app.hb.biz', 'amzn.to', 'gittigidiyor.com', 'sl.n11.com'
     ];
     return stores.some(store => url.includes(store));
+}
+
+// ===== ÇALIŞAN KOD: zxro.com/u/?url= formatından gerçek linki çıkar =====
+function extractFinalUrl(url) {
+    if (!url) return url;
+
+    try {
+        // zxro.com/u/?redirect=1&url=ENCODED_URL formatı
+        if (url.includes('zxro.com')) {
+            const urlObj = new URL(url);
+            const encodedUrl = urlObj.searchParams.get('url');
+            if (encodedUrl) {
+                const decoded = decodeURIComponent(encodedUrl);
+                console.log(`🔓 zxro.com URL decode edildi: ${decoded.substring(0, 50)}...`);
+                return decoded;
+            }
+        }
+
+        // Genel redirect pattern: ?url= veya ?redirect_url=
+        if (url.includes('url=')) {
+            const match = url.match(/[?&](?:url|redirect_url|goto)=([^&]+)/i);
+            if (match) {
+                const decoded = decodeURIComponent(match[1]);
+                if (isRealStoreLink(decoded)) {
+                    console.log(`🔓 URL parametresinden decode edildi: ${decoded.substring(0, 50)}...`);
+                    return decoded;
+                }
+            }
+        }
+    } catch (e) {
+        console.log(`⚠️ URL decode hatası: ${e.message}`);
+    }
+
+    return url;
 }
 
 // Redirect zincirini takip et veya URL parametresinden parse et
