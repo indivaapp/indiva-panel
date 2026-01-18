@@ -87,8 +87,8 @@ async function fetchWithProxy(targetUrl) {
 
 // ===== GEMINI AI =====
 // Free tier: 15 requests per minute (RPM) = 4 saniye minimum bekleme
-const GEMINI_DELAY_MS = 5000; // 5 saniye (güvenli limit)
-const MAX_RETRIES = 3;
+const GEMINI_DELAY_MS = 4000; // 4 saniye (hızlandırıldı)
+const MAX_RETRIES = 2; // 2 deneme (azaltıldı)
 
 async function callGeminiAPI(prompt, retryCount = 0) {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -474,21 +474,27 @@ async function main() {
                 continue;
             }
 
-            // 1. Link çözümle (AI destekli)
-            const productLink = await resolveOnuAlLinkWithAI(deal.onualLink);
-            const wasResolved = isRealStoreLink(productLink);
-
-            // ⚠️ ÖNEMLI: Eğer hala onu.al/onual.com linkiyse KAYDETME
-            if (!wasResolved || productLink.includes('onu.al') || productLink.includes('onual.com')) {
-                console.log(`⏭️ Link çözümlenemedi, atlanıyor: ${deal.title.substring(0, 30)}...`);
-                console.log(`   Çözümlenen link: ${productLink.substring(0, 50)}...`);
-                continue;
+            // 1. Link çözümle (hızlı - sadece klasik yöntemler)
+            let productLink = deal.onualLink;
+            try {
+                const resolved = await resolveOnuAlLinkWithAI(deal.onualLink);
+                if (resolved && resolved !== deal.onualLink) {
+                    productLink = resolved;
+                }
+            } catch (e) {
+                console.log(`⚠️ Link çözümleme hatası, orijinal kullanılıyor`);
             }
 
-            resolvedLinksCount++;
+            // Çözümleme durumu
+            const wasResolved = isRealStoreLink(productLink) && !productLink.includes('onu.al');
+            const finalLink = wasResolved ? productLink : deal.onualLink;
 
-            if (existingLinks.has(productLink)) {
-                console.log(`⏭️ Zaten var (productLink): ${deal.title.substring(0, 30)}...`);
+            if (wasResolved) {
+                resolvedLinksCount++;
+            }
+
+            if (existingLinks.has(finalLink)) {
+                console.log(`⏭️ Zaten var: ${deal.title.substring(0, 30)}...`);
                 continue;
             }
 
@@ -512,8 +518,8 @@ async function main() {
                 description: enriched.description,
                 brand: enriched.brand,
                 category: enriched.category,
-                link: productLink,
-                originalStoreLink: productLink,
+                link: finalLink,
+                originalStoreLink: wasResolved ? productLink : '',
                 newPrice: deal.price || 0,
                 oldPrice: 0,
                 imageUrl: deal.imageUrl || '',
@@ -523,10 +529,10 @@ async function main() {
                 submittedBy: 'AutoPublish',
                 needsReview: !wasResolved,
                 affiliateLinkUpdated: wasResolved,
-                aiEnriched: aiEnrichedCount > 0
+                aiEnriched: enriched.description !== getDefaultDescription(deal)
             });
 
-            existingLinks.add(productLink);
+            existingLinks.add(finalLink);
             savedCount++;
 
             const status = wasResolved ? '✓Link' : '⚠️Link';
