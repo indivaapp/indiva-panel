@@ -18,7 +18,7 @@ import { getPendingAffiliateCount } from './services/firebase';
 import Logo from './components/Logo';
 
 const App: React.FC = () => {
-    const [activeView, setActiveView] = useState<ViewType>('dealFinder');
+    const [activeView, setActiveView] = useState<ViewType>('affiliateLinks');
     const [authReady, setAuthReady] = useState(false);
     const [authError, setAuthError] = useState<string | null>(null);
     // Authentication is removed. Every user is considered an admin.

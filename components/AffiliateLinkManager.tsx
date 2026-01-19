@@ -1,431 +1,389 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import {
-    getDiscountsNeedingAffiliate,
-    updateAffiliateLink,
-    skipAffiliateUpdate,
-    skipAllAffiliateUpdates
-} from '../services/firebase';
-import type { Discount, ViewType } from '../types';
+/**
+ * AI Link Analyzer - Düzenlenebilir Sonuçlar
+ * AI analiz eder, eksik bilgileri kullanıcı düzenleyebilir
+ */
+
+import React, { useState, useRef } from 'react';
+import { analyzeProductLink, isValidProductLink, type AnalyzedProduct } from '../services/linkAnalyzer';
+import { addDiscount } from '../services/firebase';
+import { uploadToImgbb } from '../services/imgbb';
+import type { ViewType } from '../types';
 
 interface AffiliateLinkManagerProps {
     isAdmin: boolean;
     setActiveView?: (view: ViewType) => void;
 }
 
-const AffiliateLinkManager: React.FC<AffiliateLinkManagerProps> = ({ isAdmin, setActiveView }) => {
-    const [discounts, setDiscounts] = useState<Discount[]>([]);
-    const [loading, setLoading] = useState(true);
+const AffiliateLinkManager: React.FC<AffiliateLinkManagerProps> = ({ isAdmin }) => {
+    const [link, setLink] = useState('');
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [isPublishing, setIsPublishing] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [affiliateLinks, setAffiliateLinks] = useState<{ [id: string]: string }>({});
-    const [savingId, setSavingId] = useState<string | null>(null);
-    const [skippingAll, setSkippingAll] = useState(false);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
-    const [fetching, setFetching] = useState(false);
+    const [status, setStatus] = useState<string>('');
+    const [isUploadingImage, setIsUploadingImage] = useState(false);
+    const [isUploadingProof, setIsUploadingProof] = useState(false);
+    const [proofImageUrl, setProofImageUrl] = useState('');
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const proofInputRef = useRef<HTMLInputElement>(null);
 
-    // İlanları yükle
-    const loadDiscounts = useCallback(async () => {
-        try {
-            setLoading(true);
-            setError(null);
-            const data = await getDiscountsNeedingAffiliate();
-            setDiscounts(data);
-            // Mevcut linkleri inputlara doldur
-            const links: { [id: string]: string } = {};
-            data.forEach(d => {
-                links[d.id] = d.adminAffiliateLink || '';
-            });
-            setAffiliateLinks(links);
-        } catch (err: any) {
-            setError(err.message || 'Veriler yüklenirken hata oluştu');
-        } finally {
-            setLoading(false);
+    // Düzenlenebilir ürün bilgileri
+    const [product, setProduct] = useState<AnalyzedProduct | null>(null);
+
+    // Linki analiz et
+    const handleAnalyze = async () => {
+        if (!link.trim()) {
+            setError('Lütfen bir link yapıştırın');
+            return;
         }
-    }, []);
 
-    // Telegram'dan yeni indirimleri çek - DOĞRUDAN FRONTEND'DEN
-    const fetchNewDeals = async () => {
+        setIsAnalyzing(true);
+        setError(null);
+        setProduct(null);
+        setStatus('📖 Sayfa okunuyor...');
+
         try {
-            setFetching(true);
-            setError(null);
+            setStatus('🤖 AI analiz ediyor...');
+            const result = await analyzeProductLink(link);
+            setProduct(result);
+            setStatus('');
+            setSuccessMessage('✨ Analiz tamamlandı! Eksik bilgileri düzenleyebilirsiniz.');
+            setTimeout(() => setSuccessMessage(null), 4000);
+        } catch (err: any) {
+            setError(err.message || 'Analiz hatası');
+            setStatus('');
+        } finally {
+            setIsAnalyzing(false);
+        }
+    };
 
+    // Ürün bilgisini güncelle
+    const updateProduct = (field: keyof AnalyzedProduct, value: string | number) => {
+        if (!product) return;
+        setProduct({ ...product, [field]: value });
+    };
 
-            // 1. dealFinder'dan Telegram verilerini çek
-            const { fetchFromTelegram, resolveOnuAlLink, clearDealCache, TELEGRAM_CHANNELS } = await import('../services/dealFinder');
-            const { addDiscount, getDiscounts } = await import('../services/firebase');
+    // Firebase'e yayınla
+    const handlePublish = async () => {
+        if (!product) return;
 
-            // Cache'i temizle - güncel veri için
-            clearDealCache();
+        setIsPublishing(true);
+        setError(null);
 
-            console.log('🔄 Telegram\'dan güncel veriler çekiliyor...');
-            const deals = await fetchFromTelegram(TELEGRAM_CHANNELS[0], true);
-            console.log(`📦 ${deals.length} ilan çekildi`);
+        try {
+            await addDiscount({
+                title: product.title,
+                description: product.description,
+                brand: product.brand,
+                category: product.category,
+                link: product.link,
+                oldPrice: product.oldPrice,
+                newPrice: product.newPrice,
+                imageUrl: product.imageUrl || '',
+                deleteUrl: '',
+                submittedBy: 'AI Link Analyzer',
+                affiliateLinkUpdated: true,
+            });
 
-            if (deals.length === 0) {
-                setSuccessMessage('ℹ️ Telegram\'da yeni ilan bulunamadı');
-                setTimeout(() => setSuccessMessage(null), 5000);
-                return;
-            }
-
-            // 2. Mevcut ilanları al (duplicate check için)
-            const existingDiscounts = await getDiscounts();
-            const existingTitles = new Set(existingDiscounts.map(d => d.title.toLowerCase().trim()));
-
-            // Son 20 ilanı al ve filtrele
-            const newDeals = deals
-                .slice(0, 20)
-                .filter(deal => !existingTitles.has(deal.title.toLowerCase().trim()))
-                .filter(deal => deal.imageUrl && deal.imageUrl.length > 10); // Görseli olmayanları atla
-
-            console.log(`✅ ${newDeals.length} yeni ilan işlenecek`);
-
-            if (newDeals.length === 0) {
-                setSuccessMessage('ℹ️ Tüm ilanlar zaten mevcut');
-                setTimeout(() => setSuccessMessage(null), 5000);
-                return;
-            }
-
-            // 3. Her ilanı işle ve Firebase'e kaydet
-            let published = 0;
-            for (const deal of newDeals.slice(0, 10)) { // Max 10 ilan
-                try {
-                    // Görsel yükle (URL'den)
-                    let finalImageUrl = '';
-                    let deleteUrl = '';
-                    if (deal.imageUrl) {
-                        try {
-                            const { uploadFromUrl } = await import('../services/imgbb');
-                            const imgResult = await uploadFromUrl(deal.imageUrl);
-                            if (imgResult) {
-                                finalImageUrl = imgResult.downloadURL;
-                                deleteUrl = imgResult.deleteUrl || '';
-                            }
-                        } catch (imgErr) {
-                            console.log('⚠️ Görsel yüklenemedi:', imgErr);
-                            // Görsel yüklenemezse orijinal URL'i kullan
-                            finalImageUrl = deal.imageUrl;
-                        }
-                    }
-
-                    // Link çözümle
-                    let resolvedLink = deal.onualLink || deal.productLink || '';
-                    try {
-                        if (resolvedLink.includes('onu.al')) {
-                            resolvedLink = await resolveOnuAlLink(resolvedLink);
-                        }
-                    } catch (linkErr) {
-                        console.log('⚠️ Link çözümlenemedi');
-                    }
-
-                    // Mağaza adını belirle
-                    const storeName = deal.source === 'trendyol' ? 'Trendyol' :
-                        deal.source === 'hepsiburada' ? 'Hepsiburada' :
-                            deal.source === 'amazon' ? 'Amazon' :
-                                deal.source === 'n11' ? 'N11' : 'Mağaza';
-
-                    // Açıklama oluştur
-                    const description = `🔥 Bu ürün şu anda sadece ${deal.price} TL! ${storeName}'da sınırlı stokla sunulan bu fırsatı kaçırmayın!`;
-
-                    // Firebase'e kaydet
-                    await addDiscount({
-                        title: deal.title,
-                        description,
-                        brand: '',
-                        category: 'Diğer',
-                        link: resolvedLink,
-                        originalStoreLink: resolvedLink,
-                        oldPrice: 0,
-                        newPrice: deal.price || 0,
-                        imageUrl: finalImageUrl,
-                        deleteUrl,
-                        submittedBy: 'AutoPublish',
-                        affiliateLinkUpdated: false,
-                        storeName
-                    });
-
-                    published++;
-                    console.log(`✅ Kaydedildi: ${deal.title.substring(0, 40)}...`);
-
-                    // Rate limiting
-                    await new Promise(r => setTimeout(r, 1000));
-                } catch (dealErr) {
-                    console.error('❌ İlan kaydetme hatası:', dealErr);
-                }
-            }
-
-            if (published > 0) {
-                setSuccessMessage(`✅ ${published} yeni indirim eklendi!`);
-                await loadDiscounts(); // Listeyi yenile
-            } else {
-                setSuccessMessage('ℹ️ Yeni indirim eklenemedi');
-            }
-
+            setSuccessMessage('✅ Başarıyla yayınlandı!');
+            setProduct(null);
+            setLink('');
             setTimeout(() => setSuccessMessage(null), 5000);
         } catch (err: any) {
-            console.error('❌ Fetch hatası:', err);
-            setError('İndirimler çekilirken hata: ' + err.message);
+            setError(err.message);
         } finally {
-            setFetching(false);
+            setIsPublishing(false);
         }
     };
 
-    useEffect(() => {
-        loadDiscounts();
-    }, [loadDiscounts]);
-
-    // Affiliate link güncelle
-    const handleSave = async (discountId: string) => {
-        const newLink = affiliateLinks[discountId]?.trim();
-        if (!newLink) {
-            alert('Lütfen bir affiliate link girin veya "Atla" butonunu kullanın.');
-            return;
-        }
-
+    // Panodan yapıştır
+    const handlePaste = async () => {
         try {
-            setSavingId(discountId);
-            await updateAffiliateLink(discountId, newLink);
-            setSuccessMessage('Affiliate link güncellendi!');
-            // Listeden kaldır
-            setDiscounts(prev => prev.filter(d => d.id !== discountId));
-            setTimeout(() => setSuccessMessage(null), 3000);
-        } catch (err: any) {
-            alert('Güncelleme hatası: ' + err.message);
-        } finally {
-            setSavingId(null);
+            const text = await navigator.clipboard.readText();
+            if (text) setLink(text);
+        } catch {
+            const input = prompt('Linki yapıştırın:');
+            if (input) setLink(input);
         }
-    };
-
-    // Tek bir ilanı atla
-    const handleSkip = async (discountId: string) => {
-        try {
-            setSavingId(discountId);
-            await skipAffiliateUpdate(discountId);
-            setDiscounts(prev => prev.filter(d => d.id !== discountId));
-        } catch (err: any) {
-            alert('Atlama hatası: ' + err.message);
-        } finally {
-            setSavingId(null);
-        }
-    };
-
-    // Tümünü atla
-    const handleSkipAll = async () => {
-        if (!confirm(`${discounts.length} ilan affiliate link olmadan bırakılacak. Emin misiniz?`)) {
-            return;
-        }
-
-        try {
-            setSkippingAll(true);
-            const ids = discounts.map(d => d.id);
-            await skipAllAffiliateUpdates(ids);
-            setDiscounts([]);
-            setSuccessMessage(`${ids.length} ilan atlandı`);
-            setTimeout(() => setSuccessMessage(null), 3000);
-        } catch (err: any) {
-            alert('Toplu atlama hatası: ' + err.message);
-        } finally {
-            setSkippingAll(false);
-        }
-    };
-
-    // Mağaza tipine göre örnek affiliate link
-    const getExampleLink = (discount: Discount): string => {
-        const store = discount.storeName?.toLowerCase() || '';
-        if (store.includes('trendyol')) return 'ty.gl/XXXXX';
-        if (store.includes('hepsiburada')) return 'app.hb.biz/XXXXX';
-        if (store.includes('amazon')) return 'amzn.to/XXXXX';
-        if (store.includes('n11')) return 'sl.n11.com/XXXXX';
-        return 'affiliate-link.com/XXXXX';
     };
 
     if (!isAdmin) {
-        return (
-            <div className="text-center py-20">
-                <p className="text-gray-400">Bu sayfaya erişim yetkiniz yok.</p>
-            </div>
-        );
+        return <div className="text-center text-red-400 p-10">Erişim yok</div>;
     }
 
     return (
-        <div className="max-w-4xl mx-auto">
-            {/* Başlık */}
-            <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                <div>
-                    <h1 className="text-2xl font-bold text-white flex items-center gap-3">
-                        💰 Affiliate Link Yönetimi
-                    </h1>
-                    <p className="text-gray-400 mt-1">
-                        Otomatik yayınlanan ilanlar için kendi affiliate linkinizi ekleyin
-                    </p>
+        <div className="max-w-2xl mx-auto px-4 py-6">
+            {/* Header */}
+            <div className="text-center mb-6">
+                <div className="text-4xl mb-2">🤖</div>
+                <h1 className="text-xl font-bold text-white">AI Link Analyzer</h1>
+                <p className="text-gray-400 text-sm">Link yapıştır → AI analiz etsin → Düzenle → Yayınla</p>
+            </div>
+
+            {/* Link Input */}
+            <div className="bg-gray-800 rounded-xl p-5 border border-gray-700 mb-6">
+                <label className="block text-gray-300 text-sm mb-2">🔗 Ürün Linki</label>
+                <div className="flex gap-2 mb-3">
+                    <input
+                        type="url"
+                        value={link}
+                        onChange={(e) => setLink(e.target.value)}
+                        placeholder="https://..."
+                        className="flex-1 px-3 py-3 bg-gray-900 border border-gray-600 rounded-lg text-white text-sm"
+                    />
+                    <button onClick={handlePaste} className="px-4 bg-gray-700 rounded-lg">📋</button>
                 </div>
+
                 <button
-                    onClick={fetchNewDeals}
-                    disabled={fetching || loading}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg flex items-center gap-2 disabled:opacity-50 transition-colors"
+                    onClick={handleAnalyze}
+                    disabled={isAnalyzing || !link.trim()}
+                    className="w-full py-3 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-xl disabled:opacity-50"
                 >
-                    {fetching ? (
-                        <>
-                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                            Çekiliyor...
-                        </>
-                    ) : (
-                        <>
-                            🔄 Yeni İndirimleri Çek
-                        </>
-                    )}
+                    {isAnalyzing ? status || 'Analiz ediliyor...' : '✨ AI ile Analiz Et'}
                 </button>
             </div>
 
-            {/* Başarı mesajı */}
-            {successMessage && (
-                <div className="mb-4 p-4 bg-green-500/20 border border-green-500/30 rounded-lg text-green-400 flex items-center gap-2">
-                    ✅ {successMessage}
-                </div>
-            )}
-
-            {/* Hata mesajı */}
+            {/* Mesajlar */}
             {error && (
-                <div className="mb-4 p-4 bg-red-500/20 border border-red-500/30 rounded-lg text-red-400">
+                <div className="mb-4 p-3 bg-red-500/20 border border-red-500/30 rounded-lg text-red-400 text-sm">
                     ❌ {error}
                 </div>
             )}
-
-            {/* Yükleniyor */}
-            {loading && (
-                <div className="text-center py-20">
-                    <div className="inline-block w-8 h-8 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin"></div>
-                    <p className="text-gray-400 mt-4">Yükleniyor...</p>
+            {successMessage && (
+                <div className="mb-4 p-3 bg-green-500/20 border border-green-500/30 rounded-lg text-green-400 text-sm">
+                    {successMessage}
                 </div>
             )}
 
-            {/* Boş durum */}
-            {!loading && discounts.length === 0 && (
-                <div className="text-center py-20 bg-gray-800/50 rounded-2xl border border-gray-700">
-                    <div className="text-6xl mb-4">🎉</div>
-                    <h2 className="text-xl font-bold text-white mb-2">Tüm linkler güncel!</h2>
-                    <p className="text-gray-400">
-                        Bekleyen affiliate link güncellemesi yok.
-                    </p>
-                </div>
-            )}
+            {/* Düzenlenebilir Sonuç */}
+            {product && (
+                <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+                    <div className="bg-gradient-to-r from-blue-600/20 to-purple-600/20 px-5 py-3 border-b border-gray-700">
+                        <h2 className="text-lg font-bold text-white">📝 Düzenle & Yayınla</h2>
+                    </div>
 
-            {/* İlan listesi */}
-            {!loading && discounts.length > 0 && (
-                <>
-                    {/* Özet kartı */}
-                    <div className="mb-6 p-4 bg-orange-500/10 border border-orange-500/30 rounded-xl flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                            <span className="text-3xl">🔔</span>
+                    <div className="p-5 space-y-4">
+                        {/* Başlık */}
+                        <div>
+                            <label className="block text-gray-400 text-xs mb-1">Ürün Başlığı</label>
+                            <input
+                                type="text"
+                                value={product.title}
+                                onChange={(e) => updateProduct('title', e.target.value)}
+                                className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white text-sm"
+                            />
+                        </div>
+
+                        {/* Marka & Mağaza & Kategori */}
+                        <div className="grid grid-cols-3 gap-3">
                             <div>
-                                <p className="text-orange-400 font-semibold">
-                                    {discounts.length} ilan affiliate link bekliyor
-                                </p>
-                                <p className="text-gray-400 text-sm">
-                                    Bu ilanlar şu anda orijinal mağaza linkleriyle yayında
-                                </p>
+                                <label className="block text-gray-400 text-xs mb-1">Marka</label>
+                                <input
+                                    type="text"
+                                    value={product.brand}
+                                    onChange={(e) => updateProduct('brand', e.target.value)}
+                                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-400 text-xs mb-1">Mağaza</label>
+                                <input
+                                    type="text"
+                                    value={product.store}
+                                    onChange={(e) => updateProduct('store', e.target.value)}
+                                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-400 text-xs mb-1">Kategori</label>
+                                <select
+                                    value={product.category}
+                                    onChange={(e) => updateProduct('category', e.target.value)}
+                                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white text-sm"
+                                >
+                                    <option>Elektronik</option>
+                                    <option>Giyim</option>
+                                    <option>Ev & Yaşam</option>
+                                    <option>Kozmetik</option>
+                                    <option>Gıda</option>
+                                    <option>Spor</option>
+                                    <option>Mutfak</option>
+                                    <option>Diğer</option>
+                                </select>
                             </div>
                         </div>
-                        <button
-                            onClick={handleSkipAll}
-                            disabled={skippingAll}
-                            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors disabled:opacity-50"
-                        >
-                            {skippingAll ? 'İşleniyor...' : 'Tümünü Atla'}
-                        </button>
-                    </div>
 
-                    {/* İlan kartları */}
-                    <div className="space-y-4">
-                        {discounts.map((discount) => (
-                            <div
-                                key={discount.id}
-                                className="bg-gray-800/70 rounded-xl border border-gray-700 overflow-hidden"
-                            >
-                                <div className="flex flex-col md:flex-row">
-                                    {/* Görsel */}
-                                    <div className="w-full md:w-32 h-32 md:h-auto flex-shrink-0">
-                                        {discount.imageUrl ? (
-                                            <img
-                                                src={discount.imageUrl}
-                                                alt={discount.title}
-                                                className="w-full h-full object-cover"
-                                            />
-                                        ) : (
-                                            <div className="w-full h-full bg-gray-700 flex items-center justify-center text-4xl">
-                                                📦
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    {/* İçerik */}
-                                    <div className="flex-1 p-4">
-                                        {/* Başlık ve mağaza */}
-                                        <div className="flex items-start justify-between gap-2 mb-2">
-                                            <h3 className="font-semibold text-white line-clamp-2">
-                                                {discount.title}
-                                            </h3>
-                                            <span className="flex-shrink-0 px-2 py-1 bg-blue-500/20 text-blue-400 text-xs rounded">
-                                                {discount.storeName || 'Mağaza'}
-                                            </span>
-                                        </div>
-
-                                        {/* Fiyat */}
-                                        <p className="text-green-400 font-bold mb-3">
-                                            {discount.newPrice?.toLocaleString('tr-TR')} TL
-                                        </p>
-
-                                        {/* Orijinal link */}
-                                        <div className="mb-3">
-                                            <label className="block text-xs text-gray-500 mb-1">
-                                                Orijinal Mağaza Linki:
-                                            </label>
-                                            <a
-                                                href={discount.originalStoreLink || discount.link}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="text-blue-400 text-sm hover:underline break-all"
-                                            >
-                                                {(discount.originalStoreLink || discount.link)?.substring(0, 60)}...
-                                            </a>
-                                        </div>
-
-                                        {/* Affiliate link input */}
-                                        <div>
-                                            <label className="block text-xs text-gray-400 mb-1">
-                                                Affiliate Linkiniz ({getExampleLink(discount)}):
-                                            </label>
-                                            <div className="flex gap-2">
-                                                <input
-                                                    type="url"
-                                                    value={affiliateLinks[discount.id] || ''}
-                                                    onChange={(e) => setAffiliateLinks(prev => ({
-                                                        ...prev,
-                                                        [discount.id]: e.target.value
-                                                    }))}
-                                                    placeholder={`https://${getExampleLink(discount)}`}
-                                                    className="flex-1 px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
-                                                />
-                                                <button
-                                                    onClick={() => handleSave(discount.id)}
-                                                    disabled={savingId === discount.id}
-                                                    className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-                                                >
-                                                    {savingId === discount.id ? '...' : 'Kaydet'}
-                                                </button>
-                                                <button
-                                                    onClick={() => handleSkip(discount.id)}
-                                                    disabled={savingId === discount.id}
-                                                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors disabled:opacity-50"
-                                                >
-                                                    Atla
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
+                        {/* Fiyatlar */}
+                        <div className="grid grid-cols-3 gap-3">
+                            <div>
+                                <label className="block text-gray-400 text-xs mb-1">💰 Eski Fiyat (₺)</label>
+                                <input
+                                    type="number"
+                                    value={product.oldPrice || ''}
+                                    onChange={(e) => updateProduct('oldPrice', parseFloat(e.target.value) || 0)}
+                                    placeholder="0"
+                                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white text-sm"
+                                />
                             </div>
-                        ))}
+                            <div>
+                                <label className="block text-gray-400 text-xs mb-1">🔥 Yeni Fiyat (₺)</label>
+                                <input
+                                    type="number"
+                                    value={product.newPrice || ''}
+                                    onChange={(e) => updateProduct('newPrice', parseFloat(e.target.value) || 0)}
+                                    placeholder="0"
+                                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white text-sm"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-400 text-xs mb-1">📊 İndirim %</label>
+                                <input
+                                    type="number"
+                                    value={product.discountPercent || ''}
+                                    onChange={(e) => updateProduct('discountPercent', parseInt(e.target.value) || 0)}
+                                    placeholder="0"
+                                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white text-sm"
+                                />
+                            </div>
+                        </div>
+
+                        {/* Görsel Yükleme */}
+                        <div>
+                            <label className="block text-gray-400 text-xs mb-1">🖼️ Ürün Görseli</label>
+                            <div className="flex gap-2">
+                                <input
+                                    type="url"
+                                    value={product.imageUrl}
+                                    onChange={(e) => updateProduct('imageUrl', e.target.value)}
+                                    placeholder="https://... veya galeriden seç"
+                                    className="flex-1 px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white text-sm"
+                                />
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={async (e) => {
+                                        const file = e.target.files?.[0];
+                                        if (!file) return;
+
+                                        setIsUploadingImage(true);
+                                        setError(null);
+
+                                        try {
+                                            const result = await uploadToImgbb(file);
+                                            updateProduct('imageUrl', result.downloadURL);
+                                            setSuccessMessage('✅ Görsel yüklendi!');
+                                            setTimeout(() => setSuccessMessage(null), 2000);
+                                        } catch (err: any) {
+                                            setError('Görsel yüklenemedi: ' + err.message);
+                                        } finally {
+                                            setIsUploadingImage(false);
+                                        }
+                                    }}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => fileInputRef.current?.click()}
+                                    disabled={isUploadingImage}
+                                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium disabled:opacity-50 whitespace-nowrap"
+                                >
+                                    {isUploadingImage ? '⏳' : '📷 Seç'}
+                                </button>
+                            </div>
+                            {product.imageUrl && (
+                                <img
+                                    src={product.imageUrl}
+                                    alt="Önizleme"
+                                    className="mt-2 w-20 h-20 object-cover rounded-lg border border-gray-600"
+                                    onError={(e) => (e.target as HTMLImageElement).style.display = 'none'}
+                                />
+                            )}
+                        </div>
+
+                        {/* Kanıt Görseli */}
+                        <div>
+                            <label className="block text-gray-400 text-xs mb-1">📸 Kanıt Görseli (Screenshot)</label>
+                            <div className="flex gap-2">
+                                <input
+                                    type="url"
+                                    value={proofImageUrl}
+                                    onChange={(e) => setProofImageUrl(e.target.value)}
+                                    placeholder="https://... veya galeriden seç"
+                                    className="flex-1 px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white text-sm"
+                                />
+                                <input
+                                    type="file"
+                                    ref={proofInputRef}
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={async (e) => {
+                                        const file = e.target.files?.[0];
+                                        if (!file) return;
+
+                                        setIsUploadingProof(true);
+                                        setError(null);
+
+                                        try {
+                                            const result = await uploadToImgbb(file);
+                                            setProofImageUrl(result.downloadURL);
+                                            setSuccessMessage('✅ Kanıt görseli yüklendi!');
+                                            setTimeout(() => setSuccessMessage(null), 2000);
+                                        } catch (err: any) {
+                                            setError('Görsel yüklenemedi: ' + err.message);
+                                        } finally {
+                                            setIsUploadingProof(false);
+                                        }
+                                    }}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => proofInputRef.current?.click()}
+                                    disabled={isUploadingProof}
+                                    className="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg text-sm font-medium disabled:opacity-50 whitespace-nowrap"
+                                >
+                                    {isUploadingProof ? '⏳' : '📸 Seç'}
+                                </button>
+                            </div>
+                            {proofImageUrl && (
+                                <img
+                                    src={proofImageUrl}
+                                    alt="Kanıt"
+                                    className="mt-2 w-20 h-20 object-cover rounded-lg border border-orange-500"
+                                    onError={(e) => (e.target as HTMLImageElement).style.display = 'none'}
+                                />
+                            )}
+                        </div>
+
+                        {/* Açıklama */}
+                        <div>
+                            <label className="block text-gray-400 text-xs mb-1">✍️ Açıklama</label>
+                            <textarea
+                                value={product.description}
+                                onChange={(e) => updateProduct('description', e.target.value)}
+                                rows={3}
+                                className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-white text-sm"
+                            />
+                        </div>
+
+                        {/* Butonlar */}
+                        <div className="flex gap-3 pt-2">
+                            <button
+                                onClick={() => { setProduct(null); setLink(''); }}
+                                className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl"
+                            >
+                                İptal
+                            </button>
+                            <button
+                                onClick={handlePublish}
+                                disabled={isPublishing || !product.title}
+                                className="flex-1 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold rounded-xl disabled:opacity-50"
+                            >
+                                {isPublishing ? 'Yayınlanıyor...' : '🚀 Yayınla'}
+                            </button>
+                        </div>
                     </div>
-                </>
+                </div>
             )}
         </div>
     );

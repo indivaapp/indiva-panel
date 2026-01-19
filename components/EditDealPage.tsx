@@ -24,10 +24,10 @@ const EditDealPage: React.FC<EditDealPageProps> = ({ deal, setActiveView, isAdmi
     const [publishing, setPublishing] = useState(false);
     const [fetchingDetails, setFetchingDetails] = useState(false);
     const [uploadingImage, setUploadingImage] = useState(false);
+    const [isGeneratingAI, setIsGeneratingAI] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-    // AI açıklama üretme state'leri - KALDIRILDI
     // Otomatik yükleme kontrolü için ref
     const hasAutoUploaded = useRef(false);
 
@@ -132,6 +132,78 @@ const EditDealPage: React.FC<EditDealPageProps> = ({ deal, setActiveView, isAdmi
         }
     };
 
+    // Gemini AI ile açıklama oluştur
+    const generateAIDescription = async () => {
+        setIsGeneratingAI(true);
+        setError(null);
+
+        try {
+            // @ts-ignore
+            const GEMINI_API_KEY = (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+
+            if (!GEMINI_API_KEY) {
+                throw new Error('Gemini API key tanımlı değil');
+            }
+
+            const storeName = deal.source === 'trendyol' ? 'Trendyol' :
+                deal.source === 'hepsiburada' ? 'Hepsiburada' :
+                    deal.source === 'amazon' ? 'Amazon' :
+                        deal.source === 'n11' ? 'N11' : 'Online Mağaza';
+            const price = formData.newPrice || deal.price || 0;
+            const title = formData.title || deal.title;
+
+            const prompt = `Sen profesyonel bir Türk e-ticaret pazarlamacısısın. Aşağıdaki ürün için çekici bir satış açıklaması yaz.
+
+Ürün: ${title}
+Fiyat: ${price} TL
+Mağaza: ${storeName}
+
+Kurallar:
+- Türkçe yaz, 50-80 kelime olsun
+- Ürünün faydalarını vurgula
+- ${price} TL fiyatın iyi bir fırsat olduğunu belirt
+- ${storeName}'ın güvenilirliğini vurgula
+- 2-3 emoji kullan (🔥 💰 ⭐ ✨ 🎁)
+- Aciliyet hissi yarat (stoklar sınırlı vb.)
+- Doğrudan açıklamayı yaz, başka bir şey ekleme`;
+
+            const response = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: {
+                            temperature: 0.8,
+                            maxOutputTokens: 300
+                        }
+                    })
+                }
+            );
+
+            if (!response.ok) {
+                throw new Error(`API hatası: ${response.status}`);
+            }
+
+            const data = await response.json();
+            const generatedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+            if (generatedText) {
+                setFormData(prev => ({ ...prev, description: generatedText.trim() }));
+                setSuccessMessage('✨ AI açıklama oluşturdu!');
+                setTimeout(() => setSuccessMessage(null), 2000);
+            } else {
+                throw new Error('AI yanıt vermedi');
+            }
+        } catch (err: any) {
+            console.error('AI hatası:', err);
+            setError('AI açıklama oluşturulamadı: ' + err.message);
+            setTimeout(() => setError(null), 3000);
+        } finally {
+            setIsGeneratingAI(false);
+        }
+    };
 
 
     // Görsel seç
@@ -324,14 +396,34 @@ const EditDealPage: React.FC<EditDealPageProps> = ({ deal, setActiveView, isAdmi
                     </div>
                 </div>
 
-                {/* Description - AI butonu kaldırıldı */}
+                {/* Description - AI butonu */}
                 <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1">Açıklama</label>
+                    <div className="flex items-center justify-between mb-1">
+                        <label className="block text-sm font-medium text-gray-300">Açıklama</label>
+                        <button
+                            type="button"
+                            onClick={generateAIDescription}
+                            disabled={isGeneratingAI}
+                            className="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1"
+                        >
+                            {isGeneratingAI ? (
+                                <>
+                                    <svg className="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                    Oluşturuluyor...
+                                </>
+                            ) : (
+                                <>✨ AI ile Yaz</>
+                            )}
+                        </button>
+                    </div>
                     <textarea
                         value={formData.description}
                         onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
                         rows={3}
-                        placeholder="Ürün açıklaması..."
+                        placeholder="Ürün açıklaması... veya AI ile otomatik oluşturun"
                         className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 placeholder-gray-500"
                     />
                 </div>
