@@ -1,0 +1,32 @@
+name: Auto Onual Deal Fetcher
+
+on:
+  schedule:
+    # Her 30 dakikada bir çalış (UTC) — GitHub Actions ücretsiz limitinde güvenli
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    # Manuel tetikleme için
+
+jobs:
+  fetch-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Run Auto-Onual Pipeline
+        env:
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node scripts/auto-onual.js
