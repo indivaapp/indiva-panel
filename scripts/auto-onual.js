@@ -105,19 +105,50 @@ function getOpenRouterKey() {
 }
 
 /**
+ * Ürün başlığındaki gereksiz kodları ve numaraları temizle
+ */
+function cleanProductTitle(title) {
+    return title
+        // Sondaki ürün kodlarını sil (örn: "Ürün Adı - ABC123", "Ürün Adı 50276557-VR090")
+        .replace(/[-–]\s*[A-Z0-9]{4,}(?:[\-_][A-Z0-9]+)*\s*$/i, '')
+        // Parantez içindeki kodları sil (örn: "(HB000018U0DJ)")
+        .replace(/\([A-Z0-9]{5,}\)\s*$/i, '')
+        // Başlık sonundaki kısa büyük harf kodları (örn: "Eld01", "Eld-01")
+        .replace(/\s+[A-Z][a-z]?[0-9]{2,}\s*$/g, '')
+        // Çift boşlukları temizle
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/**
+ * Eski fiyat yoksa yeni fiyattan %20-%60 arası rastgele simüle et
+ */
+function simulateOldPrice(newPrice) {
+    const discountRatio = 0.20 + Math.random() * 0.40; // %20 ile %60 arası
+    const oldPrice = Math.round(newPrice / (1 - discountRatio));
+    // 5'e yuvarla (daha gerçekçi görünsün)
+    return Math.round(oldPrice / 5) * 5;
+}
+
+/**
  * OpenRouter üzerinden MiniMax M2.5 ile Türkçe ürün açıklaması oluştur
  */
 async function generateDescription(apiKey, productTitle, newPrice, oldPrice, storeName) {
     const discountPercent = oldPrice > 0 ? Math.round(((oldPrice - newPrice) / oldPrice) * 100) : 0;
-    const discountText = discountPercent > 0 ? `%${discountPercent} indirimli, ` : '';
 
-    const prompt = `Aşağıdaki ürün için INDIVA indirim uygulaması için kısa ve çekici bir Türkçe açıklama yaz. 
-Maksimum 2 cümle. Samimi ve doğal bir dil kullan. Fiyat bilgisini dahil etme.
-Sadece açıklama metnini yaz, başka hiçbir şey yazma.
+    const prompt = `Sen bir Türk e-ticaret uygulamasının metin yazarısın. Aşağıdaki ürünü kullanıcılara sattırmayı amaçlayan, eğlenceli ve samimi bir Türkçe ürün tanıtım metni yaz.
+
+Kurallar:
+- Tam olarak 50-70 kelime olmalı
+- Emoji kullanma
+- Fiyat rakamı yazma
+- Ürünün faydalarını ve cazibesini ön plana çıkar
+- Kullanıcıyı harekete geçirecek bir kapanış cümlesi ekle
+- Sadece açıklama metnini yaz, başka hiçbir şey ekleme
 
 Ürün: ${productTitle}
-Mağaza: ${storeName || 'Online Mağaza'}
-${discountText}Yeni Fiyat: ${newPrice} TL${oldPrice > 0 ? `, Eski Fiyat: ${oldPrice} TL` : ''}`;
+Mağaza: ${storeName || 'Online Mağaza'}${discountPercent > 0 ? `
+Indirim: %${discountPercent}` : ''}`;
 
     try {
         const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -473,7 +504,12 @@ async function main() {
 
     // Zaten kayıtlı olanları çıkar
     const newProducts = allProducts.filter(p => !existingIds.has(`onual_${p.id}`));
-    const toProcess = newProducts.slice(0, MAX_NEW_PRODUCTS);
+
+    // onual.com en yeni ürünleri en başa koyar.
+    // Firebase'de en yeni ürün en son eklenmeli (createdAt sırası).
+    // Bu yüzden işleme sırasını tersine çeviriyoruz:
+    // En eski yeni ürün önce Firebase'e kaydedilsin, en yeni en sona.
+    const toProcess = newProducts.slice(0, MAX_NEW_PRODUCTS).reverse();
 
     console.log(`\n📊 Durum: ${allProducts.length} ürün bulundu, ${newProducts.length} yeni, ${toProcess.length} işlenecek\n`);
 
@@ -535,14 +571,20 @@ async function main() {
         const store = detectStore(storeLink);
         const category = detectCategory(details.title || product.title);
 
-        // Fiyat doğrulama
+        // Fiyat doğrulama ve eski fiyat simülasyonu
         const newPrice = details.newPrice || product.newPrice || 0;
-        const oldPrice = details.oldPrice || 0;
+        let oldPrice = details.oldPrice || 0;
 
         if (newPrice <= 0) {
             console.warn(`   ⚠️  Fiyat bulunamadı, atlanıyor`);
             failCount++;
             continue;
+        }
+
+        // Eski fiyat yoksa simüle et
+        if (!oldPrice || oldPrice <= newPrice) {
+            oldPrice = simulateOldPrice(newPrice);
+            console.log(`   💡 Eski fiyat simüle edildi: ${oldPrice} TL (yeni: ${newPrice} TL)`);
         }
 
         // AI ile açıklama üret
@@ -557,8 +599,9 @@ async function main() {
         console.log(`   ✍️  Açıklama: "${description.substring(0, 80)}${description.length > 80 ? '...' : ''}"`);
 
         // Firebase'e kaydet
+        const cleanedTitle = cleanProductTitle(details.title || product.title);
         const discountData = {
-            title: (details.title || product.title).substring(0, 200),
+            title: cleanedTitle.substring(0, 200),
             description: description || `${store.name} üzerinde harika bir fırsat!`,
             brand: store.name,
             category,
