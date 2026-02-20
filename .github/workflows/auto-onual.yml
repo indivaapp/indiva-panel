@@ -1,11 +1,9 @@
 name: Auto Onual Deal Fetcher
 
 on:
-  schedule:
-    # 7/24 her 15 dakikada bir çalış
-    - cron: '*/15 * * * *'
   workflow_dispatch:
-    # Manuel tetikleme için
+    # Cloudflare Worker tarafından her 5 dakikada bir tetiklenir
+    # Manuel tetikleme de desteklenir
 
 jobs:
   fetch-and-publish:
