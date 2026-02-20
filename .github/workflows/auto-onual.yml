@@ -2,8 +2,8 @@ name: Auto Onual Deal Fetcher
 
 on:
   schedule:
-    # Her 15 dakikada bir, 05:00-23:00 UTC arası (08:00-02:00 TRT) çalış
-    - cron: '*/15 5-22 * * *'
+    # 7/24 her 15 dakikada bir çalış
+    - cron: '*/15 * * * *'
   workflow_dispatch:
     # Manuel tetikleme için
 
