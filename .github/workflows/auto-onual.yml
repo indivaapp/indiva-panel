@@ -1,9 +1,10 @@
 name: Auto Onual Deal Fetcher
 
 on:
+  schedule:
+    - cron: '*/15 * * * *'  # Her 15 dakikada bir otomatik çalışır
   workflow_dispatch:
-    # Cloudflare Worker tarafından her 5 dakikada bir tetiklenir
-    # Manuel tetikleme de desteklenir
+
 
 jobs:
   fetch-and-publish:
@@ -25,6 +26,8 @@ jobs:
 
       - name: Run Auto-Onual Pipeline
         env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: node scripts/auto-onual.js
+

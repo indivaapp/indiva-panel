@@ -13,6 +13,8 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import * as fs from 'fs';
 import * as path from 'path';
 
+
+
 // ─── .env Yükle (lokal geliştirme) ─────────────────────────────────────────
 // GitHub Actions'da ortam değişkenleri zaten set edilmiş olur
 // Lokal'de .env dosyasını okuyoruz (dotenv paketi olmadan)
@@ -36,7 +38,7 @@ if (fs.existsSync(envPath)) {
 
 const ONUAL_URL = 'https://onual.com/fiyat/';
 const MAX_NEW_PRODUCTS = 10; // Her çalışmada en fazla kaç ürün işlensin
-const REQUEST_DELAY_MS = 2000; // İstekler arası bekleme (ms)
+const REQUEST_DELAY_MS = 1500; // İstekler arası bekleme (ms)
 
 // Kategorileri tespit için anahtar kelimeler
 const CATEGORY_MAP = [
@@ -98,23 +100,32 @@ function initFirebase() {
 
 // ─── OpenRouter AI ───────────────────────────────────────────────────────────
 
-function getOpenRouterKey() {
-    const key = process.env.OPENROUTER_API_KEY;
-    if (!key) throw new Error('OPENROUTER_API_KEY env değişkeni eksik');
+function getGeminiKey() {
+    const key = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.OPENROUTER_API_KEY;
+    if (!key) throw new Error('GEMINI_API_KEY veya OPENROUTER_API_KEY env değişkeni eksik');
     return key;
 }
+
 
 /**
  * Ürün başlığındaki gereksiz kodları ve numaraları temizle
  */
 function cleanProductTitle(title) {
     return title
+        // Sondaki uzun sayısal ürün kodları (066842-70758, 207900-7459)
+        .replace(/\s+\d{5,}[-]\d+\s*$/g, '')
+        // Sondaki alfanumerik model kodları (Ch-91D401L-Tr, Ccb001Btbk, 000Cg20917)
+        .replace(/\s+[A-Z]{1,3}[-][A-Z0-9]{3,}[-]?[A-Z0-9]*\s*$/gi, '')
         // Sondaki ürün kodlarını sil (örn: "Ürün Adı - ABC123", "Ürün Adı 50276557-VR090")
         .replace(/[-–]\s*[A-Z0-9]{4,}(?:[\-_][A-Z0-9]+)*\s*$/i, '')
         // Parantez içindeki kodları sil (örn: "(HB000018U0DJ)")
         .replace(/\([A-Z0-9]{5,}\)\s*$/i, '')
-        // Başlık sonundaki kısa büyük harf kodları (örn: "Eld01", "Eld-01")
-        .replace(/\s+[A-Z][a-z]?[0-9]{2,}\s*$/g, '')
+        // Sondaki kısa model kodları (Eld01, Pb-70, Ap12T)
+        .replace(/\s+[A-Z][a-z]?[0-9]{1,2}[A-Z]?\s*$/g, '')
+        // Sondaki "Pack Of X" ifadelerini temizle
+        .replace(/,?\s*Pack Of \d+\s*$/gi, '')
+        // Sondaki virgül ve boşlukları temizle
+        .replace(/[,\s]+$/g, '')
         // Çift boşlukları temizle
         .replace(/\s+/g, ' ')
         .trim();
@@ -131,54 +142,101 @@ function simulateOldPrice(newPrice) {
 }
 
 /**
- * OpenRouter üzerinden MiniMax M2.5 ile Türkçe ürün açıklaması oluştur
+ * OpenRouter üzerinden AI ile Türkçe ürün açıklaması oluştur
+ * Birincil model: MiniMax M2.5, Yedek model: Gemini 2.0 Flash
+ */
+/**
+ * Gemini API üzerinden Türkçe ürün açıklaması oluştur
  */
 async function generateDescription(apiKey, productTitle, newPrice, oldPrice, storeName) {
     const discountPercent = oldPrice > 0 ? Math.round(((oldPrice - newPrice) / oldPrice) * 100) : 0;
 
-    const prompt = `Sen bir Türk e-ticaret uygulamasının metin yazarısın. Aşağıdaki ürünü kullanıcılara sattırmayı amaçlayan, eğlenceli ve samimi bir Türkçe ürün tanıtım metni yaz.
+    const API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
-Kurallar:
-- Tam olarak 50-70 kelime olmalı
-- Emoji kullanma
-- Fiyat rakamı yazma
-- Ürünün faydalarını ve cazibesini ön plana çıkar
-- Kullanıcıyı harekete geçirecek bir kapanış cümlesi ekle
-- Sadece açıklama metnini yaz, başka hiçbir şey ekleme
 
-Ürün: ${productTitle}
-Mağaza: ${storeName || 'Online Mağaza'}${discountPercent > 0 ? `
-Indirim: %${discountPercent}` : ''}`;
+
+    const systemInstruction = "Sen bir ürün uzmanı ve yaratıcı bir Türk e-ticaret metin yazarısın. Görevin, ürün adından yola çıkarak o ürünü gerçekten deneyimlemiş gibi samimi, heyecan verici ve ikna edici bir açıklama yazmaktır. Kesinlikle emoji kullanma. Mağaza adından bahsetme. Her ürün için benzersiz ve farklı bir metin oluştur.";
+
+    const prompt = `Aşağıdaki ürün için tam olarak 50-70 kelime uzunluğunda, eğlenceli ve ikna edici bir açıklama yaz.
+
+ÜRÜN BİLGİLERİ:
+- Ürün: ${productTitle}
+${discountPercent > 0 ? `- İndirim Oranı: %${discountPercent}` : ''}
+
+KURALLAR:
+1. Kesinlikle emoji kullanma.
+2. Fiyat veya rakam yazma.
+3. Mağaza adını belirtme.
+4. Önce ürünün ne işe yaradığını ve temel avantajını etkileyici bir dille anlat.
+5. Sonra bu ürünün kullanıcının hayatında yaratacağı somut farkı samimi bir dille vurgula.
+6. Son cümlede klişelerden uzak, yaratıcı bir 'sepete ekle' mesajı ver.
+7. Metin tamamen özgün ve her seferinde farklı olsun.
+
+Sadece açıklama metnini döndür.`;
 
     try {
-        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        console.log(`      🤖 Gemini AI açıklama üretiyor...`);
+        const res = await fetch(`${API_URL}?key=${apiKey}`, {
             method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-                'HTTP-Referer': 'https://indiva.app',
-                'X-Title': 'INDIVA Auto-Onual',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                model: 'minimax/minimax-m2.5',
-                max_tokens: 150,
-                messages: [{ role: 'user', content: prompt }],
+                contents: [{
+                    role: 'user',
+                    parts: [{ text: `${systemInstruction}\n\n${prompt}` }]
+                }],
+                generationConfig: {
+                    temperature: 0.8,
+                    maxOutputTokens: 250,
+                }
             }),
-            signal: AbortSignal.timeout(20000),
+            signal: AbortSignal.timeout(20000)
         });
 
         if (!res.ok) {
             const errText = await res.text();
-            throw new Error(`${res.status} ${errText}`);
+            throw new Error(`API Hatası: ${res.status} - ${errText.substring(0, 100)}`);
         }
 
         const data = await res.json();
-        return data.choices?.[0]?.message?.content?.trim() || '';
+        let description = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+
+        if (!description) {
+            throw new Error('Boş AI yanıtı');
+        }
+
+        // Temizlik
+        description = description.replace(/^["']|["']$/g, '').trim();
+
+        if (description.length < 30) {
+            throw new Error('Çok kısa açıklama');
+        }
+
+        console.log(`      ✅ AI başarılı — ${description.length} karakter`);
+        return description;
+
     } catch (err) {
-        console.warn(`⚠️  AI açıklama üretilemedi: ${err.message}`);
-        return '';
+        console.warn(`      ⚠️  Gemini hatası: ${err.message}. Fallback kullanılıyor.`);
+        return generateFallbackDescription(productTitle, discountPercent);
     }
 }
+
+
+/**
+ * AI başarısız olduğunda ürüne özel bir fallback açıklama oluştur
+ */
+function generateFallbackDescription(productTitle, discountPercent) {
+    const templates = [
+        `${productTitle} ile tanışmaya hazır mısın? Kalite ve konforu bir araya getiren bu özel parça, günlük yaşamına yeni bir soluk getirecek. Hem şık hem de dayanıklı tasarımıyla uzun süre favorin olmaya aday. Bu fırsatı değerlendirip kalitenin keyfini sürme sırası sende.`,
+        `Hayatınızı kolaylaştıracak ${productTitle} şimdi harika bir fırsatla seni bekliyor. Modern çizgileri ve kullanıcı dostu yapısıyla öne çıkan bu ürün, beklentilerinin ötesinde bir performans vaad ediyor. Kendine bir iyilik yap ve bu özel deneyimi kaçırmadan keşfet.`,
+        `İşte aradığın o ürün: ${productTitle}! Her detayında titizlikle çalışılmış bu tasarım, hem estetiği hem de işlevselliği bir arada sunuyor. Günlük rutininde fark yaratacak bir yardımcı arıyorsan doğru yerdesin. Fırsat bitmeden hemen incele, pişman olmayacaksın.`,
+        `${productTitle} ile standartlarını yükselt! Üstün malzeme kalitesi ve ergonomik yapısıyla dikkat çeken bu ürün, kullanım konforunu zirveye taşıyor. Hem kendine hem sevdiklerine yapabileceğin en güzel jestlerden biri. Bu kaliteyi bu fiyata bulmuşken hemen değerlendir.`,
+        `Yepyeni bir deneyime hazır ol! ${productTitle} şık görünümü ve fark yaratan özellikleriyle seni şaşırtmaya hazır. Günün her anında sana eşlik edecek, dayanıklı ve tarz bir seçenek arıyorsan tam isabet. Stoklar tükenmeden sen de yerini al.`
+    ];
+
+    const hash = productTitle.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    return templates[hash % templates.length];
+}
+
 
 // ─── HTTP Utilities ──────────────────────────────────────────────────────────
 
@@ -483,13 +541,17 @@ async function main() {
 
     // Bağımlılıkları başlat
     const db = initFirebase();
-    const aiKey = getOpenRouterKey();
+    const aiKey = getGeminiKey();
+
 
     // ── 1. Mevcut ürün ID'lerini al (duplicate önleme) ────────────────────
     console.log('🔍 Mevcut kayıtlar kontrol ediliyor...');
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     const existingSnapshot = await db.collection('discounts')
+        .where('originalSource', '==', 'onual.com')
+        .where('createdAt', '>', thirtyDaysAgo)
         .select('telegramMessageId')
-        .limit(1000)
         .get();
 
     const existingIds = new Set(
@@ -497,7 +559,7 @@ async function main() {
             .map(d => d.data().telegramMessageId)
             .filter(Boolean)
     );
-    console.log(`   ${existingIds.size} mevcut ürün ID'si yüklendi\n`);
+    console.log(`   ${existingIds.size} mevcut onual ürün ID'si yüklendi (son 30 gün)\n`);
 
     // ── 2. onual.com/fiyat/ listesini çek ────────────────────────────────
     const allProducts = await fetchProductList();
@@ -505,11 +567,11 @@ async function main() {
     // Zaten kayıtlı olanları çıkar
     const newProducts = allProducts.filter(p => !existingIds.has(`onual_${p.id}`));
 
-    // onual.com en yeni ürünleri en başa koyar.
-    // Firebase'de en yeni ürün en son eklenmeli (createdAt sırası).
-    // Bu yüzden işleme sırasını tersine çeviriyoruz:
-    // En eski yeni ürün önce Firebase'e kaydedilsin, en yeni en sona.
-    const toProcess = newProducts.slice(0, MAX_NEW_PRODUCTS).reverse();
+    // onual.com en yeni ürünleri en başa koyar (büyük ID = yeni).
+    // Firebase'de yayınlanma sırasını korumak için ID'ye göre artan sırada işle:
+    // En küçük ID (en eski yeni ürün) önce kaydedilir → createdAt sırası doğru olur.
+    const sorted = [...newProducts].sort((a, b) => parseInt(a.id) - parseInt(b.id));
+    const toProcess = sorted.slice(0, MAX_NEW_PRODUCTS);
 
     console.log(`\n📊 Durum: ${allProducts.length} ürün bulundu, ${newProducts.length} yeni, ${toProcess.length} işlenecek\n`);
 
@@ -587,8 +649,6 @@ async function main() {
             console.log(`   💡 Eski fiyat simüle edildi: ${oldPrice} TL (yeni: ${newPrice} TL)`);
         }
 
-        // AI ile açıklama üret
-        console.log(`   🤖 OpenRouter MiniMax M2.5 açıklama üretiyor...`);
         const description = await generateDescription(
             aiKey,
             details.title || product.title,
@@ -596,13 +656,14 @@ async function main() {
             oldPrice,
             store.name
         );
+
         console.log(`   ✍️  Açıklama: "${description.substring(0, 80)}${description.length > 80 ? '...' : ''}"`);
 
         // Firebase'e kaydet
         const cleanedTitle = cleanProductTitle(details.title || product.title);
         const discountData = {
             title: cleanedTitle.substring(0, 200),
-            description: description || `${store.name} üzerinde harika bir fırsat!`,
+            description: description || `${cleanedTitle} - bu fiyata bu kalite kaçmaz! Hemen incele, bu fırsat çok sürmez.`,
             brand: store.name,
             category,
             link: storeLink,                         // Gerçek mağaza linki
