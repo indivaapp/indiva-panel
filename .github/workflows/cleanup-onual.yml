@@ -1,0 +1,27 @@
+name: Auto Cleanup (48h)
+
+on:
+  schedule:
+    # Her saat başı çalışır (Daha hızlı temizlik için)
+    - cron: '0 * * * *'
+  workflow_dispatch: # Manuel tetikleme için
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/uses-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install firebase-admin cheerio
+
+      - name: Run cleanup script
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node scripts/cleanup-discounts.js

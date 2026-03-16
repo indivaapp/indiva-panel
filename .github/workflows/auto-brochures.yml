@@ -1,0 +1,28 @@
+name: Auto Brochures Collector
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # Her 6 saatte bir çalışır
+  workflow_dispatch: # Manuel tetikleme için
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm install cheerio firebase-admin
+
+      - name: Run Collector
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          OPENROUTER_API_KEY: ${{ secrets.GEMINI_API_KEY }} # Mevcut anahtarı kullanıyoruz
+        run: node scripts/auto-brochures.js
