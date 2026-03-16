@@ -183,6 +183,51 @@ function extractImageFromContent(content: string): string {
 }
 
 /**
+ * Vercel Serverless API üzerinden fiyat ve görsel çıkar (CORS bypass)
+ */
+async function fetchProductDataFromVercel(url: string): Promise<{
+    title: string;
+    brand: string;
+    newPrice: number;
+    oldPrice: number;
+    imageUrl: string;
+}> {
+    console.log('🚀 Vercel API ile ürün analiz ediliyor...');
+
+    try {
+        const apiUrl = `https://indiva-proxy.vercel.app/api/scrape?action=analyze&url=${encodeURIComponent(url)}`;
+
+        const response = await fetch(apiUrl, {
+            signal: AbortSignal.timeout(30000)
+        });
+
+        if (!response.ok) {
+            console.warn('Vercel API hatası:', response.status);
+            return { title: '', brand: '', newPrice: 0, oldPrice: 0, imageUrl: '' };
+        }
+
+        const result = await response.json();
+
+        if (result.success && result.data) {
+            console.log(`✅ Vercel API başarılı: ${result.data.newPrice} TL, görsel: ${result.data.imageUrl ? '✓' : '✗'}`);
+            return {
+                title: result.data.title || '',
+                brand: result.data.brand || '',
+                newPrice: result.data.newPrice || 0,
+                oldPrice: result.data.oldPrice || 0,
+                imageUrl: result.data.imageUrl || ''
+            };
+        }
+
+        return { title: '', brand: '', newPrice: 0, oldPrice: 0, imageUrl: '' };
+
+    } catch (err) {
+        console.warn('Vercel API hatası:', err);
+        return { title: '', brand: '', newPrice: 0, oldPrice: 0, imageUrl: '' };
+    }
+}
+
+/**
  * Groq API ile analiz et
  */
 async function analyzeWithGroq(content: string, url: string, storeName: string): Promise<{
@@ -210,16 +255,27 @@ GÖREV: Ürün bilgilerini JSON formatında döndür.
 KURALLAR:
 - title: Ürünün TAM başlığı
 - brand: Marka adı
-- category: Kategori (Elektronik, Giyim, Ev & Yaşam, Kozmetik, Mutfak, Spor, Gıda, Diğer)
-- oldPrice: Eski/liste fiyatı (SADECE SAYI)
-- newPrice: İndirimli fiyat (SADECE SAYI)
-- discountPercent: İndirim oranı (SADECE SAYI)
-- description: MUTLAKA 60-80 KELİME ARASI satış açıklaması yaz! Bu zorunlu:
-  * Ürünün özelliklerini ve faydalarını DETAYLI anlat
-  * 4-5 emoji kullan: 🔥💰⭐✨🎁🛒💪👍🎯
-  * "Kaçırmayın!", "Stoklar sınırlı!", "Hemen alın!", "Bu fiyata bu kalite!" gibi satış cümleleri ekle
-  * İkna edici, samimi ve profesyonel bir dil kullan
-  * KISA AÇIKLAMA KABUL EDİLMEZ - minimum 60 kelime!
+- category: Kategori (Şu listeden en uygun olanı seç: Teknoloji, Giyim & Ayakkabı, Ev, Yaşam & Mutfak, Kozmetik & Kişisel Bakım, Süpermarket, Anne & Bebek, Mobilya, Kitap & Kırtasiye, Spor & Outdoor, Takı & Aksesuar, Otomotiv & Motosiklet, Pet Shop, Bahçe & Yapı Market, Oyuncak & Hobi, Sağlık & Medikal, Çanta & Valiz, Saat & Gözlük, Elektronik Aksesuar, Ofis & İş Dünyası, Hediyelik Eşya)
+- oldPrice: ESKİ/LİSTE FİYATI - ÇOK DİKKATLİ ARA! Şu kalıpları tara:
+  * "Liste Fiyatı", "Piyasa Fiyatı", "Eski Fiyat", "Normal Fiyat"
+  * Üstü çizili fiyat (genelde daha yüksek olan)
+  * "X TL yerine Y TL" formatında X değeri
+  * İndirim öncesi fiyat, karşılaştırma fiyatı
+  * SADECE SAYI döndür (TL, ₺ karakterleri olmadan)
+- newPrice: İNDİRİMLİ/GÜNCEL FİYAT - Şu kalıpları tara:
+  * "Satış Fiyatı", "İndirimli Fiyat", "Fiyat", "Sepet Fiyatı"
+  * En belirgin/büyük yazılan fiyat
+  * "X TL yerine Y TL" formatında Y değeri
+  * SADECE SAYI döndür
+- discountPercent: İndirim oranı (SADECE SAYI, % işareti olmadan)
+- description: MUTLAKA 40-60 KELİME ARASI etkileyici ve ikna edici bir satış açıklaması yaz! DİKKAT:
+  * ÜRÜN İSMİNİ AÇIKLAMANIN BAŞINDA TEKRAR ETME! Direkt ürünün faydalarıyla, hissettireceği duyguyla veya çözdüğü sorunla başla.
+  * EMOJİ KULLANMA! Hiç emoji olmasın.
+  * Eğlenceli, samimi, coşkulu ve arkadaşça bir dil kullan.
+  * Ürünün benzersiz özelliklerini ve hayatı nasıl kolaylaştırdığını/güzelleştirdiğini anlat.
+  * "Bu fırsatı kaçırma!", "Cebini düşünerek alışveriş yap!", "Hem kaliteli hem uygun!" gibi teşvik edici cümleler ekle.
+  * Jenerik ve sıkıcı cümlelerden ("şık görünüm", "fark yaratan özellikler") KESİNLİKLE kaçın.
+  * Sanki en yakın arkadaşına tavsiye eder gibi yaz, resmiyetten uzak dur.
 
 SADECE JSON:
 {"title":"","brand":"","category":"","oldPrice":0,"newPrice":0,"discountPercent":0,"imageUrl":"","description":""}`;
@@ -287,13 +343,22 @@ SADECE JSON:
 
     const parsed = JSON.parse(jsonStr.trim());
 
+    // Fiyatları parse et
+    const newPrice = parseFloat(String(parsed.newPrice).replace(/[^\d.]/g, '')) || 0;
+    let oldPrice = parseFloat(String(parsed.oldPrice).replace(/[^\d.]/g, '')) || 0;
+
+    // Eğer eski fiyat bulunamadıysa, yeni fiyatın %30 fazlasını kullan
+    if (oldPrice === 0 && newPrice > 0) {
+        oldPrice = Math.round(newPrice * 1.3);
+    }
+
     return {
         title: parsed.title || 'Ürün',
         brand: parsed.brand || '',
         category: parsed.category || 'Diğer',
-        description: parsed.description || `${storeName}'da harika fırsat! 🔥`,
-        oldPrice: parseFloat(String(parsed.oldPrice).replace(/[^\d.]/g, '')) || 0,
-        newPrice: parseFloat(String(parsed.newPrice).replace(/[^\d.]/g, '')) || 0,
+        description: parsed.description || `${storeName}'da harika fırsat!`,
+        oldPrice: oldPrice,
+        newPrice: newPrice,
         discountPercent: parseInt(String(parsed.discountPercent).replace(/[^\d]/g, '')) || 0,
         imageUrl: parsed.imageUrl || '',
     };
@@ -303,35 +368,84 @@ SADECE JSON:
  * Ana fonksiyon
  */
 export async function analyzeProductLink(link: string): Promise<AnalyzedProduct> {
+    // Mağaza tespiti - URL pattern'lerine göre (kısa linkler dahil)
+    // ty.gl = Trendyol, hb.biz/app.hb = Hepsiburada, amzn.to = Amazon
     let storeName = 'Online Mağaza';
-    if (link.includes('trendyol')) storeName = 'Trendyol';
-    else if (link.includes('hepsiburada')) storeName = 'Hepsiburada';
-    else if (link.includes('n11')) storeName = 'N11';
-    else if (link.includes('amazon')) storeName = 'Amazon';
+    const lowerLink = link.toLowerCase();
 
-    // 1. Sayfayı oku
-    const pageContent = await fetchPageWithJina(link);
+    if (lowerLink.includes('trendyol') || lowerLink.includes('ty.gl')) {
+        storeName = 'Trendyol';
+    } else if (lowerLink.includes('hepsiburada') || lowerLink.includes('hb.biz') || lowerLink.includes('app.hb')) {
+        storeName = 'Hepsiburada';
+    } else if (lowerLink.includes('n11.com') || lowerLink.includes('sl.n11')) {
+        storeName = 'N11';
+    } else if (lowerLink.includes('amazon') || lowerLink.includes('amzn.to')) {
+        storeName = 'Amazon';
+    }
 
-    // 2. AI ile analiz et
+    console.log(`🏪 Mağaza tespiti: ${storeName} (link: ${link.substring(0, 50)}...)`);
+
+    // 1. Paralel olarak hem Jina (AI için) hem de Vercel API (fiyat+görsel için) başlat
+    const [pageContent, vercelData] = await Promise.all([
+        fetchPageWithJina(link),
+        fetchProductDataFromVercel(link)
+    ]);
+
+    // 2. AI ile analiz et (açıklama ve kategori için)
     const aiResult = await analyzeWithGroq(pageContent, link, storeName);
 
-    // NOT: Görsel çıkarma güvenilir çalışmıyor (tracking pixel'ler geliyor)
-    // Kullanıcı mobilden manuel ekleyecek
-    const imageUrl = '';
+    // 3. Fiyatları belirle - Vercel API öncelikli, sonra AI
+    let finalNewPrice = vercelData.newPrice || aiResult.newPrice;
+    let finalOldPrice = vercelData.oldPrice || aiResult.oldPrice;
+
+    // Eğer hala eski fiyat yoksa, yeni fiyatın %30 fazlasını kullan
+    if (finalOldPrice === 0 && finalNewPrice > 0) {
+        finalOldPrice = Math.round(finalNewPrice * 1.3);
+    }
+
+    // 4. Görsel - Çoklu fallback mekanizması (Vercel > og:image > AI > Jina)
+    let imageUrl = vercelData.imageUrl || '';
+
+    // Fallback 1: og:image meta tag'inden çek (Hepsiburada 403 bypass için)
+    if (!imageUrl) {
+        console.log('⚠️ Vercel API görsel döndürmedi, og:image deneniyor...');
+        imageUrl = await fetchOgImage(link);
+    }
+
+    // Fallback 2: AI sonucundan al
+    if (!imageUrl && aiResult.imageUrl) {
+        console.log('⚠️ og:image bulunamadı, AI sonucundan alınıyor...');
+        imageUrl = aiResult.imageUrl;
+    }
+
+    // Fallback 3: Jina content'inden çıkar
+    if (!imageUrl && pageContent) {
+        console.log('⚠️ AI görseli yok, Jina content\'inden çıkarılıyor...');
+        imageUrl = extractImageFromContent(pageContent);
+    }
+
+    // Log sonuçları
+    console.log(`📊 Analiz sonucu: Fiyat=${finalNewPrice}, Görsel=${imageUrl ? '✓' : '✗'}, Mağaza=${storeName}`);
+
+    // 5. Marka - Vercel API öncelikli, sonra AI
+    const brand = vercelData.brand || aiResult.brand;
+
+    // 6. Başlık - Vercel API öncelikli, sonra AI  
+    const title = vercelData.title || aiResult.title;
 
     // İndirim hesapla
     let discountPercent = aiResult.discountPercent;
-    if (!discountPercent && aiResult.oldPrice > 0 && aiResult.newPrice > 0) {
-        discountPercent = Math.round(((aiResult.oldPrice - aiResult.newPrice) / aiResult.oldPrice) * 100);
+    if (!discountPercent && finalOldPrice > 0 && finalNewPrice > 0) {
+        discountPercent = Math.round(((finalOldPrice - finalNewPrice) / finalOldPrice) * 100);
     }
 
     return {
-        title: aiResult.title,
-        brand: aiResult.brand,
+        title: title,
+        brand: brand,
         category: aiResult.category,
         description: aiResult.description,
-        oldPrice: aiResult.oldPrice,
-        newPrice: aiResult.newPrice,
+        oldPrice: finalOldPrice,
+        newPrice: finalNewPrice,
         store: storeName,
         imageUrl: imageUrl,
         discountPercent: discountPercent,

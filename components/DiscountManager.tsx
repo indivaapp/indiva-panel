@@ -209,20 +209,88 @@ const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmi
                     </div>
 
                     <div>
-                        <label className="block text-sm text-gray-400 mb-1 font-medium">Ürün Açıklaması</label>
-                        <textarea placeholder="Ürün hakkında kısa bilgi..." value={description} onChange={e => setDescription(e.target.value)} className="w-full p-3 bg-gray-700 rounded-lg border border-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" rows={3}></textarea>
+                        <div className="flex justify-between items-end mb-1">
+                            <label className="block text-sm text-gray-400 font-medium">Ürün Açıklaması</label>
+                            <button 
+                                type="button" 
+                                onClick={async () => {
+                                    if (!title) {
+                                        setError('Yapay zekanın açıklama yazabilmesi için önce Ürün Başlığını girmelisiniz.');
+                                        return;
+                                    }
+                                    const btn = document.getElementById('ai-btn');
+                                    if(btn) btn.innerText = 'Düşünüyor...';
+                                    try {
+                                        const prompt = `Şu ürün için e-ticaret uygulamama eğlenceli, dikkat çekici, aciliyet (FOMO) hissi veren ve emojiler içeren kısa bir pazarlama açıklaması (maksimum 2 cümle) yaz. Ayrıca bu ürünün hangi kategoriye ait olduğunu da bana İngilizce anahtar kelime olmadan, sadece şu Türkçe kategorilerden birini seçerek ver: Teknoloji, Giyim & Ayakkabı, Ev, Yaşam & Mutfak, Kozmetik & Kişisel Bakım, Süpermarket, Anne & Bebek, Mobilya, Kitap & Kırtasiye, Spor & Outdoor, Takı & Aksesuar, Otomotiv & Motosiklet, Pet Shop, Bahçe & Yapı Market, Oyuncak & Hobi, Sağlık & Medikal, Çanta & Valiz, Saat & Gözlük, Elektronik Aksesuar, Ofis & İş Dünyası, Hediyelik Eşya. Lütfen çıktıyı tam olarak şu formatta ver: "AÇIKLAMA: [senin yazdığın metin] | KATEGORİ: [seçilen kategori]". Ürün: ${title}`;
+                                        
+                                        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                                            method: 'POST',
+                                            headers: {
+                                                'Content-Type': 'application/json',
+                                                'Authorization': `Bearer ${(import.meta as any).env.VITE_OPENROUTER_API_KEY}`
+                                            },
+                                            body: JSON.stringify({
+                                                model: 'google/gemini-2.5-flash',
+                                                messages: [{ role: 'user', content: prompt }]
+                                            })
+                                        });
+
+                                        if (!response.ok) throw new Error('API Hatası');
+                                        const result = await response.json();
+                                        const text = result.choices[0].message.content;
+                                        
+                                        // AÇIKLAMA: bla bla | KATEGORİ: Teknoloji
+                                        if (text.includes('| KATEGORİ:')) {
+                                            const parts = text.split('| KATEGORİ:');
+                                            let aiDesc = parts[0].replace('AÇIKLAMA:', '').trim();
+                                            let aiCat = parts[1].trim();
+                                            // clean up formatting artifacts if any
+                                            aiDesc = aiDesc.replace(/\*\*/g, '');
+                                            setDescription(aiDesc);
+                                            setCategory(aiCat);
+                                        } else {
+                                            setDescription(text);
+                                        }
+                                    } catch (err) {
+                                        console.error(err);
+                                        setError('Yapay zeka asistanı şu an yanıt veremiyor.');
+                                    } finally {
+                                        if(btn) btn.innerText = '✨ AI ile Doldur';
+                                    }
+                                }}
+                                id="ai-btn"
+                                className="text-xs bg-purple-600 hover:bg-purple-500 text-white py-1 px-3 rounded-md transition-colors font-bold flex items-center gap-1"
+                            >
+                                ✨ AI ile Doldur
+                            </button>
+                        </div>
+                        <textarea placeholder="Ürün hakkında kısa bilgi..." value={description} onChange={e => setDescription(e.target.value)} className="w-full p-3 bg-gray-700 rounded-lg border border-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all border-l-4 border-l-purple-500" rows={3}></textarea>
                     </div>
 
                     <div>
                         <label className="block text-sm text-gray-400 mb-1 font-medium">Kategori</label>
-                        <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full p-3 bg-gray-700 rounded-lg border border-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" required>
+                        <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full p-3 bg-gray-700 rounded-lg border border-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all border-l-4 border-l-purple-500" required>
                             <option value="">Kategori Seçin</option>
-                            <option value="Elektronik">Elektronik</option>
-                            <option value="Giyim">Giyim</option>
-                            <option value="Market">Market</option>
-                            <option value="Ev & Yaşam">Ev & Yaşam</option>
-                            <option value="Kozmetik">Kozmetik</option>
-                            <option value="Diğer">Diğer</option>
+                            <option value="Teknoloji">Teknoloji</option>
+                            <option value="Giyim & Ayakkabı">Giyim & Ayakkabı</option>
+                            <option value="Ev, Yaşam & Mutfak">Ev, Yaşam & Mutfak</option>
+                            <option value="Kozmetik & Kişisel Bakım">Kozmetik & Kişisel Bakım</option>
+                            <option value="Süpermarket">Süpermarket</option>
+                            <option value="Anne & Bebek">Anne & Bebek</option>
+                            <option value="Mobilya">Mobilya</option>
+                            <option value="Kitap & Kırtasiye">Kitap & Kırtasiye</option>
+                            <option value="Spor & Outdoor">Spor & Outdoor</option>
+                            <option value="Takı & Aksesuar">Takı & Aksesuar</option>
+                            <option value="Otomotiv & Motosiklet">Otomotiv & Motosiklet</option>
+                            <option value="Pet Shop">Pet Shop</option>
+                            <option value="Bahçe & Yapı Market">Bahçe & Yapı Market</option>
+                            <option value="Oyuncak & Hobi">Oyuncak & Hobi</option>
+                            <option value="Sağlık & Medikal">Sağlık & Medikal</option>
+                            <option value="Çanta & Valiz">Çanta & Valiz</option>
+                            <option value="Saat & Gözlük">Saat & Gözlük</option>
+                            <option value="Elektronik Aksesuar">Elektronik Aksesuar</option>
+                            <option value="Ofis & İş Dünyası">Ofis & İş Dünyası</option>
+                            <option value="Hediyelik Eşya">Hediyelik Eşya</option>
                         </select>
                     </div>
 

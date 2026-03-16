@@ -5,16 +5,19 @@
 
 import type { ScrapedDeal } from './dealFinder';
 
-// Gemini API endpoint - gemini-2.0-flash stabil çalışan model
+// Gemini API endpoint - gemini-2.0-flash en hızlı ve güncel stabil model
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
 // API Key (Vercel environment variable)
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
+const GEMINI_API_KEY = (import.meta as any).env.VITE_GEMINI_API_KEY || '';
 
 // Kategoriler
 const CATEGORIES = [
-    'Gıda', 'Elektronik', 'Giyim', 'Kozmetik', 'Ev & Yaşam',
-    'Anne & Bebek', 'Spor', 'Kitap', 'Oyuncak', 'Diğer'
+    'Teknoloji', 'Giyim & Ayakkabı', 'Ev, Yaşam & Mutfak', 'Kozmetik & Kişisel Bakım',
+    'Süpermarket', 'Anne & Bebek', 'Mobilya', 'Kitap & Kırtasiye', 'Spor & Outdoor',
+    'Takı & Aksesuar', 'Otomotiv & Motosiklet', 'Pet Shop', 'Bahçe & Yapı Market',
+    'Oyuncak & Hobi', 'Sağlık & Medikal', 'Çanta & Valiz', 'Saat & Gözlük',
+    'Elektronik Aksesuar', 'Ofis & İş Dünyası', 'Hediyelik Eşya'
 ] as const;
 
 // Zenginleştirilmiş fırsat tipi
@@ -127,18 +130,21 @@ ${deal.couponCode ? `Kupon Kodu: ${deal.couponCode}` : ''}
 GÖREV:
 1. Başlığı temizle: Emoji, "FIRSAT", "SÜPER", "KAÇIRMA" gibi gereksiz kelimeleri kaldır. Sadece ürün adını bırak.
 
-2. Kategori belirle (sadece şunlardan biri): Gıda, Elektronik, Giyim, Kozmetik, Ev & Yaşam, Anne & Bebek, Spor, Kitap, Oyuncak, Diğer
+2. Kategori belirle (SADECE listedekilerden en uygun olanı seç): Teknoloji, Giyim & Ayakkabı, Ev, Yaşam & Mutfak, Kozmetik & Kişisel Bakım, Süpermarket, Anne & Bebek, Mobilya, Kitap & Kırtasiye, Spor & Outdoor, Takı & Aksesuar, Otomotiv & Motosiklet, Pet Shop, Bahçe & Yapı Market, Oyuncak & Hobi, Sağlık & Medikal, Çanta & Valiz, Saat & Gözlük, Elektronik Aksesuar, Ofis & İş Dünyası, Hediyelik Eşya. "Diğer" veya "Genel" KESİNLİKLE kullanma.
 
 3. Marka tespit et: Başlıktan markayı çıkar (yoksa boş bırak)
 
-4. AÇIKLAMA YAZ (ÖNEMLİ!):
-   - 3-4 cümle olmalı, çok kısa değil çok uzun değil
-   - Ürünün özelliklerini veya faydalarını vurgula
-   - Kullanıcıyı satın almaya teşvik et
-   - Aciliyet duygusu oluştur (sınırlı süre, kaçırmayın gibi)
-   - Samimi ve ikna edici bir dil kullan
-   - Türkçe yaz
-   ${deal.couponCode ? `- Kupon kodu varsa kullanmayı hatırlat: ${deal.couponCode}` : ''}
+   AŞAĞIDAKİ KELİME VE KALIPLARI KULLANMAN KESİNLİKLE YASAKTIR:
+   "Modern çizgileri", "kullanıcı dostu", "harika bir deneyim", "estetik tasarım", "beklentilerin ötesinde", "hayatınızı kolaylaştıracak", "bir parça", "şık görünüm", "performans vaat ediyor".
+
+4. AÇIKLAMA YAZ (ÇOK ÖNEMLİ!):
+   - Sen bir uzman Teknik Ürün Analistisin. Pazarlamacı gibi değil, bilirkişi gibi konuş.
+   - Sadece başlıkta yazanları değil, bu ürünün/markanın bilinen gerçek teknik özelliklerini (knowledge base) kullanarak derinlemesine bilgi ver.
+   - ÜRÜN İSMİNİ BAŞTA TEKRAR ETME! Direkt teknik bir özellik veya kullanım avantajıyla başla.
+   - Her açıklamada mutlaka somut bir teknik veri (Örn: Ekran tipi, malzeme içeriği, gramaj, bağlantı hızı vb.) bulunmalıdır.
+   - 50-70 kelime arası, ciddi, bilgilendirici ve ikna edici bir metin olmalı.
+   - Türkçe yaz ve metne sadece ürünle ilgili 1-2 emoji yerleştir.
+   ${deal.couponCode ? `- Kupon kodu varsa metnin sonunda doğal bir şekilde hatırlat: ${deal.couponCode}` : ''}
 
    ÖRNEK İYİ AÇIKLAMA:
    "Bu kablosuz kulaklık, aktif gürültü engelleme özelliğiyle müzik dinleme deneyiminizi üst seviyeye taşıyor! Uzun pil ömrü sayesinde tüm gün kesintisiz kullanabilirsiniz. Sınırlı süreli bu indirimi kaçırmayın, stoklar tükenmeden hemen sepete ekleyin!"

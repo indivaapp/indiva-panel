@@ -157,12 +157,26 @@ const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose
                             <label className="block text-sm text-gray-400 mb-1">Kategori</label>
                             <select name="category" value={formData.category || ''} onChange={handleChange} className="w-full p-3 bg-gray-700 rounded-md border border-gray-600 text-white" required>
                                 <option value="">Kategori Seçin</option>
-                                <option value="Elektronik">Elektronik</option>
-                                <option value="Giyim">Giyim</option>
-                                <option value="Market">Market</option>
-                                <option value="Ev & Yaşam">Ev & Yaşam</option>
-                                <option value="Kozmetik">Kozmetik</option>
-                                <option value="Diğer">Diğer</option>
+                                <option value="Teknoloji">Teknoloji</option>
+                                <option value="Giyim & Ayakkabı">Giyim & Ayakkabı</option>
+                                <option value="Ev, Yaşam & Mutfak">Ev, Yaşam & Mutfak</option>
+                                <option value="Kozmetik & Kişisel Bakım">Kozmetik & Kişisel Bakım</option>
+                                <option value="Süpermarket">Süpermarket</option>
+                                <option value="Anne & Bebek">Anne & Bebek</option>
+                                <option value="Mobilya">Mobilya</option>
+                                <option value="Kitap & Kırtasiye">Kitap & Kırtasiye</option>
+                                <option value="Spor & Outdoor">Spor & Outdoor</option>
+                                <option value="Takı & Aksesuar">Takı & Aksesuar</option>
+                                <option value="Otomotiv & Motosiklet">Otomotiv & Motosiklet</option>
+                                <option value="Pet Shop">Pet Shop</option>
+                                <option value="Bahçe & Yapı Market">Bahçe & Yapı Market</option>
+                                <option value="Oyuncak & Hobi">Oyuncak & Hobi</option>
+                                <option value="Sağlık & Medikal">Sağlık & Medikal</option>
+                                <option value="Çanta & Valiz">Çanta & Valiz</option>
+                                <option value="Saat & Gözlük">Saat & Gözlük</option>
+                                <option value="Elektronik Aksesuar">Elektronik Aksesuar</option>
+                                <option value="Ofis & İş Dünyası">Ofis & İş Dünyası</option>
+                                <option value="Hediyelik Eşya">Hediyelik Eşya</option>
                             </select>
                         </div>
 

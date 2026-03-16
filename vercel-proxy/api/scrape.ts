@@ -521,10 +521,355 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 brochureLinks,
                 images: uniqueImages,
             });
+        } else if (action === 'analyze' && url) {
+            // Analyze product URL - extract price and image
+            const targetUrl = Array.isArray(url) ? url[0] : url;
+            console.log(`Analyzing product URL: ${targetUrl}`);
+
+            const html = await fetchWithTimeout(targetUrl);
+            const $ = cheerio.load(html);
+
+            let title = '';
+            let newPrice = 0;
+            let oldPrice = 0;
+            let imageUrl = '';
+            let brand = '';
+
+            // Trendyol
+            if (targetUrl.includes('trendyol')) {
+                // Title
+                title = $('h1.pr-new-br span').text().trim() ||
+                    $('h1.product-name').text().trim() ||
+                    $('h1').first().text().trim() ||
+                    $('meta[property="og:title"]').attr('content') || '';
+
+                // Prices - from JSON-LD script
+                const scriptTags = $('script[type="application/ld+json"]').toArray();
+                for (const script of scriptTags) {
+                    try {
+                        const json = JSON.parse($(script).html() || '{}');
+                        if (json['@type'] === 'Product' && json.offers) {
+                            const offers = Array.isArray(json.offers) ? json.offers[0] : json.offers;
+                            newPrice = parseFloat(offers.price) || 0;
+                            if (offers.priceSpecification?.price) {
+                                oldPrice = parseFloat(offers.priceSpecification.price) || 0;
+                            }
+                        }
+                    } catch (e) { }
+                }
+
+                // Fallback prices from HTML
+                if (!newPrice) {
+                    const priceMatch = html.match(/"price":\s*([\d.]+)/);
+                    if (priceMatch) newPrice = parseFloat(priceMatch[1]);
+                }
+                if (!oldPrice) {
+                    const origMatch = html.match(/"originalPrice":\s*([\d.]+)/);
+                    if (origMatch) oldPrice = parseFloat(origMatch[1]);
+                }
+
+                // Fallback: text content
+                if (!newPrice) {
+                    const priceEl = $('.prc-dsc, .product-price-container .discounted-price').first();
+                    const priceText = priceEl.text().replace(/[^\d,]/g, '').replace(',', '.');
+                    newPrice = parseFloat(priceText) || 0;
+                }
+                if (!oldPrice) {
+                    const oldEl = $('.prc-org, .product-price-container .original-price').first();
+                    const oldText = oldEl.text().replace(/[^\d,]/g, '').replace(',', '.');
+                    oldPrice = parseFloat(oldText) || 0;
+                }
+
+                // Image
+                imageUrl = $('meta[property="og:image"]').attr('content') ||
+                    $('img.detail-section-img').attr('src') ||
+                    $('img[src*="cdn.dsmcdn"]').first().attr('src') || '';
+
+                // Brand
+                brand = $('h1.pr-new-br a').first().text().trim() ||
+                    $('.pr-new-br a').first().text().trim() || '';
+            }
+
+            // Hepsiburada - Gelişmiş scraping (Browser analizi sonucunda güncellendi)
+            else if (targetUrl.includes('hepsiburada')) {
+                // Title
+                title = $('h1#product-name').text().trim() ||
+                    $('h1[data-test-id="product-name"]').text().trim() ||
+                    $('span[data-test-id="product-name"]').text().trim() ||
+                    $('h1.product-name').text().trim() ||
+                    $('meta[property="og:title"]').attr('content') || '';
+
+                // JSON-LD Schema.org - @graph dizisi içinden Product bul (EN GÜVENİLİR)
+                const scriptTags = $('script[type="application/ld+json"]').toArray();
+                for (const script of scriptTags) {
+                    try {
+                        const json = JSON.parse($(script).html() || '{}');
+
+                        // @graph dizisi varsa içinden Product bul
+                        const graph = json['@graph'] || [json];
+                        for (const item of graph) {
+                            if (item['@type'] === 'Product') {
+                                // Görsel
+                                if (item.image && !imageUrl) {
+                                    imageUrl = Array.isArray(item.image) ? item.image[0] : item.image;
+                                }
+                                // Fiyat
+                                if (item.offers && !newPrice) {
+                                    const offers = Array.isArray(item.offers) ? item.offers[0] : item.offers;
+                                    if (offers.price) newPrice = parseFloat(offers.price) || 0;
+                                    if (offers.highPrice) oldPrice = parseFloat(offers.highPrice) || 0;
+                                }
+                                // Marka
+                                if (item.brand && !brand) {
+                                    brand = item.brand.name || item.brand || '';
+                                }
+                            }
+                        }
+
+                        // Eski format kontrolü (düz @type: Product)
+                        if (json['@type'] === 'Product' && json.offers && !newPrice) {
+                            const offers = Array.isArray(json.offers) ? json.offers[0] : json.offers;
+                            if (offers.price) newPrice = parseFloat(offers.price) || 0;
+                            if (offers.highPrice) oldPrice = parseFloat(offers.highPrice) || 0;
+                            if (json.image && !imageUrl) {
+                                imageUrl = Array.isArray(json.image) ? json.image[0] : json.image;
+                            }
+                        }
+                    } catch (e) { }
+                }
+
+                // Fallback - Regex patterns for price
+                if (!newPrice) {
+                    const patterns = [
+                        /"price":\s*([\d.]+)/,
+                        /"discountedPrice":\s*([\d.]+)/,
+                        /data-price="([\d.]+)"/,
+                        /"currentPrice":\s*([\d.]+)/
+                    ];
+                    for (const pattern of patterns) {
+                        const match = html.match(pattern);
+                        if (match) {
+                            newPrice = parseFloat(match[1]);
+                            break;
+                        }
+                    }
+                }
+                if (!oldPrice) {
+                    const patterns = [
+                        /"originalPrice":\s*([\d.]+)/,
+                        /"listPrice":\s*([\d.]+)/,
+                        /data-original-price="([\d.]+)"/
+                    ];
+                    for (const pattern of patterns) {
+                        const match = html.match(pattern);
+                        if (match) {
+                            oldPrice = parseFloat(match[1]);
+                            break;
+                        }
+                    }
+                }
+
+                // Price from visible elements
+                if (!newPrice) {
+                    const priceEl = $('[data-test-id="price-current-price"]').first();
+                    const priceText = priceEl.text().replace(/[^\d,]/g, '').replace(',', '.');
+                    newPrice = parseFloat(priceText) || 0;
+                }
+
+                // Image fallback - .hb-HbImage-view__image (browser analizinden)
+                if (!imageUrl) {
+                    imageUrl = $('.hb-HbImage-view__image').first().attr('src') ||
+                        $('picture img').first().attr('src') ||
+                        $('meta[property="og:image"]').attr('content') ||
+                        $('img[data-test-id="product-image"]').attr('src') ||
+                        $('img.product-image').first().attr('src') ||
+                        $('img[src*="productimages.hepsiburada.net"]').first().attr('src') || '';
+                }
+
+                // Brand fallback
+                if (!brand) {
+                    brand = $('a[data-test-id="brand-link"]').text().trim() ||
+                        $('span[data-test-id="brand"]').text().trim() ||
+                        $('a.brand').text().trim() || '';
+                }
+            }
+
+            // Amazon TR - Gelişmiş scraping (Browser analizi sonucunda güncellendi)
+            else if (targetUrl.includes('amazon')) {
+                // Title
+                title = $('#productTitle').text().trim() ||
+                    $('#title').text().trim() ||
+                    $('meta[property="og:title"]').attr('content') || '';
+
+                // Helper: Türkçe fiyat formatını parse et (8.699,00TL -> 8699.00)
+                const parseTurkishPrice = (text: string): number => {
+                    if (!text) return 0;
+                    // "8.699,00TL" veya "8.699,00 TL" formatı
+                    const cleaned = text
+                        .replace(/TL/gi, '')
+                        .replace(/₺/g, '')
+                        .replace(/\s/g, '')
+                        .replace(/\./g, '')  // Binlik ayracı kaldır
+                        .replace(',', '.');   // Virgülü noktaya çevir
+                    return parseFloat(cleaned) || 0;
+                };
+
+                // Pattern 1: .a-price .a-offscreen (EN GÜVENİLİR - browser analizinden)
+                if (!newPrice) {
+                    const priceEl = $('.a-price .a-offscreen').first();
+                    const priceText = priceEl.text().trim();
+                    newPrice = parseTurkishPrice(priceText);
+                }
+
+                // Pattern 2: #corePrice_desktop
+                if (!newPrice) {
+                    const priceEl = $('#corePrice_desktop .a-price .a-offscreen').first();
+                    const priceText = priceEl.text().trim();
+                    newPrice = parseTurkishPrice(priceText);
+                }
+
+                // Pattern 3: #corePriceDisplay_desktop_feature_div (fırsat/kampanya)
+                if (!newPrice) {
+                    const priceEl = $('#corePriceDisplay_desktop_feature_div .a-price .a-offscreen').first();
+                    const priceText = priceEl.text().trim();
+                    newPrice = parseTurkishPrice(priceText);
+                }
+
+                // Pattern 4: a-price-whole + a-price-fraction
+                if (!newPrice) {
+                    const priceWhole = $('.a-price-whole').first().text().replace(/[^\d]/g, '');
+                    const priceFraction = $('.a-price-fraction').first().text().replace(/[^\d]/g, '');
+                    if (priceWhole) {
+                        newPrice = parseFloat(`${priceWhole}.${priceFraction || '00'}`);
+                    }
+                }
+
+                // Pattern 5: JSON-LD
+                if (!newPrice) {
+                    const scriptTags = $('script[type="application/ld+json"]').toArray();
+                    for (const script of scriptTags) {
+                        try {
+                            const json = JSON.parse($(script).html() || '{}');
+                            if (json['@type'] === 'Product' && json.offers) {
+                                const offers = Array.isArray(json.offers) ? json.offers[0] : json.offers;
+                                if (offers.price) newPrice = parseFloat(offers.price) || 0;
+                            }
+                        } catch (e) { }
+                    }
+                }
+
+                // Pattern 6: Regex fallback
+                if (!newPrice) {
+                    const priceMatch = html.match(/"priceAmount":\s*([\d.]+)/) ||
+                        html.match(/"price":\s*"?([\d.]+)"?/);
+                    if (priceMatch) newPrice = parseFloat(priceMatch[1]);
+                }
+
+                // Old price - .basisPrice .a-offscreen
+                if (!oldPrice) {
+                    const oldEl = $('.basisPrice .a-offscreen').first();
+                    const oldText = oldEl.text().trim();
+                    oldPrice = parseTurkishPrice(oldText);
+                }
+                if (!oldPrice) {
+                    const oldEl = $('.a-price.a-text-price .a-offscreen').first();
+                    const oldText = oldEl.text().trim();
+                    oldPrice = parseTurkishPrice(oldText);
+                }
+
+                // Image - Multiple sources (öncelik sırası güncellendi)
+                imageUrl = $('#landingImage').attr('src') ||
+                    $('meta[property="og:image"]').attr('content') ||
+                    $('#imgBlkFront').attr('src') ||
+                    $('#main-image').attr('src') ||
+                    $('img[data-old-hires]').first().attr('data-old-hires') ||
+                    $('img[src*="images-amazon.com"]').first().attr('src') || '';
+
+                // data-a-dynamic-image içinden yüksek çözünürlüklü görsel al
+                if (!imageUrl || imageUrl.includes('placeholder')) {
+                    const dynamicImgAttr = $('#landingImage').attr('data-a-dynamic-image');
+                    if (dynamicImgAttr) {
+                        try {
+                            const imgObj = JSON.parse(dynamicImgAttr);
+                            const urls = Object.keys(imgObj);
+                            if (urls.length > 0) {
+                                // En yüksek çözünürlüğü al (son eleman genelde en büyük)
+                                imageUrl = urls[urls.length - 1] || urls[0];
+                            }
+                        } catch (e) { }
+                    }
+                }
+
+                // Brand
+                brand = $('#bylineInfo').text().replace(/Marka:|Brand:|Visit the|Store|tarafından/gi, '').trim() ||
+                    $('a#bylineInfo').text().trim() || '';
+            }
+
+            // N11
+            else if (targetUrl.includes('n11')) {
+                title = $('h1.proName').text().trim() ||
+                    $('meta[property="og:title"]').attr('content') || '';
+
+                const priceMatch = html.match(/"price":\s*"?([\d.]+)"?/);
+                if (priceMatch) newPrice = parseFloat(priceMatch[1]);
+
+                imageUrl = $('meta[property="og:image"]').attr('content') || '';
+            }
+
+            // Generic fallback
+            if (!title) {
+                title = $('meta[property="og:title"]').attr('content') ||
+                    $('title').text().trim() || '';
+            }
+            if (!imageUrl) {
+                imageUrl = $('meta[property="og:image"]').attr('content') || '';
+            }
+
+            // If no old price, use 30% markup
+            if (!oldPrice && newPrice > 0) {
+                oldPrice = Math.round(newPrice * 1.3);
+            }
+
+            // Extract brand from title if not found
+            if (!brand && title) {
+                brand = extractBrand(title);
+            }
+
+            console.log(`Analyzed: title="${title.substring(0, 50)}...", price=${newPrice}, oldPrice=${oldPrice}`);
+
+            res.status(200).json({
+                success: true,
+                data: {
+                    title: cleanTitle(title),
+                    brand,
+                    newPrice,
+                    oldPrice,
+                    imageUrl,
+                    url: targetUrl
+                }
+            });
+        } else if (action === 'proxy' && url) {
+            // Lightweight proxy: fetch URL and return raw HTML
+            // Used by Cloudflare Worker to bypass onual.com's datacenter IP blocking
+            const targetUrl = Array.isArray(url) ? url[0] : url;
+
+            // Only allow onual.com domains for security
+            const parsedUrl = new URL(targetUrl);
+            if (!parsedUrl.hostname.endsWith('onual.com')) {
+                res.status(403).json({
+                    success: false,
+                    error: 'Bu proxy sadece onual.com domainleri için kullanılabilir',
+                });
+                return;
+            }
+
+            const html = await fetchWithTimeout(targetUrl);
+            res.setHeader('Content-Type', 'text/html; charset=utf-8');
+            res.status(200).send(html);
         } else {
             res.status(400).json({
                 success: false,
-                error: 'Invalid action. Use ?action=list, ?action=detail&url=..., or ?action=brochures&market=bim',
+                error: 'Invalid action. Use ?action=list, ?action=detail&url=..., ?action=brochures&market=bim, ?action=analyze&url=..., or ?action=proxy&url=...',
             });
         }
     } catch (error: any) {

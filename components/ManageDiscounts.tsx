@@ -1,21 +1,27 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { getDiscounts, deleteDiscount } from '../services/firebase';
 import type { Discount, ViewType } from '../types';
 import EditDiscountModal from './EditDiscountModal';
 import DeleteImgButton from './DeleteImgButton';
+import { useToast } from './ToastProvider';
 
 interface ManageDiscountsProps {
     setActiveView: (view: ViewType) => void;
     isAdmin: boolean;
 }
 
+type FilterType = 'all' | 'discount' | 'ad' | 'affiliate_pending' | 'proven' | 'expired';
+
 const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmin }) => {
+    const { showToast } = useToast();
     const [discounts, setDiscounts] = useState<Discount[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [editingDiscount, setEditingDiscount] = useState<Discount | null>(null);
-    
+    const [searchQuery, setSearchQuery] = useState('');
+    const [activeFilter, setActiveFilter] = useState<FilterType>('all');
+
     const fetchDiscounts = useCallback(async () => {
         setIsLoading(true);
         try {
@@ -36,13 +42,64 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
     const handleEditSuccess = () => {
         setEditingDiscount(null);
         fetchDiscounts();
-    }
-    
-    const handleDeleteItem = async (id: string, deleteUrl: string, screenshotDeleteUrl?: string) => {
-        await deleteDiscount(id, deleteUrl, screenshotDeleteUrl);
-        // UI Update
-        setDiscounts(prev => prev.filter(d => d.id !== id));
+        showToast('İlan başarıyla güncellendi.', 'success');
     };
+
+    const handleDeleteItem = async (id: string, deleteUrl: string, screenshotDeleteUrl?: string) => {
+        try {
+            await deleteDiscount(id, deleteUrl, screenshotDeleteUrl);
+            setDiscounts(prev => prev.filter(d => d.id !== id));
+            showToast('İlan silindi.', 'success');
+        } catch (err) {
+            showToast('İlan silinemedi. Lütfen tekrar deneyin.', 'error');
+        }
+    };
+
+    // Filtrelenmiş ve aranmış sonuçlar
+    const filteredDiscounts = useMemo(() => {
+        let result = discounts;
+
+        // Tür filtresi
+        switch (activeFilter) {
+            case 'discount':
+                result = result.filter(d => !d.isAd);
+                break;
+            case 'ad':
+                result = result.filter(d => d.isAd);
+                break;
+            case 'affiliate_pending':
+                result = result.filter(d => d.affiliateLinkUpdated === false);
+                break;
+            case 'proven':
+                result = result.filter(d => !!d.screenshotUrl);
+                break;
+            case 'expired':
+                result = result.filter(d => d.status === 'İndirim Bitti');
+                break;
+        }
+
+        // Metin arama
+        if (searchQuery.trim()) {
+            const q = searchQuery.toLowerCase().trim();
+            result = result.filter(d =>
+                d.title?.toLowerCase().includes(q) ||
+                d.brand?.toLowerCase().includes(q) ||
+                d.category?.toLowerCase().includes(q) ||
+                d.storeName?.toLowerCase().includes(q)
+            );
+        }
+
+        return result;
+    }, [discounts, searchQuery, activeFilter]);
+
+    const filterButtons: { id: FilterType; label: string; count: number }[] = [
+        { id: 'all', label: 'Tümü', count: discounts.length },
+        { id: 'discount', label: '🏷️ İndirimler', count: discounts.filter(d => !d.isAd).length },
+        { id: 'ad', label: '📢 Reklamlar', count: discounts.filter(d => d.isAd).length },
+        { id: 'affiliate_pending', label: '💰 Affiliate Bekleyen', count: discounts.filter(d => d.affiliateLinkUpdated === false).length },
+        { id: 'proven', label: '✅ Kanıtlı', count: discounts.filter(d => !!d.screenshotUrl).length },
+        { id: 'expired', label: '🚩 Bitenler', count: discounts.filter(d => d.status === 'İndirim Bitti').length },
+    ];
 
     return (
         <div>
@@ -52,19 +109,88 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
                     onClick={() => setActiveView('discounts')}
                     className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-colors inline-flex items-center"
                 >
-                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 17l-5-5m0 0l5-5m-5 5h12" />
                     </svg>
                     Geri Dön
                 </button>
             </div>
-            
+
             {error && <p className="text-red-400 bg-red-900/50 p-3 rounded-md mb-4">{error}</p>}
-            
+
+            {/* Arama ve Filtreler */}
+            {!isLoading && discounts.length > 0 && (
+                <div className="mb-5 space-y-3">
+                    {/* Arama Çubuğu */}
+                    <div className="relative">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                        <input
+                            type="text"
+                            placeholder="Başlık, marka veya kategori ara..."
+                            value={searchQuery}
+                            onChange={e => setSearchQuery(e.target.value)}
+                            className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg pl-10 pr-10 py-2.5 focus:outline-none focus:border-blue-500 transition-colors placeholder-gray-500"
+                        />
+                        {searchQuery && (
+                            <button
+                                onClick={() => setSearchQuery('')}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
+                            >
+                                ✕
+                            </button>
+                        )}
+                    </div>
+
+                    {/* Filtre Butonları */}
+                    <div className="flex gap-2 flex-wrap">
+                        {filterButtons.map(btn => (
+                            <button
+                                key={btn.id}
+                                onClick={() => setActiveFilter(btn.id)}
+                                className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors flex items-center gap-1.5 ${activeFilter === btn.id
+                                    ? 'bg-blue-600 text-white'
+                                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                                    }`}
+                            >
+                                {btn.label}
+                                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${activeFilter === btn.id ? 'bg-blue-500' : 'bg-gray-600'
+                                    }`}>
+                                    {btn.count}
+                                </span>
+                            </button>
+                        ))}
+                    </div>
+
+                    {/* Sonuç sayısı */}
+                    <p className="text-sm text-gray-400">
+                        {filteredDiscounts.length === discounts.length
+                            ? `Toplam ${discounts.length} ilan`
+                            : `${filteredDiscounts.length} / ${discounts.length} ilan gösteriliyor`}
+                        {searchQuery && <span className="text-blue-400"> · "{searchQuery}" için</span>}
+                    </p>
+                </div>
+            )}
+
             {isLoading ? (
-                <p>İndirimler yükleniyor...</p>
+                <div className="flex items-center justify-center py-16">
+                    <div className="w-8 h-8 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+                    <span className="ml-3 text-gray-400">İlanlar yükleniyor...</span>
+                </div>
             ) : discounts.length === 0 ? (
                 <p className="text-center text-gray-400 mt-8">Yönetilecek indirim ilanı bulunmuyor.</p>
+            ) : filteredDiscounts.length === 0 ? (
+                <div className="text-center py-12">
+                    <p className="text-gray-400 text-lg">Sonuç bulunamadı</p>
+                    <p className="text-gray-500 text-sm mt-1">Farklı bir arama terimi veya filtre deneyin.</p>
+                    <button
+                        onClick={() => { setSearchQuery(''); setActiveFilter('all'); }}
+                        className="mt-4 text-blue-400 hover:text-blue-300 text-sm underline"
+                    >
+                        Filtreleri temizle
+                    </button>
+                </div>
             ) : (
                 <div className="bg-gray-800 rounded-lg shadow-lg">
                     {/* Desktop: Table view */}
@@ -79,7 +205,7 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
                                 </tr>
                             </thead>
                             <tbody className="bg-gray-800 divide-y divide-gray-700">
-                                {discounts.map(discount => (
+                                {filteredDiscounts.map(discount => (
                                     <tr key={discount.id} className={discount.isAd ? "bg-yellow-900/10" : ""}>
                                         <td className="px-6 py-4 whitespace-nowrap">
                                             <div className="relative w-16 h-16">
@@ -90,9 +216,11 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
                                             </div>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap">
-                                            <div className="flex items-center">
+                                            <div className="flex items-center flex-wrap gap-1">
                                                 <div className="text-sm font-medium text-white">{discount.title}</div>
-                                                {discount.isAd && <span className="ml-2 px-2 py-0.5 text-xs bg-yellow-600 text-black font-bold rounded">REKLAM</span>}
+                                                {discount.isAd && <span className="px-2 py-0.5 text-xs bg-yellow-600 text-black font-bold rounded">REKLAM</span>}
+                                                {discount.affiliateLinkUpdated === false && <span className="px-2 py-0.5 text-xs bg-orange-600 text-white font-bold rounded">AFF. BEKL.</span>}
+                                                {discount.status === 'İndirim Bitti' && <span className="px-2 py-0.5 text-xs bg-red-600 text-white font-bold rounded">İNDİRİM BİTTİ</span>}
                                             </div>
                                             <div className="text-sm text-gray-400">{discount.brand}</div>
                                             {discount.screenshotUrl && <div className="text-xs text-green-500 mt-1">Kanıtlı İlan</div>}
@@ -108,8 +236,8 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
                                             )}
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                           <div className="flex items-center space-x-4">
-                                                <button type="button" onClick={() => setEditingDiscount(discount)} className="text-indigo-400 hover:text-indigo-300 disabled:text-gray-500 disabled:cursor-not-allowed">Düzenle</button>
+                                            <div className="flex items-center space-x-4">
+                                                <button type="button" onClick={() => setEditingDiscount(discount)} className="text-indigo-400 hover:text-indigo-300">Düzenle</button>
                                                 <DeleteImgButton
                                                     onDelete={() => handleDeleteItem(discount.id, discount.deleteUrl, discount.screenshotDeleteUrl)}
                                                     isTextButton={true}
@@ -123,7 +251,7 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
                     </div>
                     {/* Mobile: Card list view */}
                     <div className="md:hidden divide-y divide-gray-700">
-                        {discounts.map(discount => (
+                        {filteredDiscounts.map(discount => (
                             <div key={discount.id} className={`p-4 flex space-x-4 ${discount.isAd ? 'bg-yellow-900/10' : ''}`}>
                                 <div className="relative w-24 h-24 flex-shrink-0">
                                     <img src={discount.imageUrl} alt={discount.title} className="w-full h-full object-cover rounded-md" />
@@ -133,15 +261,19 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
                                 </div>
                                 <div className="flex-1 flex flex-col justify-between">
                                     <div>
-                                        <div className="flex items-start justify-between">
+                                        <div className="flex items-start justify-between flex-wrap gap-1">
                                             <p className="font-bold text-white leading-tight">{discount.title}</p>
-                                            {discount.isAd && <span className="ml-2 px-2 py-0.5 text-xs bg-yellow-600 text-black font-bold rounded flex-shrink-0">REKLAM</span>}
+                                            <div className="flex gap-1 flex-wrap">
+                                                {discount.isAd && <span className="px-2 py-0.5 text-xs bg-yellow-600 text-black font-bold rounded">REKLAM</span>}
+                                                {discount.affiliateLinkUpdated === false && <span className="px-2 py-0.5 text-xs bg-orange-600 text-white font-bold rounded">AFF.</span>}
+                                                {discount.status === 'İndirim Bitti' && <span className="px-2 py-0.5 text-xs bg-red-600 text-white font-bold rounded">BİTTİ</span>}
+                                            </div>
                                         </div>
                                         <p className="text-sm text-gray-400">{discount.brand}</p>
                                         {discount.screenshotUrl && <p className="text-xs text-green-500 mt-1">✔ Kanıtlı İlan</p>}
                                         <div className="mt-2">
                                             {discount.isAd ? (
-                                                 <p className="text-sm text-gray-400 italic">Sponsorlu İçerik</p>
+                                                <p className="text-sm text-gray-400 italic">Sponsorlu İçerik</p>
                                             ) : (
                                                 <>
                                                     <p className="text-lg font-semibold text-green-400">{discount.newPrice} TL</p>
@@ -151,7 +283,7 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
                                         </div>
                                     </div>
                                     <div className="flex items-center space-x-4 pt-2">
-                                        <button type="button" onClick={() => setEditingDiscount(discount)} className="text-indigo-400 hover:text-indigo-300 text-sm font-medium disabled:text-gray-500 disabled:cursor-not-allowed">Düzenle</button>
+                                        <button type="button" onClick={() => setEditingDiscount(discount)} className="text-indigo-400 hover:text-indigo-300 text-sm font-medium">Düzenle</button>
                                         <DeleteImgButton
                                             onDelete={() => handleDeleteItem(discount.id, discount.deleteUrl, discount.screenshotDeleteUrl)}
                                             isTextButton={true}

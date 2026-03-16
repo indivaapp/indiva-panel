@@ -16,8 +16,11 @@ interface EditDealPageProps {
 }
 
 const CATEGORIES = [
-    'Gıda', 'Elektronik', 'Giyim', 'Kozmetik', 'Ev & Yaşam',
-    'Anne & Bebek', 'Spor', 'Kitap', 'Oyuncak', 'Diğer'
+    'Teknoloji', 'Giyim & Ayakkabı', 'Ev, Yaşam & Mutfak', 'Kozmetik & Kişisel Bakım',
+    'Süpermarket', 'Anne & Bebek', 'Mobilya', 'Kitap & Kırtasiye', 'Spor & Outdoor',
+    'Takı & Aksesuar', 'Otomotiv & Motosiklet', 'Pet Shop', 'Bahçe & Yapı Market',
+    'Oyuncak & Hobi', 'Sağlık & Medikal', 'Çanta & Valiz', 'Saat & Gözlük',
+    'Elektronik Aksesuar', 'Ofis & İş Dünyası', 'Hediyelik Eşya'
 ];
 
 const EditDealPage: React.FC<EditDealPageProps> = ({ deal, setActiveView, isAdmin, queueInfo, onNextDeal, onCancelQueue }) => {
@@ -152,20 +155,22 @@ const EditDealPage: React.FC<EditDealPageProps> = ({ deal, setActiveView, isAdmi
             const price = formData.newPrice || deal.price || 0;
             const title = formData.title || deal.title;
 
-            const prompt = `Sen profesyonel bir Türk e-ticaret pazarlamacısısın. Aşağıdaki ürün için çekici bir satış açıklaması yaz.
+            const prompt = `Sen profesyonel bir Türk e-ticaret pazarlamacısı ve etkileyici bir metin yazarıısın. Aşağıdaki ürün için alıcıyı hemen harekete geçirecek, samimi ve kaliteli bir satış açıklaması yaz.
 
 Ürün: ${title}
 Fiyat: ${price} TL
 Mağaza: ${storeName}
 
-Kurallar:
-- Türkçe yaz, 50-80 kelime olsun
-- Ürünün faydalarını vurgula
-- ${price} TL fiyatın iyi bir fırsat olduğunu belirt
-- ${storeName}'ın güvenilirliğini vurgula
-- 2-3 emoji kullan (🔥 💰 ⭐ ✨ 🎁)
-- Aciliyet hissi yarat (stoklar sınırlı vb.)
-- Doğrudan açıklamayı yaz, başka bir şey ekleme`;
+KURALLAR:
+1. ÜRÜN İSMİNİ BAŞTA TEKRAR ETME! Direkt faydaya veya hissettireceği duyguya odaklan.
+2. 40-60 Kelime arası, akıcı ve ikna edici bir metin olsun.
+3. Samimi, coşkulu ve arkadaşça bir dil kullan (resmi olma).
+4. İndirimli fiyatın (${price} TL) ne kadar büyük bir fırsat olduğunu vurgula.
+5. Sadece 2-3 emoji kullan (metnin içine doğal şekilde serp).
+6. "Şık tasarım", "günlük rutin", "yardımcı olur", "tercih ediliyor" gibi jenerik/robotik kalıpları KESİNLİKLE KULLANMA.
+7. Kullanıcıyı "Hemen incele", "Stoklar tükenmeden kap" gibi ifadelerle heyecanlandır.
+
+Metni direkt olarak yaz, "İşte açıklama:" gibi girişler yapma.`;
 
             const response = await fetch(
                 `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,

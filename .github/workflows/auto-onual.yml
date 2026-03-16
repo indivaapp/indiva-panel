@@ -1,8 +1,11 @@
 name: Auto Onual Deal Fetcher
 
 on:
+  push:
+    branches:
+      - main
   schedule:
-    - cron: '*/15 * * * *'  # Her 15 dakikada bir otomatik çalışır
+    - cron: '*/5 * * * *'  # Her 5 dakikada bir otomatik çalışır
   workflow_dispatch:
 
 
@@ -23,6 +26,14 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --include=dev
+
+      - name: Cache Processed IDs
+        uses: actions/cache@v4
+        with:
+          path: data/processed_onual_ids.json
+          key: onual-ids-v1-${{ github.run_id }}
+          restore-keys: |
+            onual-ids-v1-
 
       - name: Run Auto-Onual Pipeline
         env:

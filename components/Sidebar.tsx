@@ -10,7 +10,10 @@ interface SidebarProps {
 }
 
 const navItems = [
+    { id: 'dashboard', label: 'Dashboard', icon: <span className="text-xl mr-3">🏠</span>, disabled: false },
+    { id: 'autoDiscovery', label: 'Otomatik Keşif', icon: <span className="text-xl mr-3">🤖</span>, disabled: false },
     { id: 'affiliateLinks', label: 'Affiliate Linkler', icon: <span className="text-xl mr-3">💰</span>, disabled: false },
+    { id: 'dealFinder', label: 'Fırsat Bul', icon: <span className="text-xl mr-3">🔍</span>, disabled: false },
     { id: 'discounts', label: 'İndirim Ekle', icon: <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>, disabled: false },
     { id: 'brochures', label: 'Aktüel Yönetimi', icon: <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>, disabled: false },
     { id: 'submissions', label: 'Gönderi Onayı', icon: <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>, disabled: false },
@@ -53,7 +56,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, pendingAff
                 ))}
             </nav>
             <div className="p-4 border-t border-gray-700 text-xs text-center text-gray-500">
-                v1.2.4 APK Release
+                v1.3.0 Panel
             </div>
         </aside>
     );

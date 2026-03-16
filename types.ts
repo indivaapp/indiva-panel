@@ -3,6 +3,7 @@ import type { Timestamp } from 'firebase/firestore';
 
 // Sayfa tipleri - modal'lar sayfa olarak açılacak
 export type ViewType =
+    | 'dashboard'
     | 'discounts'
     | 'brochures'
     | 'submissions'
@@ -13,7 +14,8 @@ export type ViewType =
     | 'editDiscount'      // İlan düzenleme sayfası
     | 'reviewSubmission'  // Onay sayfası
     | 'editDeal'          // Fırsat düzenleme sayfası
-    | 'affiliateLinks';   // Affiliate link yönetim sayfası
+    | 'affiliateLinks'    // Affiliate link yönetim sayfası
+    | 'autoDiscovery';    // Otomatik keşif sayfası (Tinder-style)
 
 // Using the actual Firestore Timestamp type for better integration
 export type FirestoreTimestamp = Timestamp;
@@ -36,6 +38,8 @@ export interface Discount {
     isAd?: boolean; // Reklam olup olmadığını belirler
     expiresAt?: FirestoreTimestamp | Date; // Reklamlar için bitiş tarihi
     adBadge?: string; // Reklamın sol üst köşesinde görünecek özel etiket (Örn: Kadın Girişimci)
+    status?: string; // Örn: "İndirim Bitti"
+    expiredAt?: FirestoreTimestamp; // İndirimin bittiği zaman
 
     // Fırsat Bulucu alanları
     affiliateLinkUpdated?: boolean; // Affiliate link güncellendi mi?
@@ -56,9 +60,13 @@ export interface Discount {
 
 export interface Brochure {
     id: string;
-    marketName: string;
+    marketName?: string;  // Eski uyumluluk için
+    storeName: string;   // Yeni (Bim, A101, Sok)
+    title: string;       // Örn: "23 Şubat Cuma"
     imageUrl: string;
-    deleteUrl: string;
+    validityDate: string;// Örn: "27 Şubat - 6 Mart"
+    publishDate?: FirestoreTimestamp; // Kataloğun başlangıç tarihi (Sıralama için)
+    deleteUrl: string;   // Opsiyonel olabilir ama bot için gerekebilir
     createdAt: FirestoreTimestamp;
 }
 

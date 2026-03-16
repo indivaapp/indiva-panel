@@ -9,11 +9,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.36.3",
     "@capacitor/android": "^7.4.4",
     "@capacitor/app": "^7.1.1",
     "@capacitor/cli": "^7.4.4",
+    "@capacitor/clipboard": "^7.0.0",
     "@capacitor/core": "^7.4.4",
-    "@anthropic-ai/sdk": "^0.36.3",
     "@google/genai": "^1.28.0",
     "cheerio": "^1.0.0-rc.12",
     "firebase": "^12.5.0",

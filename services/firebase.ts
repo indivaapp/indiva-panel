@@ -17,6 +17,8 @@ import {
 import type { Discount, Brochure, Advertisement, PendingDiscount, AdRequest, ScheduledNotification } from '../types';
 import { deleteFromImgbb } from './imgbb';
 
+const ALLOWED_AFFILIATE_STORES = ['Trendyol', 'Hepsiburada', 'Amazon', 'Pazarama'];
+
 // --- Discounts ---
 
 export const addDiscount = async (discountData: Omit<Discount, 'id' | 'createdAt'>) => {
@@ -93,8 +95,6 @@ export const addDiscountsBatch = async (discounts: Omit<Discount, 'id' | 'create
  * Affiliate link güncellenmemiş indirimleri getir
  */
 export const getDiscountsNeedingAffiliate = async (): Promise<Discount[]> => {
-    // Not: orderBy kaldırıldı - composite index gerektirmemesi için
-    // Client-side sıralama yapılıyor
     const q = query(
         collection(db, 'discounts'),
         where('affiliateLinkUpdated', '==', false)
@@ -102,8 +102,16 @@ export const getDiscountsNeedingAffiliate = async (): Promise<Discount[]> => {
     const querySnapshot = await getDocs(q);
     const discounts = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Discount));
 
+    // Mağazaya göre filtrele
+    const filteredDiscounts = discounts.filter(deal =>
+        ALLOWED_AFFILIATE_STORES.some(store =>
+            (deal.storeName || '').toLowerCase() === store.toLowerCase() ||
+            (deal.brand || '').toLowerCase() === store.toLowerCase()
+        )
+    );
+
     // Client-side sıralama: en yeniden en eskiye
-    return discounts.sort((a, b) => {
+    return filteredDiscounts.sort((a, b) => {
         const timeA = a.createdAt?.seconds ?? 0;
         const timeB = b.createdAt?.seconds ?? 0;
         return timeB - timeA;
@@ -119,7 +127,17 @@ export const getPendingAffiliateCount = async (): Promise<number> => {
         where('affiliateLinkUpdated', '==', false)
     );
     const querySnapshot = await getDocs(q);
-    return querySnapshot.size;
+    const discounts = querySnapshot.docs.map(doc => doc.data() as Discount);
+
+    // Aynı filtreyi sayı için de uygula
+    const filteredCount = discounts.filter(deal =>
+        ALLOWED_AFFILIATE_STORES.some(store =>
+            (deal.storeName || '').toLowerCase() === store.toLowerCase() ||
+            (deal.brand || '').toLowerCase() === store.toLowerCase()
+        )
+    ).length;
+
+    return filteredCount;
 };
 
 /**
@@ -194,17 +212,21 @@ const getCircularsCollectionRef = (marketName: string) => {
     return collection(db, 'circulars', formattedMarketName, 'brochures');
 }
 
-export const addBrochure = async (brochureData: { marketName: string, imageUrl: string, deleteUrl: string }) => {
-    const { marketName, imageUrl, deleteUrl } = brochureData;
-    if (!marketName) {
-        throw new Error("Market adı afiş eklemek için zorunludur.");
+export const addBrochure = async (brochureData: Omit<Brochure, 'id' | 'createdAt'>) => {
+    const { storeName, imageUrl, deleteUrl, title, validityDate } = brochureData;
+    if (!storeName) {
+        throw new Error("Market adı (storeName) afiş eklemek için zorunludur.");
     }
-    const collectionRef = getCircularsCollectionRef(marketName);
+    const collectionRef = getCircularsCollectionRef(storeName);
 
     const dataToSave = {
-        marketName: marketName,
+        storeName: storeName,
+        marketName: storeName, // Eski uyumluluk için ikisini de kaydedelim
+        title: title || '',
         imageUrl: imageUrl,
-        deleteUrl: deleteUrl,
+        validityDate: validityDate || '',
+        publishDate: brochureData.publishDate || serverTimestamp(), // Akıllı sıralama için
+        deleteUrl: deleteUrl || '',
         createdAt: serverTimestamp(),
     };
     return await addDoc(collectionRef, dataToSave);
@@ -220,12 +242,22 @@ export const getBrochures = async (marketName: string): Promise<Brochure[]> => {
         const data = doc.data();
         return {
             id: doc.id,
-            marketName: data.marketName || marketName, // Fallback to requested market name if missing in doc
+            storeName: data.storeName || data.marketName || marketName,
+            marketName: data.marketName || data.storeName || marketName,
+            title: data.title || '',
+            validityDate: data.validityDate || '',
+            publishDate: data.publishDate || data.createdAt,
             imageUrl: data.imageUrl,
             deleteUrl: data.deleteUrl,
             createdAt: data.createdAt,
         } as Brochure;
-    });
+    })
+        // Client-side sorting as a safety measure for missing fields or consistency
+        .sort((a, b) => {
+            const dateA = a.publishDate?.seconds ?? a.createdAt?.seconds ?? 0;
+            const dateB = b.publishDate?.seconds ?? b.createdAt?.seconds ?? 0;
+            return dateB - dateA;
+        });
 };
 
 export const deleteBrochure = async (id: string, marketName: string, deleteUrl?: string) => {

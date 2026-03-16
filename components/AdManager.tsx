@@ -22,7 +22,7 @@ const AD_BADGES = [
 
 const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
     const [ads, setAds] = useState<Discount[]>([]);
-    
+
     // Form Fields matching DiscountManager
     const [title, setTitle] = useState(''); // productName/Title
     const [brand, setBrand] = useState(''); // sellerName/Brand
@@ -31,7 +31,7 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
     const [link, setLink] = useState('');
     const [oldPrice, setOldPrice] = useState('');
     const [newPrice, setNewPrice] = useState('');
-    
+
     // Ad Specific Field
     const [expiresAt, setExpiresAt] = useState('');
     const [adBadge, setAdBadge] = useState(''); // Reklam etiketi (örn: Kadın Girişimci)
@@ -82,7 +82,7 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
             }
         };
         checkRequests();
-        
+
         // Optional: Interval to check every minute
         const interval = setInterval(checkRequests, 60000);
         return () => clearInterval(interval);
@@ -95,7 +95,7 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
     const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
             const file = e.target.files[0];
-            
+
             setUploadedImageUrl(null);
             setUploadedImageDeleteUrl(null);
             setImageUploadError(null);
@@ -118,7 +118,7 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
     const handleScreenshotChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
             const file = e.target.files[0];
-            
+
             setUploadedScreenshotUrl(null);
             setUploadedScreenshotDeleteUrl(null);
             setScreenshotUploadError(null);
@@ -148,7 +148,7 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
         setNewPrice('');
         setExpiresAt('');
         setAdBadge(''); // Reset badge
-        
+
         setUploadedImageUrl(null);
         setUploadedImageDeleteUrl(null);
         const imageInput = document.getElementById('adImageFile') as HTMLInputElement;
@@ -162,7 +162,7 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        
+
         if (!title || !brand || !newPrice || !category || !expiresAt || !uploadedImageUrl || !link || !adBadge) {
             setError('Lütfen tüm zorunlu alanları (Reklam Etiketi dahil) doldurun.');
             return;
@@ -188,7 +188,7 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
                 expiresAt: new Date(expiresAt),
                 adBadge: adBadge, // Save selected badge
             });
-            
+
             setSuccess('Reklam anlaşması başarıyla kaydedildi.');
             resetForm();
             await fetchAds();
@@ -207,14 +207,14 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
         await deleteAdvertisement(id, deleteUrl, screenshotDeleteUrl);
         setAds(prev => prev.filter(a => a.id !== id));
     };
-    
+
     return (
         <div>
-             <div className="flex justify-between items-center mb-6">
+            <div className="flex justify-between items-center mb-6">
                 <h2 className="text-3xl font-bold text-white">Reklam & Sponsorluk Yönetimi</h2>
-                
+
                 {/* Notification Button */}
-                <button 
+                <button
                     onClick={() => setShowRequestModal(true)}
                     className="relative p-2 bg-gray-800 rounded-full hover:bg-gray-700 transition-colors border border-gray-600 group"
                     title="Reklam Başvuruları"
@@ -229,13 +229,13 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
                     )}
                 </button>
             </div>
-            
+
             <div className="bg-gray-800 p-6 rounded-lg shadow-lg mb-8">
                 <h3 className="text-xl font-semibold mb-4">Yeni Reklam Anlaşması Ekle</h3>
                 <p className="text-sm text-gray-400 mb-4">
                     Eklenen reklamlar, belirtilen <span className="text-yellow-500 font-bold">tarih ve saatte</span> uygulamadan otomatik olarak kaldırılacaktır.
                 </p>
-                
+
                 <form onSubmit={handleSubmit} className="space-y-4">
                     {/* Row 1: Title & Brand */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -250,13 +250,26 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full p-3 bg-gray-700 rounded-md border border-gray-600" required>
                             <option value="">Ürün Kategorisi Seçin</option>
-                            <option value="Elektronik">Elektronik</option>
-                            <option value="Giyim">Giyim</option>
-                            <option value="Market">Market</option>
-                            <option value="Ev & Yaşam">Ev & Yaşam</option>
-                            <option value="Kozmetik">Kozmetik</option>
-                            <option value="Yeme & İçme">Yeme & İçme</option>
-                            <option value="Diğer">Diğer</option>
+                            <option value="Teknoloji">Teknoloji</option>
+                            <option value="Giyim & Ayakkabı">Giyim & Ayakkabı</option>
+                            <option value="Ev, Yaşam & Mutfak">Ev, Yaşam & Mutfak</option>
+                            <option value="Kozmetik & Kişisel Bakım">Kozmetik & Kişisel Bakım</option>
+                            <option value="Süpermarket">Süpermarket</option>
+                            <option value="Anne & Bebek">Anne & Bebek</option>
+                            <option value="Mobilya">Mobilya</option>
+                            <option value="Kitap & Kırtasiye">Kitap & Kırtasiye</option>
+                            <option value="Spor & Outdoor">Spor & Outdoor</option>
+                            <option value="Takı & Aksesuar">Takı & Aksesuar</option>
+                            <option value="Otomotiv & Motosiklet">Otomotiv & Motosiklet</option>
+                            <option value="Pet Shop">Pet Shop</option>
+                            <option value="Bahçe & Yapı Market">Bahçe & Yapı Market</option>
+                            <option value="Oyuncak & Hobi">Oyuncak & Hobi</option>
+                            <option value="Sağlık & Medikal">Sağlık & Medikal</option>
+                            <option value="Çanta & Valiz">Çanta & Valiz</option>
+                            <option value="Saat & Gözlük">Saat & Gözlük</option>
+                            <option value="Elektronik Aksesuar">Elektronik Aksesuar</option>
+                            <option value="Ofis & İş Dünyası">Ofis & İş Dünyası</option>
+                            <option value="Hediyelik Eşya">Hediyelik Eşya</option>
                         </select>
 
                         {/* NEW: Ad Badge Selection */}
@@ -270,21 +283,21 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
 
                     {/* Row 4: Date & Link */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                         <div>
+                        <div>
                             <label className="block text-xs text-gray-400 mb-1 ml-1">Anlaşma Bitiş Tarihi ve Saati</label>
-                            <input 
-                                type="datetime-local" 
-                                value={expiresAt} 
-                                onChange={e => setExpiresAt(e.target.value)} 
-                                className="w-full p-3 bg-gray-700 rounded-md border border-gray-600 text-white" 
-                                required 
+                            <input
+                                type="datetime-local"
+                                value={expiresAt}
+                                onChange={e => setExpiresAt(e.target.value)}
+                                className="w-full p-3 bg-gray-700 rounded-md border border-gray-600 text-white"
+                                required
                             />
                         </div>
                         <div className="flex flex-col justify-end">
-                             <input type="url" placeholder="Yönlendirilecek Link (https://...)" value={link} onChange={e => setLink(e.target.value)} className="w-full p-3 bg-gray-700 rounded-md border border-gray-600" required />
+                            <input type="url" placeholder="Yönlendirilecek Link (https://...)" value={link} onChange={e => setLink(e.target.value)} className="w-full p-3 bg-gray-700 rounded-md border border-gray-600" required />
                         </div>
                     </div>
-                    
+
                     {/* Row 5: Prices */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <input type="number" step="0.01" placeholder="Eski Fiyat (Opsiyonel)" value={oldPrice} onChange={e => setOldPrice(e.target.value)} className="w-full p-3 bg-gray-700 rounded-md border border-gray-600" />
@@ -296,10 +309,10 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
                         {/* Main Image */}
                         <div>
                             <label className="block text-sm text-gray-400 mb-2 font-bold">1. Reklam Görseli (Zorunlu)</label>
-                            <input 
-                                id="adImageFile" 
-                                type="file" 
-                                onChange={handleImageChange} 
+                            <input
+                                id="adImageFile"
+                                type="file"
+                                onChange={handleImageChange}
                                 className="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 disabled:opacity-50"
                                 required
                                 disabled={isUploadingImage || isUploadingScreenshot}
@@ -317,10 +330,10 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
                         {/* Screenshot Proof */}
                         <div>
                             <label className="block text-sm text-gray-400 mb-2 font-bold text-yellow-500">2. İndirim Kanıtı (Opsiyonel)</label>
-                            <input 
-                                id="adScreenshotFile" 
-                                type="file" 
-                                onChange={handleScreenshotChange} 
+                            <input
+                                id="adScreenshotFile"
+                                type="file"
+                                onChange={handleScreenshotChange}
                                 className="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-yellow-600 file:text-white hover:file:bg-yellow-700 disabled:opacity-50"
                                 disabled={isUploadingImage || isUploadingScreenshot}
                                 accept="image/*"
@@ -346,34 +359,34 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
 
             <h3 className="text-xl font-semibold mb-4">Yayındaki Reklamlar</h3>
             {isLoading && ads.length === 0 ? <p>Yükleniyor...</p> :
-             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {ads.map(ad => (
-                    <div key={ad.id} className="bg-gray-800 rounded-lg shadow-lg overflow-hidden relative group border-2 border-yellow-600/50">
-                        <img src={ad.imageUrl} alt={ad.title} className="w-full h-48 object-cover" />
-                        
-                        {/* AD BADGE DISPLAY */}
-                        <div className="absolute top-0 right-0 bg-yellow-600 text-black text-xs font-bold px-2 py-1 z-10">
-                            {ad.adBadge || 'REKLAM'}
-                        </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {ads.map(ad => (
+                        <div key={ad.id} className="bg-gray-800 rounded-lg shadow-lg overflow-hidden relative group border-2 border-yellow-600/50">
+                            <img src={ad.imageUrl} alt={ad.title} className="w-full h-48 object-cover" />
 
-                        <div className="p-4">
-                            <h4 className="font-bold text-lg">{ad.title}</h4>
-                            <p className="text-sm text-gray-400">{ad.brand}</p>
-                            <p className="text-sm text-green-400 font-bold mt-1">{ad.newPrice} TL</p>
-                            <a href={ad.link} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:underline block mt-1 truncate">{ad.link}</a>
-                            
-                            {ad.screenshotUrl && <p className="text-xs text-green-500 mt-2">✔ Kanıt Yüklü</p>}
-                            
-                            <p className="text-xs mt-2 text-red-400 font-mono">
-                                Bitiş: {ad.expiresAt ? new Date((ad.expiresAt as any).seconds * 1000).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Belirtilmemiş'}
-                            </p>
+                            {/* AD BADGE DISPLAY */}
+                            <div className="absolute top-0 right-0 bg-yellow-600 text-black text-xs font-bold px-2 py-1 z-10">
+                                {ad.adBadge || 'REKLAM'}
+                            </div>
+
+                            <div className="p-4">
+                                <h4 className="font-bold text-lg">{ad.title}</h4>
+                                <p className="text-sm text-gray-400">{ad.brand}</p>
+                                <p className="text-sm text-green-400 font-bold mt-1">{ad.newPrice} TL</p>
+                                <a href={ad.link} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:underline block mt-1 truncate">{ad.link}</a>
+
+                                {ad.screenshotUrl && <p className="text-xs text-green-500 mt-2">✔ Kanıt Yüklü</p>}
+
+                                <p className="text-xs mt-2 text-red-400 font-mono">
+                                    Bitiş: {ad.expiresAt ? new Date((ad.expiresAt as any).seconds * 1000).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Belirtilmemiş'}
+                                </p>
+                            </div>
+                            <DeleteImgButton
+                                onDelete={() => handleDelete(ad.id, ad.deleteUrl, ad.screenshotDeleteUrl)}
+                            />
                         </div>
-                         <DeleteImgButton
-                            onDelete={() => handleDelete(ad.id, ad.deleteUrl, ad.screenshotDeleteUrl)}
-                         />
-                    </div>
-                ))}
-            </div>
+                    ))}
+                </div>
             }
 
             {/* REQUEST LIST MODAL */}

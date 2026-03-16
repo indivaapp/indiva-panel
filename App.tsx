@@ -1,7 +1,18 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { App as CapacitorApp } from '@capacitor/app';
 import type { ViewType } from './types';
 import type { ScrapedDeal } from './services/dealFinder';
+
+// Android native bridge için tip tanımı
+declare global {
+    interface Window {
+        AndroidShareHandler?: {
+            getSharedText: () => Promise<string> | string;
+        };
+    }
+}
+
 import Sidebar from './components/Sidebar';
 import BottomNav from './components/BottomNav';
 import DiscountManager from './components/DiscountManager';
@@ -13,12 +24,14 @@ import DealFinder from './components/DealFinder';
 import ManageDiscounts from './components/ManageDiscounts';
 import EditDealPage from './components/EditDealPage';
 import AffiliateLinkManager from './components/AffiliateLinkManager';
+import AutoDiscoveryPanel from './components/AutoDiscoveryPanel';
+import Dashboard from './components/Dashboard';
 import { ensureAnonymousAuth, onAuthReady } from './services/auth';
 import { getPendingAffiliateCount } from './services/firebase';
 import Logo from './components/Logo';
 
 const App: React.FC = () => {
-    const [activeView, setActiveView] = useState<ViewType>('affiliateLinks');
+    const [activeView, setActiveView] = useState<ViewType>('dashboard');
     const [authReady, setAuthReady] = useState(false);
     const [authError, setAuthError] = useState<string | null>(null);
     // Authentication is removed. Every user is considered an admin.
@@ -33,6 +46,9 @@ const App: React.FC = () => {
     // Sıralı düzenleme kuyruğu
     const [dealQueue, setDealQueue] = useState<ScrapedDeal[]>([]);
     const [currentQueueIndex, setCurrentQueueIndex] = useState(0);
+
+    // Paylaşılan link (diğer uygulamalardan)
+    const [sharedLink, setSharedLink] = useState<string | null>(null);
 
     // Kuyruğu başlat
     const startDealQueue = useCallback((deals: ScrapedDeal[]) => {
@@ -89,6 +105,77 @@ const App: React.FC = () => {
         };
     }, []);
 
+    // Share Intent Handler - Diğer uygulamalardan gelen linkleri yakala
+    useEffect(() => {
+        const handleAppUrlOpen = async () => {
+            try {
+                // Uygulama açıldığında intent kontrolü
+                const launchUrl = await CapacitorApp.getLaunchUrl();
+                if (launchUrl?.url) {
+                    processSharedUrl(launchUrl.url);
+                }
+            } catch (err) {
+                console.log('Launch URL bulunamadı');
+            }
+        };
+
+        // URL'den link çıkar
+        const processSharedUrl = (url: string) => {
+            // Intent format: indiva://share?url=ENCODED_URL veya direkt URL
+            if (url.includes('://')) {
+                const urlMatch = url.match(/https?:\/\/[^\s]+/);
+                if (urlMatch) {
+                    setSharedLink(urlMatch[0]);
+                    setActiveView('affiliateLinks');
+                }
+            }
+        };
+
+        // Listener for app URL open
+        const urlListener = CapacitorApp.addListener('appUrlOpen', (event) => {
+            if (event.url) {
+                processSharedUrl(event.url);
+            }
+        });
+
+        // Check for shared text from Android intent
+        const checkAndroidIntent = async () => {
+            try {
+                // @ts-ignore - Android specific
+                if (window.AndroidShareHandler?.getSharedText) {
+                    const sharedText = await window.AndroidShareHandler.getSharedText();
+                    if (sharedText) {
+                        const urlMatch = sharedText.match(/https?:\/\/[^\s]+/);
+                        if (urlMatch) {
+                            setSharedLink(urlMatch[0]);
+                            setActiveView('affiliateLinks');
+                        }
+                    }
+                }
+            } catch (err) {
+                console.log('Android intent kontrol edilemedi');
+            }
+        };
+
+        handleAppUrlOpen();
+        checkAndroidIntent();
+
+        // Listen for shared URLs from Android native code
+        const handleSharedUrl = (event: CustomEvent<string>) => {
+            if (event.detail) {
+                setSharedLink(event.detail);
+                setActiveView('affiliateLinks');
+            }
+        };
+
+        window.addEventListener('sharedUrl', handleSharedUrl as EventListener);
+
+        return () => {
+            urlListener.then(listener => listener.remove());
+            window.removeEventListener('sharedUrl', handleSharedUrl as EventListener);
+        };
+    }, []);
+
     // Bekleyen affiliate link sayısını yükle
     useEffect(() => {
         const loadPendingCount = async () => {
@@ -140,6 +227,8 @@ const App: React.FC = () => {
 
     const renderContent = () => {
         switch (activeView) {
+            case 'dashboard':
+                return <Dashboard setActiveView={setActiveView} isAdmin={isAdmin} />;
             case 'discounts':
                 return <DiscountManager setActiveView={setActiveView} isAdmin={isAdmin} />;
             case 'manageDiscounts':
@@ -153,7 +242,7 @@ const App: React.FC = () => {
             case 'notifications':
                 return <NotificationSender isAdmin={isAdmin} />;
             case 'affiliateLinks':
-                return <AffiliateLinkManager isAdmin={isAdmin} setActiveView={setActiveView} />;
+                return <AffiliateLinkManager isAdmin={isAdmin} setActiveView={setActiveView} sharedLink={sharedLink} onSharedLinkProcessed={() => setSharedLink(null)} />;
             case 'dealFinder':
                 return <DealFinder isAdmin={isAdmin} setActiveView={setActiveView} setSelectedDeal={setSelectedDeal} startDealQueue={startDealQueue} />;
             case 'editDeal':
@@ -167,6 +256,8 @@ const App: React.FC = () => {
                         onCancelQueue={dealQueue.length > 0 ? handleCancelQueue : undefined}
                     />
                 ) : <DealFinder isAdmin={isAdmin} setActiveView={setActiveView} setSelectedDeal={setSelectedDeal} startDealQueue={startDealQueue} />;
+            case 'autoDiscovery':
+                return <AutoDiscoveryPanel isAdmin={isAdmin} setActiveView={setActiveView} />;
             default:
                 return <DiscountManager setActiveView={setActiveView} isAdmin={isAdmin} />;
         }
@@ -182,6 +273,7 @@ const App: React.FC = () => {
                     <div className="md:hidden flex justify-between items-center mb-4 border-b border-gray-800 pb-3">
                         <Logo className="h-7" showText={true} />
                         <span className="text-white font-semibold text-lg">
+                            {activeView === 'dashboard' && '🏠 Ana Sayfa'}
                             {activeView === 'dealFinder' && '🔍 Fırsat Bul'}
                             {activeView === 'discounts' && '➕ Ekle'}
                             {activeView === 'manageDiscounts' && '📋 Yönet'}
@@ -191,6 +283,7 @@ const App: React.FC = () => {
                             {activeView === 'notifications' && '🔔 Bildirim'}
                             {activeView === 'editDeal' && '✏️ Düzenle'}
                             {activeView === 'affiliateLinks' && '💰 Affiliate'}
+                            {activeView === 'autoDiscovery' && '🤖 Keşif'}
                         </span>
                     </div>
                     {renderContent()}
