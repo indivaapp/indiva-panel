@@ -47,28 +47,33 @@ async function cleanupOldDiscounts() {
         let totalDeleted = 0;
 
         // ── 1. ADIM: "İndirim Bitti" olup 1 saat geçenleri fiziken sil ──
-        // Kullanıcı uygulamada 1 saat sayacını görür, 1 saat sonra Firebase'den de silinir
+        // NOT: Composite index gerektirmemek için JS tarafında filtre yapıyoruz
         console.log('🗑️ "İndirim Bitti" → 1 saat geçenler kalıcı siliniyor...');
         const oneHourAgo = new Date(now.getTime() - (60 * 60 * 1000));
 
+        // Sadece status üzerinden çek (single-field = index gerekmez)
         const endedSnapshot = await db.collection('discounts')
             .where('status', '==', 'İndirim Bitti')
-            .where('expiredAt', '<', oneHourAgo)
             .get();
 
-        if (!endedSnapshot.empty) {
+        // expiredAt filtresini JavaScript'te yap
+        const toDelete = endedSnapshot.docs.filter(doc => {
+            const expiredAt = doc.data().expiredAt;
+            if (!expiredAt) return false;
+            const expiredDate = expiredAt.toDate ? expiredAt.toDate() : new Date(expiredAt);
+            return expiredDate < oneHourAgo;
+        });
+
+        if (toDelete.length > 0) {
             // Firestore batch max 500 doc
-            const chunks = [];
-            for (let i = 0; i < endedSnapshot.docs.length; i += 400) {
-                chunks.push(endedSnapshot.docs.slice(i, i + 400));
-            }
-            for (const chunk of chunks) {
+            for (let i = 0; i < toDelete.length; i += 400) {
+                const chunk = toDelete.slice(i, i + 400);
                 const batch = db.batch();
                 chunk.forEach(doc => batch.delete(doc.ref));
                 await batch.commit();
             }
-            totalDeleted += endedSnapshot.size;
-            console.log(`   ✅ ${endedSnapshot.size} adet süresi dolmuş ilan kalıcı olarak silindi.`);
+            totalDeleted += toDelete.length;
+            console.log(`   ✅ ${toDelete.length} adet süresi dolmuş ilan kalıcı olarak silindi.`);
         } else {
             console.log('   ℹ️ Silinecek süresi dolmuş ilan yok.');
         }
