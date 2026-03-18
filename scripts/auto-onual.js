@@ -871,17 +871,9 @@ async function main() {
 
             // ── AI Push Notifications ─────────────────────────────────────
             const discountPercent = oldPrice > 0 ? Math.round(((oldPrice - newPrice) / oldPrice) * 100) : 0;
+            // 🔕 Push bildirimleri devre dışı — kullanıcılar her yeni ürün için bildirim almak istemiyordu
+            // Tekrar aktif etmek için bu satırı silin ve aşağıdaki generatePushNotifications bloğunu geri açın
             let pushNotifications = [];
-            
-            if (!details.isExpired) {
-                pushNotifications = await generatePushNotifications(
-                    aiKey,
-                    details.title || product.title,
-                    discountPercent
-                );
-            } else {
-                console.log(`   ⚠️ İndirim bittiği için Push Notification CANCEL edildi.`);
-            }
 
             // Firebase'e kaydet
             const cleanedTitle = cleanProductTitle(details.title || product.title);
@@ -913,12 +905,12 @@ async function main() {
             await docRef.set(discountData);
             console.log(`   🔥 Firebase'e kaydedildi ✅ (ID: ${docId}) - AI FOMO Puanı: ${discountData.aiFomoScore}`);
 
-            // Eğer fırsat puanı >= 9 ise anında otomatik push bildirimi at! (VE SÜRESİ DOLMADIYSA)
-            if (!details.isExpired && discountData.aiFomoScore >= 9 && pushNotifications.length >= 3) {
-                const urgentBody = pushNotifications[2]; // Index 2: Aciliyet/FOMO bildiren metin
-                const title = "🚨 İNDİVA FIRSAT ALARMI 🚨";
-                await sendFomoPushNotification(title, urgentBody, docId, details.imageUrl);
-            }
+            // 🔕 Push bildirimi gönderimi devre dışı
+            // if (!details.isExpired && discountData.aiFomoScore >= 9 && pushNotifications.length >= 3) {
+            //     const urgentBody = pushNotifications[2];
+            //     const title = "🚨 İNDİVA FIRSAT ALARMI 🚨";
+            //     await sendFomoPushNotification(title, urgentBody, docId, details.imageUrl);
+            // }
 
             // Cache'e ekle
             idCache.ids[docId] = true;
