@@ -1,5 +1,5 @@
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -38,59 +38,50 @@ function initFirebase() {
 }
 
 async function cleanupOldDiscounts() {
-    console.log('🧹 48 saati geçen eski ilanlar temizleniyor...');
+    console.log(`\n🧹 Temizlik Başlatıldı: ${new Date().toLocaleString('tr-TR')}`);
+    console.log('═══════════════════════════════════════════');
     const db = initFirebase();
     const now = new Date();
-    const fortyEightHoursAgo = new Date(now.getTime() - (48 * 60 * 60 * 1000));
 
     try {
         let totalDeleted = 0;
 
-        // ── 1. ADIM: "Sonlanıyor" olup süresi 1 saati geçenleri "İndirim Bitti" yap ──
-        console.log('⏳ 1 saat önce "Sonlanıyor" olan ilanlar "İndirim Bitti" olarak işaretleniyor...');
+        // ── 1. ADIM: "İndirim Bitti" olup 1 saat geçenleri fiziken sil ──
+        // Kullanıcı uygulamada 1 saat sayacını görür, 1 saat sonra Firebase'den de silinir
+        console.log('🗑️ "İndirim Bitti" → 1 saat geçenler kalıcı siliniyor...');
         const oneHourAgo = new Date(now.getTime() - (60 * 60 * 1000));
-        
-        const sonlaniyorSnapshot = await db.collection('discounts')
-            .where('status', '==', 'Sonlanıyor')
+
+        const endedSnapshot = await db.collection('discounts')
+            .where('status', '==', 'İndirim Bitti')
             .where('expiredAt', '<', oneHourAgo)
             .get();
 
-        if (!sonlaniyorSnapshot.empty) {
-            const batch = db.batch();
-            sonlaniyorSnapshot.docs.forEach(doc => {
-                batch.update(doc.ref, {
-                    status: 'İndirim Bitti',
-                    lastPriceCheck: FieldValue.serverTimestamp()
-                });
-            });
-            await batch.commit();
-            console.log(`   ✅ ${sonlaniyorSnapshot.size} adet ilan "İndirim Bitti" oldu ve anasayfadan düştü.`);
-        }
-        
-        // ── 2. ADIM: "İndirim Bitti" olup süresi çok geçenleri fiziken sil (İsteğe bağlı temizlik) ──
-        console.log('🗑️ "İndirim Bitti" olan eski kalıntı ilanlar veritabanından tamamen siliniyor...');
-        // Let's actually delete things that have been 'completed' for > 2 hours to keep the DB small.
-        const twoHoursAgo = new Date(now.getTime() - (2 * 60 * 60 * 1000));
-        const endedSnapshot = await db.collection('discounts')
-            .where('status', '==', 'İndirim Bitti')
-            .where('expiredAt', '<', twoHoursAgo)
-            .get();
-
         if (!endedSnapshot.empty) {
-            const batch = db.batch();
-            endedSnapshot.docs.forEach(doc => batch.delete(doc.ref));
-            await batch.commit();
+            // Firestore batch max 500 doc
+            const chunks = [];
+            for (let i = 0; i < endedSnapshot.docs.length; i += 400) {
+                chunks.push(endedSnapshot.docs.slice(i, i + 400));
+            }
+            for (const chunk of chunks) {
+                const batch = db.batch();
+                chunk.forEach(doc => batch.delete(doc.ref));
+                await batch.commit();
+            }
             totalDeleted += endedSnapshot.size;
-            console.log(`   ✅ ${endedSnapshot.size} adet çöp ilan tamamen kalıcı silindi.`);
+            console.log(`   ✅ ${endedSnapshot.size} adet süresi dolmuş ilan kalıcı olarak silindi.`);
+        } else {
+            console.log('   ℹ️ Silinecek süresi dolmuş ilan yok.');
         }
 
-        // ── 3. ADIM: 48 saati geçen tüm eski ilanları sil ──
-        console.log('🧹 48 saati geçen tüm eski ilanlar temizleniyor...');
+        // ── 2. ADIM: 24 saat geçmiş TÜM ilanları sil (status farketmez) ──
+        // Onual ilanları zaten 24 saatte expire oluyor, bundan sonrası veritabanı şişirmek
+        console.log('🧹 24 saati geçen tüm eski ilanlar temizleniyor...');
+        const twentyFourHoursAgo = new Date(now.getTime() - (24 * 60 * 60 * 1000));
         let hasMore = true;
 
         while (hasMore) {
             const snapshot = await db.collection('discounts')
-                .where('createdAt', '<', fortyEightHoursAgo)
+                .where('createdAt', '<', twentyFourHoursAgo)
                 .limit(400)
                 .get();
 
@@ -101,7 +92,6 @@ async function cleanupOldDiscounts() {
 
             const batch = db.batch();
             snapshot.docs.forEach(doc => batch.delete(doc.ref));
-
             await batch.commit();
             totalDeleted += snapshot.size;
             console.log(`   ✅ ${snapshot.size} eski ilan silindi... (Toplam: ${totalDeleted})`);
@@ -113,6 +103,7 @@ async function cleanupOldDiscounts() {
         }
 
         console.log(`\n✨ Temizlik tamamlandı. Toplam ${totalDeleted} ilan silindi.`);
+        console.log('═══════════════════════════════════════════\n');
     } catch (err) {
         console.error(`💥 HATA: ${err.message}`);
         process.exit(1);

@@ -1,25 +1,28 @@
-name: Auto Cleanup (48h)
+name: Auto Cleanup
 
 on:
   schedule:
-    # Her saat başı çalışır (Daha hızlı temizlik için)
+    # Her saat başı çalışır
     - cron: '0 * * * *'
-  workflow_dispatch: # Manuel tetikleme için
+  workflow_dispatch:
 
 jobs:
   cleanup:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/uses-node@v4
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
       - name: Install dependencies
-        run: npm install firebase-admin cheerio
+        run: npm ci --include=dev
 
       - name: Run cleanup script
         env:
