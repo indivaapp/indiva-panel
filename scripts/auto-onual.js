@@ -224,8 +224,8 @@ JSON FORMATI:
     try {
         const modelsToTry = [
             'google/gemini-2.5-flash',
-            'google/gemini-2.0-flash-001',
-            'google/gemini-flash-1.5-8b'
+            'google/gemini-2.5-flash-lite',
+            'google/gemini-flash-1.5'
         ];
 
         /**
@@ -917,7 +917,7 @@ async function main() {
             const cleanedTitle = cleanProductTitle(details.title || product.title);
             const discountData = {
                 title: cleanedTitle.substring(0, 200),
-                description: aiData.description || `${cleanedTitle} - bu fiyata bu kalite kaçmaz! Hemen incele, bu fırsat çok sürmez.`,
+                description: aiData.description || `${cleanedTitle} şimdi İNDİVA'da yayında! Hem kalitesi hem de bu muazzam fiyatıyla kaçırılmayacak bir fırsat. Hemen detayları incele, stoklar tükenmeden sen de bu karlı alışverişin tadını çıkar! 🔥`,
                 brand: store.name || 'Mağaza',
                 category: aiData.category || 'Ev, Yaşam & Mutfak',
                 link: storeLink,

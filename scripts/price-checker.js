@@ -193,13 +193,88 @@ function isOutOfStock($, html) {
 
 // ─── Main Logic ──────────────────────────────────────────────────────────────
 
+const API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+
+async function verifyWithAI(url, currentTitle, oldPrice, html) {
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) return { expired: false, reason: 'API Key yok' };
+
+    try {
+        const $ = cheerio.load(html);
+        
+        // Gereksiz etiketleri temizle (token tasarrufu)
+        $('script, style, svg, path, footer, nav, header').remove();
+        
+        // Sadece gövde metnini al ve temizle
+        let bodyText = $('body').text()
+            .replace(/\s+/g, ' ')
+            .substring(0, 2000) // İlk 2000 karakter genellikle yeterlidir
+            .trim();
+
+        const prompt = `Aşağıdaki ürün sayfasından alınan metni analiz et. 
+Ürün: "${currentTitle}"
+Eski Fiyat: ${oldPrice} TL
+
+Sorular:
+1. Ürün stokta mı? (Sepete ekle butonu aktif mi, 'stokta yok' yazıyor mu?)
+2. Güncel fiyat nedir? (Eski fiyattan çok yüksek mi?)
+
+Yanıtını SADECE aşağıdaki JSON formatında ver:
+{
+  "expired": true/false,
+  "currentPrice": 0,
+  "reason": "kısa açıklama (stok yok/fiyat arttı/fiyat aynı)"
+}`;
+
+        const res = await fetch(API_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`,
+                'HTTP-Referer': 'https://indiva.app',
+                'X-Title': 'INDIVA Price Checker'
+            },
+            body: JSON.stringify({
+                model: 'google/gemini-2.5-flash',
+                messages: [
+                    { role: 'system', content: 'Sen bir fiyat/stok kontrol uzmanısın. Sadece JSON formatında cevap verirsin.' },
+                    { role: 'user', content: `SAYFA METNİ:\n${bodyText}\n\n${prompt}` }
+                ],
+                response_format: { type: 'json_object' }
+            }),
+            signal: AbortSignal.timeout(25000)
+        });
+
+        if (!res.ok) return { expired: false, reason: `AI Error: ${res.status}` };
+
+        const data = await res.json();
+        const aiResponse = JSON.parse(data.choices[0].message.content);
+        
+        // Eğer AI fiyatı bulmuşsa ama 'expired: false' demişse bile, 
+        // manuel kontrol %30 fazlaysa expired sayalım (Güvenlik)
+        if (!aiResponse.expired && aiResponse.currentPrice > oldPrice * 1.3) {
+            return { expired: true, reason: 'Fiyat Çok Yüksek (AI price detect)', price: aiResponse.currentPrice };
+        }
+
+        return { 
+            expired: !!aiResponse.expired, 
+            reason: aiResponse.reason, 
+            price: aiResponse.currentPrice || 0 
+        };
+    } catch (e) {
+        console.error(`      ⚠️ AI Doğrulama Hatası: ${e.message}`);
+        return { expired: false, reason: 'AI Hatası' };
+    }
+}
+
+// ─── Main Logic ──────────────────────────────────────────────────────────────
+
 async function checkPrices() {
-    console.log(`\n🔍 Fiyat Kontrolü Başlatıldı: ${new Date().toLocaleString('tr-TR')}`);
+    console.log(`\n🔍 AI Destekli Fiyat Kontrolü Başlatıldı: ${new Date().toLocaleString('tr-TR')}`);
     const db = initFirebase();
 
     try {
-        // 1. Durumu 'İndirim Bitti' OLMAYANLARI çek (Daha kapsayıcı)
-        // Read kotası için limit koyuyoruz ama zaman kısıtlamasını kaldırıyoruz
+        // 1. Durumu 'İndirim Bitti' OLMAYANLARI çek
         const snapshot = await db.collection('discounts')
             .where('status', 'in', ['aktif', 'active', null])
             .limit(300)
@@ -238,7 +313,7 @@ async function checkPrices() {
             toCheck = [...toCheck, ...alreadyChecked.slice(0, 100 - toCheck.length)];
         }
 
-        console.log(`📊 Toplam ${toCheck.length} ilan kontrol edilecek (${aktifDocs.length} aktif ilandan seçildi).\n`);
+        console.log(`📊 Toplam ${toCheck.length} ilan kontrol edilecek.\n`);
 
         let updatedCount = 0;
 
@@ -268,16 +343,12 @@ async function checkPrices() {
                 continue;
             }
 
-            // ── 2. KURAL: SAYFA KONTROLÜ ──
+            // ── 2. KURAL: SAYFA KONTROLÜ (Hybrid AI) ──
             const html = await fetchHtml(url);
 
-            // Hata Durumu: Sayfa 404 veya yüklenemiyorsa BU TURU ATLA (Hemen bitirme)
             if (!html) {
-                console.log(`      ⚠️ Hata (404/Bot Engeli): Bu ilan şimdilik atlanıyor.`);
-                // Sadece son kontrol zamanını güncelle ki sürekli aynı hatada dönüp durmasın
-                await doc.ref.update({
-                    lastPriceCheck: FieldValue.serverTimestamp()
-                });
+                console.log(`      ⚠️ Hata (404/Bot Engeli): Atlanıyor.`);
+                await doc.ref.update({ lastPriceCheck: FieldValue.serverTimestamp() });
                 continue;
             }
 
@@ -285,11 +356,23 @@ async function checkPrices() {
             const currentPrice = extractPrice($, html);
             const outOfStock = isOutOfStock($, html);
 
-            // Fiyat artışı tespiti (veya stok bitişi)
-            // Tolerans: Fiyat %5'ten fazla artmışsa indirim bitmiş sayıyoruz
             const tolerance = data.newPrice * 1.05;
+            let shouldBeExpired = outOfStock || (currentPrice > 0 && currentPrice > tolerance);
 
-            if (outOfStock || (currentPrice > 0 && currentPrice > tolerance)) {
+            // Eğer klasik kural "Bitti" diyorsa AI ile doğrula (False Positive önlemek için)
+            if (shouldBeExpired) {
+                console.log(`      🤖 AI'ya soruluyor... (Klasik Kontrol: ${outOfStock ? 'Stok Yok' : 'Fiyat Artmış'})`);
+                const aiResult = await verifyWithAI(url, data.title, data.newPrice, html);
+                
+                if (aiResult.expired) {
+                    console.log(`      🚩 AI ONAYLADI: ${aiResult.reason}`);
+                } else {
+                    console.log(`      🛡️ AI İPTAL ETTİ: İlan hala aktif görünüyor. (${aiResult.reason})`);
+                    shouldBeExpired = false; 
+                }
+            }
+
+            if (shouldBeExpired) {
                 console.log(`      🚩 İndirim Bitti! (Eski: ${data.newPrice}, Yeni: ${currentPrice || 'Stok Yok'})`);
 
                 // Firestore Güncelle
