@@ -1,9 +1,6 @@
 name: Auto Price Checker
 
 on:
-  push:
-    branches:
-      - main
   schedule:
     - cron: '*/10 * * * *'  # Her 10 dakikada bir çalışır
   workflow_dispatch:

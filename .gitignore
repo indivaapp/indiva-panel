@@ -25,5 +25,7 @@ dist-ssr
 
 .vercel
 firebase-service-account.json
-
-.vercel
+.env
+.DS_Store
+*.zip
+logs.zip

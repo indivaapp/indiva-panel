@@ -57,6 +57,35 @@ export const deleteDiscount = async (id: string, deleteUrl?: string, screenshotD
     }
 };
 
+/**
+ * Süresi dolmuş ilanları toplu sil
+ * 'İndirim Bitti' veya 'Sonlanıyor' statüsündeki tüm ilanları Firebase'den kaldır
+ */
+export const deleteExpiredDiscountsBatch = async (discounts: Discount[]): Promise<number> => {
+    if (discounts.length === 0) return 0;
+
+    const CHUNK_SIZE = 400;
+    let deletedCount = 0;
+
+    // Önce görselleri sil (fire-and-forget)
+    discounts.forEach(d => {
+        if (d.deleteUrl) setTimeout(() => deleteFromImgbb(d.deleteUrl), 0);
+        if (d.screenshotDeleteUrl) setTimeout(() => deleteFromImgbb(d.screenshotDeleteUrl!), 0);
+    });
+
+    for (let i = 0; i < discounts.length; i += CHUNK_SIZE) {
+        const batch = writeBatch(db);
+        const chunk = discounts.slice(i, i + CHUNK_SIZE);
+        for (const d of chunk) {
+            batch.delete(doc(db, 'discounts', d.id));
+        }
+        await batch.commit();
+        deletedCount += chunk.length;
+    }
+
+    return deletedCount;
+};
+
 // --- Fırsat Bulucu Toplu İşlemler ---
 
 /**

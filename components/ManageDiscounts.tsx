@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { getDiscounts, deleteDiscount } from '../services/firebase';
+import { getDiscounts, deleteDiscount, deleteExpiredDiscountsBatch } from '../services/firebase';
 import type { Discount, ViewType } from '../types';
 import EditDiscountModal from './EditDiscountModal';
 import DeleteImgButton from './DeleteImgButton';
@@ -21,6 +21,8 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
     const [editingDiscount, setEditingDiscount] = useState<Discount | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [activeFilter, setActiveFilter] = useState<FilterType>('all');
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+    const [showBulkConfirm, setShowBulkConfirm] = useState(false);
 
     const fetchDiscounts = useCallback(async () => {
         setIsLoading(true);
@@ -52,6 +54,28 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
             showToast('İlan silindi.', 'success');
         } catch (err) {
             showToast('İlan silinemedi. Lütfen tekrar deneyin.', 'error');
+        }
+    };
+
+    // Süresi biten ilanları toplu sil
+    const handleBulkDeleteExpired = async () => {
+        const expiredList = discounts.filter(
+            d => d.status === 'İndirim Bitti' || d.status === 'Sonlanıyor'
+        );
+        if (expiredList.length === 0) return;
+
+        setIsBulkDeleting(true);
+        try {
+            const count = await deleteExpiredDiscountsBatch(expiredList);
+            setDiscounts(prev => prev.filter(
+                d => d.status !== 'İndirim Bitti' && d.status !== 'Sonlanıyor'
+            ));
+            showToast(`${count} süresi biten ilan silindi.`, 'success');
+        } catch (err) {
+            showToast('Toplu silme başarısız oldu.', 'error');
+        } finally {
+            setIsBulkDeleting(false);
+            setShowBulkConfirm(false);
         }
     };
 
@@ -98,23 +122,74 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
         { id: 'ad', label: '📢 Reklamlar', count: discounts.filter(d => d.isAd).length },
         { id: 'affiliate_pending', label: '💰 Affiliate Bekleyen', count: discounts.filter(d => d.affiliateLinkUpdated === false).length },
         { id: 'proven', label: '✅ Kanıtlı', count: discounts.filter(d => !!d.screenshotUrl).length },
-        { id: 'expired', label: '🚩 Bitenler', count: discounts.filter(d => d.status === 'İndirim Bitti').length },
+        { id: 'expired', label: '🚩 Bitenler', count: discounts.filter(d => d.status === 'İndirim Bitti' || d.status === 'Sonlanıyor').length },
     ];
+
+    const expiredCount = discounts.filter(d => d.status === 'İndirim Bitti' || d.status === 'Sonlanıyor').length;
 
     return (
         <div>
             <div className="flex justify-between items-center mb-6">
                 <h2 className="text-3xl font-bold text-white">İlanları Yönet</h2>
-                <button
-                    onClick={() => setActiveView('discounts')}
-                    className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-colors inline-flex items-center"
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 17l-5-5m0 0l5-5m-5 5h12" />
-                    </svg>
-                    Geri Dön
-                </button>
+                <div className="flex items-center gap-3">
+                    {/* Toplu Silme Butonu - Sadece Bitenler filtresinde göster */}
+                    {activeFilter === 'expired' && expiredCount > 0 && (
+                        <button
+                            onClick={() => setShowBulkConfirm(true)}
+                            disabled={isBulkDeleting}
+                            className="bg-red-700 hover:bg-red-600 disabled:opacity-60 text-white font-bold py-2 px-4 rounded-lg transition-colors inline-flex items-center gap-2"
+                        >
+                            {isBulkDeleting ? (
+                                <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Siliniyor...</>
+                            ) : (
+                                <>
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                    Tümünü Sil ({expiredCount})
+                                </>
+                            )}
+                        </button>
+                    )}
+                    <button
+                        onClick={() => setActiveView('discounts')}
+                        className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-colors inline-flex items-center"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 17l-5-5m0 0l5-5m-5 5h12" />
+                        </svg>
+                        Geri Dön
+                    </button>
+                </div>
             </div>
+
+            {/* Toplu Silme Onay Dialogu */}
+            {showBulkConfirm && (
+                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+                    <div className="bg-gray-800 rounded-xl p-6 max-w-sm w-full border border-red-600 shadow-xl">
+                        <h3 className="text-xl font-bold text-white mb-2">⚠️ Emin misiniz?</h3>
+                        <p className="text-gray-300 mb-5">
+                            <strong className="text-red-400">{expiredCount} adet</strong> süresi bitmiş ilan kalıcı olarak silinecek.
+                            Bu işlem geri alınamaz.
+                        </p>
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => setShowBulkConfirm(false)}
+                                className="flex-1 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition-colors"
+                            >
+                                İptal
+                            </button>
+                            <button
+                                onClick={handleBulkDeleteExpired}
+                                disabled={isBulkDeleting}
+                                className="flex-1 bg-red-600 hover:bg-red-500 disabled:opacity-60 text-white font-bold py-2 px-4 rounded-lg transition-colors"
+                            >
+                                {isBulkDeleting ? 'Siliniyor...' : 'Evet, Sil'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {error && <p className="text-red-400 bg-red-900/50 p-3 rounded-md mb-4">{error}</p>}
 

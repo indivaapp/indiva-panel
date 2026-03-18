@@ -78,35 +78,6 @@ async function cleanupOldDiscounts() {
             console.log('   ℹ️ Silinecek süresi dolmuş ilan yok.');
         }
 
-        // ── 2. ADIM: 24 saat geçmiş TÜM ilanları sil (status farketmez) ──
-        // Onual ilanları zaten 24 saatte expire oluyor, bundan sonrası veritabanı şişirmek
-        console.log('🧹 24 saati geçen tüm eski ilanlar temizleniyor...');
-        const twentyFourHoursAgo = new Date(now.getTime() - (24 * 60 * 60 * 1000));
-        let hasMore = true;
-
-        while (hasMore) {
-            const snapshot = await db.collection('discounts')
-                .where('createdAt', '<', twentyFourHoursAgo)
-                .limit(400)
-                .get();
-
-            if (snapshot.empty) {
-                hasMore = false;
-                break;
-            }
-
-            const batch = db.batch();
-            snapshot.docs.forEach(doc => batch.delete(doc.ref));
-            await batch.commit();
-            totalDeleted += snapshot.size;
-            console.log(`   ✅ ${snapshot.size} eski ilan silindi... (Toplam: ${totalDeleted})`);
-
-            if (totalDeleted > 5000) {
-                console.log('   ⚠️ Güvenlik sınırı (5000) aşıldı.');
-                break;
-            }
-        }
-
         console.log(`\n✨ Temizlik tamamlandı. Toplam ${totalDeleted} ilan silindi.`);
         console.log('═══════════════════════════════════════════\n');
     } catch (err) {

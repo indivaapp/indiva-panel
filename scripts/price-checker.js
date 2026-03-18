@@ -109,16 +109,19 @@ function parseTurkishPrice(text) {
 function extractPrice($, html) {
     let price = 0;
 
-    // JSON-LD denemesi
+    // 1. JSON-LD denemesi
     $('script[type="application/ld+json"]').each((_, el) => {
         try {
             const data = JSON.parse($(el).html() || '{}');
-            const offers = data.offers || (data['@type'] === 'Product' ? data.offers : null);
-            if (offers) {
-                if (Array.isArray(offers)) {
-                    price = parseTurkishPrice(String(offers[0].price));
-                } else if (offers.price) {
-                    price = parseTurkishPrice(String(offers.price));
+            const searchData = (Array.isArray(data) ? data : [data]);
+            for (const item of searchData) {
+                const offers = item.offers || (item['@type'] === 'Product' ? item.offers : null);
+                if (offers) {
+                    const priceVal = Array.isArray(offers) ? offers[0].price : offers.price;
+                    if (priceVal) {
+                        price = parseTurkishPrice(String(priceVal));
+                        if (price > 0) return false;
+                    }
                 }
             }
         } catch { }
@@ -126,19 +129,32 @@ function extractPrice($, html) {
 
     if (price > 0) return price;
 
-    // Yaygın seçiciler
+    // 2. Mağaza Özel Kurallar (Amazon vb.)
+    if (html.includes('amazon.com')) {
+        const whole = $('.a-price-whole').first().text().replace(/[^\d]/g, '');
+        const fraction = $('.a-price-fraction').first().text().replace(/[^\d]/g, '');
+        if (whole) {
+            price = parseFloat(`${whole}.${fraction || '00'}`);
+            if (price > 0) return price;
+        }
+    }
+
+    // 3. Yaygın seçiciler
     const priceSelectors = [
         '.current-price', '.new-price', '.sale-price',
         '[itemprop="price"]', '.price-now', '.total-price',
         '.prc-dsc', '.prc-slg', // Trendyol
         '.product-price', '.original-price', // Hepsiburada
-        '#price_inside_buybox', '.a-price-whole' // Amazon
+        '#price_inside_buybox', '.a-price-whole',
+        '[data-test-id="price-current-price"]'
     ];
 
     for (const selector of priceSelectors) {
         const text = $(selector).first().text();
-        price = parseTurkishPrice(text);
-        if (price > 0) break;
+        if (text) {
+            price = parseTurkishPrice(text);
+            if (price > 0) break;
+        }
     }
 
     return price;
@@ -149,7 +165,8 @@ function isOutOfStock($, html) {
         'tükendi', 'stokta yok', 'gelince haber ver',
         'stokk_yok', 'sepete eklenemiyor',
         'out of stock', 'sold out', 'not available',
-        'ürün temin edilemiyor'
+        'ürün temin edilemiyor', 'geçici olarak temin edilemiyor',
+        'stokta bulunmamaktadır'
     ];
     const lowerHtml = html.toLowerCase();
 
@@ -158,10 +175,19 @@ function isOutOfStock($, html) {
     if (stockTextFound) return true;
 
     // Check for "passive" buttons or specific disabled attributes
-    const isPassive = $('.add-to-basket-button.passive, .buy-now.passive, .disabled-button').length > 0;
-    if (isPassive) return true;
+    const passiveSelectors = [
+        '.add-to-basket-button.passive',
+        '.buy-now.passive',
+        '.disabled-button',
+        '.out-of-stock-button',
+        'button[disabled]',
+        '.btn-passive'
+    ];
+    
+    for (const selector of passiveSelectors) {
+        if ($(selector).length > 0) return true;
+    }
 
-    // Remove aggressive length-based fallback which caused false positives
     return false;
 }
 
