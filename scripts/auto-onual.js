@@ -228,33 +228,57 @@ JSON FORMATI:
             'google/gemini-flash-1.5-8b'
         ];
 
-        let lastErr = null;
-        for (const currentModel of modelsToTry) {
-            try {
-                console.log(`      🤖 AI analiz yapıyor (${currentModel})...`);
-                const res = await fetch(API_URL, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}`,
-                        'HTTP-Referer': 'https://indiva.app',
-                        'X-Title': 'INDIVA Admin Panel'
-                    },
-                    body: JSON.stringify({
-                        model: currentModel,
-                        messages: [
-                            { role: 'system', content: systemInstruction },
-                            { role: 'user', content: prompt }
-                        ],
-                        temperature: 0.8,
-                        response_format: { type: 'json_object' }
-                    }),
-                    signal: AbortSignal.timeout(12000) // Timeout 12 saniyeye düşürüldü
-                });
+        /**
+         * OpenRouter'a tek model için istek at, 429 rate-limit gelirse bekleyip tekrar dene.
+         */
+        async function tryModel(currentModel) {
+            const MAX_RETRIES = 3;
+            for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+                console.log(`      🤖 AI analiz yapıyor (${currentModel}, deneme ${attempt}/${MAX_RETRIES})...`);
+                let res;
+                try {
+                    res = await fetch(API_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${apiKey}`,
+                            'HTTP-Referer': 'https://indiva.app',
+                            'X-Title': 'INDIVA Admin Panel'
+                        },
+                        body: JSON.stringify({
+                            model: currentModel,
+                            messages: [
+                                { role: 'system', content: systemInstruction },
+                                { role: 'user', content: prompt }
+                            ],
+                            temperature: 0.7,
+                            response_format: { type: 'json_object' }
+                        }),
+                        signal: AbortSignal.timeout(35000) // 35 saniye — Gemini 2.5 Flash bazen 20-25sn alıyor
+                    });
+                } catch (fetchErr) {
+                    // Network/timeout hatası
+                    if (attempt < MAX_RETRIES) {
+                        const waitSec = attempt * 5;
+                        console.warn(`      ⚠️  Bağlantı hatası (${fetchErr.message}), ${waitSec}s sonra tekrar deneniyor...`);
+                        await sleep(waitSec * 1000);
+                        continue;
+                    }
+                    throw fetchErr;
+                }
+
+                // Rate limit (429) — bekleyip tekrar dene
+                if (res.status === 429) {
+                    const retryAfter = parseInt(res.headers.get('retry-after') || '15', 10);
+                    const waitSec = Math.min(retryAfter, 30);
+                    console.warn(`      ⚠️  Rate limit (429)! ${waitSec}s bekleniyor...`);
+                    await sleep(waitSec * 1000);
+                    continue;
+                }
 
                 if (!res.ok) {
                     const errText = await res.text();
-                    throw new Error(`Model ${currentModel} hatası: ${res.status} - ${errText.substring(0, 100)}`);
+                    throw new Error(`HTTP ${res.status}: ${errText.substring(0, 120)}`);
                 }
 
                 const data = await res.json();
@@ -265,28 +289,42 @@ JSON FORMATI:
                     if (match) {
                         const parsed = JSON.parse(match[0]);
                         if (parsed.category && parsed.description) {
-                            // Ensure aiFomoScore exists and is a number between 1-10
-                            parsed.aiFomoScore = Number.isFinite(parsed.aiFomoScore) ? Math.max(1, Math.min(10, parsed.aiFomoScore)) : 5;
-                            console.log(`      ✅ AI Başarılı [${currentModel}]: [${parsed.category}] - FOMO Puanı: ${parsed.aiFomoScore}`);
+                            parsed.aiFomoScore = Number.isFinite(parsed.aiFomoScore)
+                                ? Math.max(1, Math.min(10, parsed.aiFomoScore))
+                                : 5;
+                            console.log(`      ✅ AI Başarılı [${currentModel}]: [${parsed.category}] FOMO: ${parsed.aiFomoScore}`);
                             return parsed;
                         }
                     }
                 }
-                throw new Error(`Model ${currentModel} geçersiz yanıt döndürdü`);
+                throw new Error(`Geçersiz yanıt formatı`);
+            }
+            throw new Error(`${MAX_RETRIES} denemede sonuç alınamadı`);
+        }
+
+        let lastErr = null;
+        for (const currentModel of modelsToTry) {
+            try {
+                const result = await tryModel(currentModel);
+                return result;
             } catch (err) {
-                console.warn(`      ⚠️  ${err.message}`);
+                console.warn(`      ⚠️  [${currentModel}] başarısız: ${err.message}`);
                 lastErr = err;
-                continue; // Bir sonraki modeli dene
+                // Bir sonraki modele geçmeden kısa bekleme
+                if (modelsToTry.indexOf(currentModel) < modelsToTry.length - 1) {
+                    console.log(`      🔄 2s sonra sıradaki model deneniyor...`);
+                    await sleep(2000);
+                }
             }
         }
-        throw lastErr || new Error('Tüm modeller denendi ama sonuç alınamadı');
+        throw lastErr || new Error('Tüm modeller başarısız oldu');
 
     } catch (err) {
         console.warn(`      ⚠️  AI Hatası: ${err.message}. Fallback kullanılıyor.`);
         return {
             category: detectCategory(productTitle),
             description: generateFallbackDescription(productTitle, discountPercent),
-            aiFomoScore: discountPercent >= 50 ? 8 : (discountPercent > 20 ? 6 : 4) // Fallback score based on mathematical discount
+            aiFomoScore: discountPercent >= 50 ? 8 : (discountPercent > 20 ? 6 : 4)
         };
     }
 }
