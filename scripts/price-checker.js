@@ -229,10 +229,11 @@ async function checkPrices() {
             const ageInHours = (Date.now() - createdAt.getTime()) / (1000 * 60 * 60);
 
             if (ageInHours > 24) {
-                console.log(`      ⏰ Süre Doldu (24s+): Sonlanıyor olarak işaretleniyor.`);
+                console.log(`      ⏰ Süre Doldu (24s+): İndirim Bitti olarak işaretleniyor.`);
                 await doc.ref.update({
-                    status: 'Sonlanıyor',
+                    status: 'İndirim Bitti',
                     expiredAt: FieldValue.serverTimestamp(),
+                    expiresAt: FieldValue.serverTimestamp(), // UI expects expiresAt
                     lastCheckedPrice: data.newPrice || 0,
                     errorReason: '24 Saatlik Yayın Süresi Doldu',
                     lastPriceCheck: FieldValue.serverTimestamp()
@@ -267,8 +268,9 @@ async function checkPrices() {
 
                 // Firestore Güncelle
                 await doc.ref.update({
-                    status: 'Sonlanıyor',
+                    status: 'İndirim Bitti',
                     expiredAt: FieldValue.serverTimestamp(),
+                    expiresAt: FieldValue.serverTimestamp(), // Eklendi (UI için)
                     lastCheckedPrice: currentPrice || 0,
                     lastPriceCheck: FieldValue.serverTimestamp()
                 });
@@ -294,9 +296,9 @@ async function checkPrices() {
                         data: {
                             type: 'DISCOUNT_STATUS_UPDATE',
                             id: doc.id,
-                            status: 'Sonlanıyor',
+                            status: 'İndirim Bitti',
                             title: data.title || '',
-                            expiredAt: nowIso, // 1 saatlik geri sayım için başlangıç zamanı
+                            expiresAt: nowIso, // Değiştirildi (UI için)
                             silent: 'true'
                         },
                         android: {
@@ -304,7 +306,7 @@ async function checkPrices() {
                         }
                     };
                     await messaging.send(bridgePayload);
-                    console.log(`      🔗 Köprü sinyali gönderildi (ID: ${doc.id}, Zaman: ${nowIso})`);
+                    console.log(`      🔗 Köprü sinyali gönderildi (ID: ${doc.id}, Durum: İndirim Bitti, Zaman: ${nowIso})`);
                 } catch (msgErr) {
                     console.warn(`      ⚠️ Köprü sinyali hatası: ${msgErr.message}`);
                 }
