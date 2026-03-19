@@ -228,7 +228,7 @@ const App: React.FC = () => {
     const renderContent = () => {
         switch (activeView) {
             case 'dashboard':
-                return <Dashboard setActiveView={setActiveView} isAdmin={isAdmin} />;
+                return <Dashboard setActiveView={setActiveView} setSelectedDeal={setSelectedDeal} isAdmin={isAdmin} />;
             case 'discounts':
                 return <DiscountManager setActiveView={setActiveView} isAdmin={isAdmin} />;
             case 'manageDiscounts':

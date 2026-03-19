@@ -36,10 +36,10 @@ const EditDealPage: React.FC<EditDealPageProps> = ({ deal, setActiveView, isAdmi
 
     const [formData, setFormData] = useState({
         title: deal.title,
-        description: deal.couponCode ? `🎫 Kupon Kodu: ${deal.couponCode}` : '',
-        brand: '',
-        category: 'Diğer',
-        oldPrice: 0,
+        description: (deal as any).aiDescription || (deal.couponCode ? `🎫 Kupon Kodu: ${deal.couponCode}` : ''),
+        brand: (deal as any).brandName || '',
+        category: (deal as any).categoryName || 'Diğer',
+        oldPrice: (deal as any).oldPriceValue || 0,
         newPrice: deal.price,
         link: deal.productLink || deal.onualLink,
         imageUrl: deal.imageUrl || '',
@@ -58,10 +58,10 @@ const EditDealPage: React.FC<EditDealPageProps> = ({ deal, setActiveView, isAdmi
     useEffect(() => {
         setFormData({
             title: deal.title,
-            description: deal.couponCode ? `🎫 Kupon Kodu: ${deal.couponCode}` : '',
-            brand: '',
-            category: 'Diğer',
-            oldPrice: 0,
+            description: (deal as any).aiDescription || (deal.couponCode ? `🎫 Kupon Kodu: ${deal.couponCode}` : ''),
+            brand: (deal as any).brandName || '',
+            category: (deal as any).categoryName || 'Diğer',
+            oldPrice: (deal as any).oldPriceValue || 0,
             newPrice: deal.price,
             link: deal.productLink || deal.onualLink,
             imageUrl: deal.imageUrl || '',

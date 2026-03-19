@@ -13,10 +13,10 @@ export interface AnalyzedProduct {
     imageUrl: string;
     discountPercent: number;
     link: string;
+    error?: string;
 }
 
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL = 'llama-3.3-70b-versatile';
+const MICROLINK_API_URL = 'https://api.microlink.io';
 
 /**
  * Jina Reader ile sayfa içeriğini çek
@@ -53,59 +53,8 @@ async function fetchPageWithJina(url: string): Promise<string> {
  * Doğrudan HTML'den og:image çıkar (Gemini'nin yaptığı gibi)
  */
 async function fetchOgImage(url: string): Promise<string> {
-    console.log('🖼️ HTML\'den og:image çıkarılıyor...');
-
-    try {
-        // CORS proxy ile HTML çek
-        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-
-        const response = await fetch(proxyUrl, {
-            signal: AbortSignal.timeout(10000) // 10 saniye timeout
-        });
-
-        if (!response.ok) {
-            console.warn('HTML çekme hatası:', response.status);
-            return '';
-        }
-
-        const html = await response.text();
-
-        // 1. og:image meta etiketini ara (en güvenilir)
-        const ogImageMatch = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
-            html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i);
-
-        if (ogImageMatch && ogImageMatch[1]) {
-            console.log('✅ og:image bulundu');
-            return ogImageMatch[1];
-        }
-
-        // 2. Twitter card image
-        const twitterMatch = html.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i);
-        if (twitterMatch && twitterMatch[1]) {
-            console.log('✅ twitter:image bulundu');
-            return twitterMatch[1];
-        }
-
-        // 3. Schema.org Product image
-        const schemaMatch = html.match(/"image"\s*:\s*"(https?:\/\/[^"]+)"/i) ||
-            html.match(/"image"\s*:\s*\[\s*"(https?:\/\/[^"]+)"/i);
-        if (schemaMatch && schemaMatch[1]) {
-            console.log('✅ Schema.org image bulundu');
-            return schemaMatch[1];
-        }
-
-        // 4. Main product image class
-        const mainImgMatch = html.match(/<img[^>]*class=["'][^"']*(?:main|product|hero)[^"']*["'][^>]*src=["']([^"']+)["']/i) ||
-            html.match(/<img[^>]*src=["']([^"']+)["'][^>]*class=["'][^"']*(?:main|product|hero)[^"']*["']/i);
-        if (mainImgMatch && mainImgMatch[1]) {
-            console.log('✅ Ana ürün görseli bulundu');
-            return mainImgMatch[1];
-        }
-
-    } catch (err) {
-        console.warn('OG image çıkarma hatası:', err);
-    }
-
+    // NOT: Vercel proxy (fetchProductDataFromVercel) zaten og:image ve daha fazlasını
+    // profesyonelce çekiyor. Bu fonksiyon sadece yapısal bütünlük için duruyor.
     return '';
 }
 
@@ -132,51 +81,31 @@ function extractImageFromContent(content: string): string {
     for (const url of allImageUrls) {
         const lowerUrl = url.toLowerCase();
 
-        // Bu kelimeleri içeren URL'leri atla (ikon, logo, badge vb.)
+        // Bu kelimeleri içeren URL'leri atla
         const skipPatterns = [
-            'icon', 'logo', 'avatar', 'badge', 'sprite',
-            'button', 'arrow', 'star', 'rating', 'flag',
-            'payment', 'cargo', 'kargo', 'shipping',
-            'banner', 'ad-', 'ads-', 'promo',
-            'favicon', 'thumb', 'tiny', 'mini', 'small',
-            '/a1/', '/s1/', '/t1/',  // N11 küçük resim formatları
-            '30x', '50x', '100x', 'x30', 'x50', 'x100', // Boyut belirten
-            'placeholder', 'loading', 'lazy',
-            'facebook', 'twitter', 'instagram', 'whatsapp', 'social'
+            'icon', 'logo', 'avatar', 'badge', 'sprite', 'button', 'arrow', 
+            'star', 'rating', 'flag', 'payment', 'cargo', 'kargo', 'shipping',
+            'banner', 'promo', 'favicon', 'thumb', 'tiny', 'mini', 'small',
+            'loading', 'lazy', 'social', 'facebook', 'instagram', 'twitter'
         ];
 
-        let shouldSkip = false;
-        for (const pattern of skipPatterns) {
-            if (lowerUrl.includes(pattern)) {
-                shouldSkip = true;
-                break;
-            }
-        }
+        if (skipPatterns.some(p => lowerUrl.includes(p))) continue;
 
-        if (shouldSkip) continue;
+        // URL minimum uzunluk kontrolü (küçük ikonlar kısa olur)
+        if (url.length < 40) continue;
 
-        // URL minimum uzunluk kontrolü
-        if (url.length < 50) continue;
+        // Boyut belirten negatif filtreler (örn: /50x50/, /100/)
+        if (lowerUrl.match(/\b\d{1,2}x\d{1,2}\b/) || lowerUrl.match(/[\/_]\d{1,2}[\/_]/)) continue;
 
-        // Ürün görseli olabilecek kalıpları tercih et
-        const goodPatterns = ['product', 'urun', 'img', 'image', 'media', '/n11/', 'cdn', 'static'];
-        let isLikelyProduct = false;
-        for (const pattern of goodPatterns) {
-            if (lowerUrl.includes(pattern)) {
-                isLikelyProduct = true;
-                break;
-            }
-        }
-
-        // Büyük resim formatını tercih et (örn: /450/, /600/, /800/)
-        if (lowerUrl.match(/\/[456789]\d\d\//)) {
-            return url;
-        }
-
-        if (isLikelyProduct) {
+        // Ürün görseli olabilecek pozitif kalıplar
+        const goodPatterns = ['product', 'urun', 'detail', 'big', 'large', '800', '1200', 'cdn', 'dsmcdn', 'productimages'];
+        if (goodPatterns.some(p => lowerUrl.includes(p))) {
             return url;
         }
     }
+
+    // Pozitif eşleşme yoksa, ilk "mantıklı" URL'yi dön (çok küçük değilse)
+    return allImageUrls.find(u => u.length > 60) || '';
 
     // Hiçbir şey bulamazsa boş döndür
     return '';
@@ -240,62 +169,55 @@ async function analyzeWithGroq(content: string, url: string, storeName: string):
     discountPercent: number;
     imageUrl: string;
 }> {
-    // @ts-ignore
-    const GROQ_API_KEY = (import.meta as any).env?.VITE_GROQ_API_KEY || '';
     // @ts-ignore  
-    const GEMINI_API_KEY = (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+    const OPENROUTER_API_KEY = (import.meta as any).env?.VITE_OPENROUTER_API_KEY || '';
 
-    const prompt = `Sen profesyonel bir e-ticaret pazarlama uzmanısın. Ürün sayfası içeriğini analiz et.
+    const prompt = `Sen INDIVA uygulamasının kıdemli Teknik Ürün Analisti ve e-ticaret metin yazarı uzmanısın. 
+    Görevin, paylaşılan ürün sayfasını derinlemesine analiz ederek kullanıcılar için "profesyonel bir inceleme ve fırsat paylaşımı" hazırlamaktır.
 
-SAYFA İÇERİĞİ:
-${content.slice(0, 7000)}
+    SAYFA İÇERİĞİ:
+    ${content.slice(0, 9000)}
 
-GÖREV: Ürün bilgilerini JSON formatında döndür.
+    GÖREV: Ürün bilgilerini JSON formatında teknik bir ciddiyetle döndür.
 
-KURALLAR:
-- title: Ürünün TAM başlığı
-- brand: Marka adı
-- category: Kategori (Şu listeden en uygun olanı seç: Teknoloji, Giyim & Ayakkabı, Ev, Yaşam & Mutfak, Kozmetik & Kişisel Bakım, Süpermarket, Anne & Bebek, Mobilya, Kitap & Kırtasiye, Spor & Outdoor, Takı & Aksesuar, Otomotiv & Motosiklet, Pet Shop, Bahçe & Yapı Market, Oyuncak & Hobi, Sağlık & Medikal, Çanta & Valiz, Saat & Gözlük, Elektronik Aksesuar, Ofis & İş Dünyası, Hediyelik Eşya)
-- oldPrice: ESKİ/LİSTE FİYATI - ÇOK DİKKATLİ ARA! Şu kalıpları tara:
-  * "Liste Fiyatı", "Piyasa Fiyatı", "Eski Fiyat", "Normal Fiyat"
-  * Üstü çizili fiyat (genelde daha yüksek olan)
-  * "X TL yerine Y TL" formatında X değeri
-  * İndirim öncesi fiyat, karşılaştırma fiyatı
-  * SADECE SAYI döndür (TL, ₺ karakterleri olmadan)
-- newPrice: İNDİRİMLİ/GÜNCEL FİYAT - Şu kalıpları tara:
-  * "Satış Fiyatı", "İndirimli Fiyat", "Fiyat", "Sepet Fiyatı"
-  * En belirgin/büyük yazılan fiyat
-  * "X TL yerine Y TL" formatında Y değeri
-  * SADECE SAYI döndür
-- discountPercent: İndirim oranı (SADECE SAYI, % işareti olmadan)
-- description: MUTLAKA 40-60 KELİME ARASI etkileyici ve ikna edici bir satış açıklaması yaz! DİKKAT:
-  * ÜRÜN İSMİNİ AÇIKLAMANIN BAŞINDA TEKRAR ETME! Direkt ürünün faydalarıyla, hissettireceği duyguyla veya çözdüğü sorunla başla.
-  * EMOJİ KULLANMA! Hiç emoji olmasın.
-  * Eğlenceli, samimi, coşkulu ve arkadaşça bir dil kullan.
-  * Ürünün benzersiz özelliklerini ve hayatı nasıl kolaylaştırdığını/güzelleştirdiğini anlat.
-  * "Bu fırsatı kaçırma!", "Cebini düşünerek alışveriş yap!", "Hem kaliteli hem uygun!" gibi teşvik edici cümleler ekle.
-  * Jenerik ve sıkıcı cümlelerden ("şık görünüm", "fark yaratan özellikler") KESİNLİKLE kaçın.
-  * Sanki en yakın arkadaşına tavsiye eder gibi yaz, resmiyetten uzak dur.
+    KRİTİK PAZARLAMA KURALLARI:
+    1. TEKNİK ANALİZ: Sadece başlıktaki metni süsleme. Ürün sayfasındaki teknik verileri (malzeme kalitesi, pil ömrü, motor gücü, ekran teknolojisi, gramaj, içerik vb.) ayıkla ve metne yedir.
+    2. BİLİRKİŞİ TONU: Bir pazarlamacı gibi değil, o alanda uzman bir bilirkişi gibi konuş. "Harika", "muhteşem" gibi boş kelimeler yerine "yüksek performanslı", "dayanıklı yapı", "profesyonel çözüm" gibi somut ifadeler kullan.
+    3. EYLEM ÇAĞRISI: Metnin sonunda samimi ama ikna edici bir neden sun.
+    4. KISITLAMA: Metin 45-60 kelime arası, tek paragraf ve akıcı olmalı. Emocileri (2-4 adet) stratejik kullan.
 
-SADECE JSON:
-{"title":"","brand":"","category":"","oldPrice":0,"newPrice":0,"discountPercent":0,"imageUrl":"","description":""}`;
+    İÇERİK DOĞRULAMA KURALI: 
+    Eğer içerikte "captcha", "robot", "access denied", "site error" gibi hata mesajları görüyorsan veya içerik çok boşsa KESİNLİKLE uydurma veri üretme! Bu durumda SADECE şunu döndür: {"error": "INVALID_CONTENT"}
 
+    JSON YAPISI:
+    - title: Ürünün TAM ve resmi adı (gereksiz kampanya kodları hariç)
+    - brand: Kesin marka adı
+    - category: Listedeki en uygun kategori (Teknoloji, Giyim, Ev, Kozmetik, Anne/Bebek, Spor, Pet vb.)
+    - oldPrice: Tespit edilen piyasa fiyatı (Sadece sayı)
+    - newPrice: Güncel kampanya fiyatı (Sadece sayı)
+    - discountPercent: Hesaplanan indirim (Sadece sayı)
+    - description: Yukarıdaki uzman kurallarına göre yazılmış 45-60 kelimelik analiz metni.
+    
+    YALNIZCA JSON DÖNDÜR (Açıklama profesyonel ve teknik bir inceleme olmalıdır, pazarlama sloganlarından kaçın):
+    {"title":"","brand":"","category":"","oldPrice":0,"newPrice":0,"discountPercent":0,"imageUrl":"","description":"Örn: Bu ürün, 4mm döküm gövde yapısı ve PFOA içermeyen yapışmaz kaplamasıyla segmentindeki en dayanıklı mutfak gereçlerinden biridir. Isı iletkenliği konusundaki başarısı pişirme verimliliğini artırırken, ergonomik kulp tasarımı uzun süreli kullanım konforu sağlar. Teknik özellikleri ve güncel indirim oranıyla yüksek yatırım değeri sunan bir fırsattır."}`;
 
     let text = '';
 
-    if (GROQ_API_KEY) {
+    if (OPENROUTER_API_KEY) {
         try {
-            const response = await fetch(GROQ_API_URL, {
+            const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${GROQ_API_KEY}`
+                    'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+                    'HTTP-Referer': 'https://indiva-panel.vercel.app', // Optional for OpenRouter
+                    'X-Title': 'Indiva Panel'
                 },
                 body: JSON.stringify({
-                    model: GROQ_MODEL,
+                    model: 'google/gemini-2.5-flash',
                     messages: [{ role: 'user', content: prompt }],
-                    temperature: 0.7,
-                    max_tokens: 1000
+                    temperature: 0.2, // Still deterministic
+                    response_format: { type: "json_object" } // OpenRouter JSON mode
                 })
             });
 
@@ -304,30 +226,7 @@ SADECE JSON:
                 text = data.choices?.[0]?.message?.content || '';
             }
         } catch (err) {
-            console.warn('Groq hatası:', err);
-        }
-    }
-
-    if (!text && GEMINI_API_KEY) {
-        try {
-            const response = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text: prompt }] }],
-                        generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
-                    })
-                }
-            );
-
-            if (response.ok) {
-                const data = await response.json();
-                text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-            }
-        } catch (err) {
-            console.warn('Gemini hatası:', err);
+            console.warn('OpenRouter/Gemini 2.5 hatası:', err);
         }
     }
 
@@ -342,6 +241,10 @@ SADECE JSON:
     if (jsonMatch) jsonStr = jsonMatch[0];
 
     const parsed = JSON.parse(jsonStr.trim());
+
+    if (parsed.error === 'INVALID_CONTENT') {
+        throw new Error('Ürün içeriği analiz edilemedi (AI reddetti).');
+    }
 
     // Fiyatları parse et
     const newPrice = parseFloat(String(parsed.newPrice).replace(/[^\d.]/g, '')) || 0;
@@ -385,14 +288,20 @@ export async function analyzeProductLink(link: string): Promise<AnalyzedProduct>
 
     console.log(`🏪 Mağaza tespiti: ${storeName} (link: ${link.substring(0, 50)}...)`);
 
-    // 1. Paralel olarak hem Jina (AI için) hem de Vercel API (fiyat+görsel için) başlat
-    const [pageContent, vercelData] = await Promise.all([
-        fetchPageWithJina(link),
-        fetchProductDataFromVercel(link)
-    ]);
+    // 1. Önce Vercel üzerinden analiz et (URL çözmek ve temel verileri almak için)
+    const vercelData = await fetchProductDataFromVercel(link);
+    const resolvedUrl = (vercelData as any).url || link;
 
-    // 2. AI ile analiz et (açıklama ve kategori için)
-    const aiResult = await analyzeWithGroq(pageContent, link, storeName);
+    // 2. Çözülmüş URL ile Jina Reader'dan içerik çek
+    const pageContent = await fetchPageWithJina(resolvedUrl);
+
+    // İçerik çok kısaysa veya hata sayfasıysa dur
+    if (pageContent.length < 500) {
+        throw new Error('Ürün sayfası okunamadı. Lütfen direkt ürün linkini kullanmayı deneyin.');
+    }
+
+    // 3. AI ile analiz et
+    const aiResult = await analyzeWithGroq(pageContent, resolvedUrl, storeName);
 
     // 3. Fiyatları belirle - Vercel API öncelikli, sonra AI
     let finalNewPrice = vercelData.newPrice || aiResult.newPrice;

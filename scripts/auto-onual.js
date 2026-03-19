@@ -43,8 +43,7 @@ const REQUEST_DELAY_MS = 1000; // İstekler arası bekleme (ms)
 
 // AI Config
 const API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-// MiniMax M2.5 - Yüksek kaliteli ve yaratıcı e-ticaret açıklamaları için
-const MODEL = 'minimax/minimax-m2.5';
+const MODEL = 'google/gemini-2.5-flash';
 
 // Kategorileri tespit için anahtar kelimeler
 const CATEGORY_MAP = [
@@ -189,37 +188,36 @@ async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, me
         "Hediyelik": "Hediyelik Eşya"
     };
 
-    const systemInstruction = `Sen alanında uzman bir Teknik Ürün Analisti ve Veri Odaklı Alışveriş Rehberisin. Görevin, sıradan reklam cümlelerinden kaçınarak, kullanıcıya ürün hakkında gerçek, teknik ve faydalı bilgiler sunmaktır.
+    const systemInstruction = `Sen INDIVA uygulamasının kıdemli Teknik Ürün Analisti ve e-ticaret metin yazarı uzmanısın. 
+    Görevin, paylaşılan ürün fırsatlarını derinlemesine analiz ederek kullanıcılar için "profesyonel bir inceleme ve teknik analiz" hazırlamaktır.
 
-KESİNLİKLE YASAKLI KELİMELER VE KALIPLAR (Kullanırsan sistem hata verir):
-- "Modern çizgileri", "kullanıcı dostu", "harika bir deneyim", "estetik tasarım", "beklentilerin ötesinde", "hayatınızı kolaylaştıracak", "bir parça", "şık görünüm", "performans vaad ediyor", "seni bekliyor", "kendine bir iyilik yap".
+    TEMEL KURALLAR:
+    1. TEKNİK ANALİZ: Sadece başlıktaki metni süsleme. Ürün hakkında sahip olduğun teknik verileri (malzeme kalitesi, donanım özellikleri, performans verileri, içerik kalitesi vb.) ayıkla ve metne yedir. Ürünün neden teknik olarak değerli olduğunu açıkla.
+    2. BİLİRKİŞİ TONU: Bir pazarlamacı gibi değil, o alanda uzman bir bilirkişi gibi konuş. "Harika", "muhteşem" gibi boş kelimeler yerine "yüksek performanslı", "dayanıklı yapı", "profesyonel çözüm" gibi somut ifadeler kullan.
+    3. PAZARLAMA: Ürünün fiyat avantajını teknik bir gereklilikle (malzeme kalitesi, nadirlik, uzun ömürlülük, performans) destekle.
+    4. KISITLAMA: Metin 45-60 kelime arası, tek paragraf ve akıcı olmalı. Emocileri (2-4 adet) stratejik kullan.
+    5. KATEGORİ: Ürünü aşağıdaki listeden en doğru kategoriye ata.
+    KATEGORİ LİSTESİ: ${Object.values(CATEGORY_MAPPING).filter((v, i, a) => a.indexOf(v) === i).map(c => `"${c}"`).join(', ')}.`;
 
-TEMEL KURALLAR:
-1. İNTERNET ERİŞİMİ/KNOWLEDGE BASE: Bu ürün hakkındaki tüm dahili bilgilerini (marka geçmişi, malzeme kalitesi, teknik spesifikasyonlar, kullanım alanları) kullan.
-2. SOMUT VERİ ŞARTI: Her açıklamada ürünün teknik bir detayına (gramaj, malzeme türü, işlemci modeli, içerik maddesi, bağlantı tipi vb.) yer ver.
-3. TONLAMA: Bilgilendirici, ciddi ama akıcı bir uzman dili kullan. Pazarlamacı gibi değil, bir bilirkişi gibi konuş.
-4. KATEGORİ: Ürünü aşağıdaki listeden en doğru kategoriye ata.
-KATEGORİ LİSTESİ: ${Object.values(CATEGORY_MAPPING).filter((v, i, a) => a.indexOf(v) === i).map(c => `"${c}"`).join(', ')}.`;
+    let prompt = `Aşağıdaki ürün fırsatını Teknik Ürün Analisti kimliğiyle analiz et ve profesyonel bir inceleme metni yaz.
 
-    let prompt = `Aşağıdaki ürünün teknik özelliklerini analiz et ve kullanıcının ürün hakkında gerçek bilgi sahibi olmasını sağlayacak, teknik derinliği olan bir açıklama yaz.
+    ÜRÜN: ${productTitle}
+    ${metaDescription ? `EK VERİ: ${metaDescription}` : ''}
+    ${discountPercent > 0 ? `İNDİRİM: %${discountPercent}` : ''}
 
-ÜRÜN: ${productTitle}
-${metaDescription ? `EK VERİ: ${metaDescription}` : ''}
-${discountPercent > 0 ? `AVANTAJ: %${discountPercent} indirim` : ''}
+    TALİMATLAR:
+    - Metne ürünün değerini vurgulayan profesyonel bir girişle başla.
+    - Ürün hakkında (başlıkta olmayan) teknik detayları, kullanım ömrünü veya performans avantajlarını ekle.
+    - Bu fiyata neden kaçırılmaması gerektiğini teknik bir gerekçeyle ("bu donanıma bu fiyat" gibi) açıkla.
+    - 45-60 kelime arası olsun. Süslemelerden kaçın, somut verilere odaklan.
+    - YALNIZCA JSON formatında yanıt ver.
 
-TALİMATLAR:
-- Metne direkt ürünün teknik bir özelliği veya markanın uzmanlık alanıyla başla.
-- Ürün başlığında yazmayan ama bu modelin/ürünün sahip olduğu en az 2 gerçek teknik bilgiyi (Örn: Köpek mamasıysa protein kaynağı/oranı, teknolojik ürünse panel tipi veya batarya detayı) ekle.
-- "Neden bu fiyata değer?" sorusunu teknik bir avantajla açıkla.
-- 50-70 kelime arası, tek paragraf olsun.
-- Sadece somut gerçeklere odaklan, boş övgü yapma.
-
-JSON FORMATI:
-{
-  "category": "Kategori",
-  "aiFomoScore": 9,
-  "description": "Teknik olarak doyurucu ve bilgilendirici metin..."
-}`;
+    JSON FORMATI:
+    {
+      "category": "Kategori",
+      "aiFomoScore": 9,
+      "description": "Örn: Thermoad Zest tava seti, 4mm kalınlığında döküm gövdesi ve yüksek ısılara dayanıklı iç kaplamasıyla profesyonel mutfak performansı sunuyor. Isı dağılımı konusundaki homojen yapısı sayesinde enerji tasarrufu sağlarken, siyah granit kaplaması yapışmazlık ömrünü uzatıyor. Bu fiyat bandındaki rakiplerine göre malzeme kalitesiyle öne çıkan, uzun ömürlü bir mutfak yatırımı."
+    }`;
 
     try {
         const modelsToTry = [
@@ -357,7 +355,7 @@ Lütfen sadece bir JSON array'i döndür. Array içinde string'ler olsun. Örnek
                 'X-Title': 'INDIVA Admin Panel'
             },
             body: JSON.stringify({
-                model: 'google/gemini-2.5-flash',
+                model: 'google/gemini-2.5-flash-lite',
                 messages: [{ role: 'user', content: prompt }]
             }),
             signal: AbortSignal.timeout(10000)
@@ -388,11 +386,10 @@ Lütfen sadece bir JSON array'i döndür. Array içinde string'ler olsun. Örnek
  */
 function generateFallbackDescription(productTitle, discountPercent) {
     const templates = [
-        `İnanılmaz bir fırsat! ${productTitle} şimdi stoklarda ve fiyatı gerçekten şaka gibi. Kalitesini anlatmaya gerek yok, kullananlar bilir. ${discountPercent > 0 ? `%${discountPercent} indirimle` : 'Bu fiyata'} kaçırılmayacak bir parça. Hemen incele ve tükenmeden kap! 🔥`,
-        `Fırsat avcıları buraya! ${productTitle} için beklenen indirim nihayet geldi. Hem kullanışlı hem de çok kaliteli bu ürünü bu fiyata bulmak imkansız. Bizden söylemesi, bu ürün çok hızlı tükenir. Şimdiden iyi alışverişler! ✨`,
-        `Koleksiyonun eksik parçası burada: ${productTitle}! Hem performansı hem de duruşuyla herkesin dilinde olan bu ürün şimdi kaçmaz bir fiyata düştü. Kendine bir iyilik yap ve bu fırsatı sakın atlama. Çabuk olan alır! 🚀`,
-        `Biri indirim mi dedi? ${productTitle} fiyatı düştü ve biz şoktayız! Her eve lazım olan bu kaliteyi bu fiyata yakalamışken stoklamak lazım. Sepete ekle ve bu keyfin tadını çıkar, pişman olmayacaksın. ✅`,
-        `İşte o efsane ürün: ${productTitle}! Uzun zamandır radarımızdaydı ve beklediğimiz o büyük fırsat geldi. Kaliteyi uygun fiyata almak isteyenler için tam bir altın değerinde. Stoklar sınırlı, elini çabuk tut! ⚡`
+        `Teknik İnceleme: ${productTitle}, malzeme kalitesi ve segmentindeki performansıyla dikkat çekiyor. ${discountPercent > 0 ? `%${discountPercent} indirim avantajı` : 'Fiyat/performans dengesi'} ile profesyonel bir tercih olan bu ürünü, dayanıklılık ve uzun ömür kriterleri açısından teknik olarak öneriyoruz. Detaylar için inceleyin. ✅`,
+        `Ürün Analizi: ${productTitle} için beklenen fiyat revizyonu gerçekleşti. Mühendislik detayları ve kullanım ergonomisi göz önüne alındığında, bu fiyat bandında nadir görülen bir fırsat sunuyor. Satın alma öncesi teknik detayları sayfadan kontrol edebilirsiniz. 🚀`,
+        `Kısa Özet: ${productTitle}, yüksek standartlarda üretilmiş olup, profesyonel kullanım ihtiyaçlarını karşılayacak donanıma sahiptir. Güncel fiyatı, piyasa ortalamasına göre ciddi bir avantaj sunmaktadır. Yatırım değeri yüksek olan bu fırsatı tükenmeden değerlendirin. ✨`,
+        `Uzman Görüşü: ${productTitle} fiyat/özellik grafiğinde en tepe noktada yer alıyor. Hem yapısal sağlamlığı hem de sunduğu fonksiyonel avantajlarla, bilinçli tüketiciler için kaçırılmayacak bir teknik fırsat. Stok durumunu kontrol etmeyi unutmayın. ⚡`
     ];
 
     const hash = productTitle.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);

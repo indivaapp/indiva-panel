@@ -7,9 +7,12 @@ import {
     getAdRequests,
     getPendingAffiliateCount,
 } from '../services/firebase';
+import { analyzeProductLink, isValidProductLink } from '../services/linkAnalyzer';
+import type { ScrapedDeal } from '../services/dealFinder';
 
 interface DashboardProps {
     setActiveView: (view: ViewType) => void;
+    setSelectedDeal: (deal: ScrapedDeal) => void;
     isAdmin: boolean;
 }
 
@@ -77,7 +80,7 @@ const QuickAction: React.FC<{
     </button>
 );
 
-const Dashboard: React.FC<DashboardProps> = ({ setActiveView }) => {
+const Dashboard: React.FC<DashboardProps> = ({ setActiveView, setSelectedDeal }) => {
     const [stats, setStats] = useState<Stats>({
         totalDiscounts: 0,
         pendingAffiliate: 0,
@@ -91,6 +94,78 @@ const Dashboard: React.FC<DashboardProps> = ({ setActiveView }) => {
     const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
     const [pipelineStatus, setPipelineStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
     const [pipelineMessage, setPipelineMessage] = useState('');
+
+    // Link Analizi State
+    const [analysisLink, setAnalysisLink] = useState('');
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+    // Link Analizi İşlemi
+    const handleAnalyzeLink = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!isValidProductLink(analysisLink)) {
+            setPipelineStatus('error');
+            setPipelineMessage('Lütfen geçerli bir ürün linki girin.');
+            setTimeout(() => { setPipelineStatus('idle'); setPipelineMessage(''); }, 3000);
+            return;
+        }
+
+        setIsAnalyzing(true);
+        setPipelineStatus('loading');
+        setPipelineMessage('Link analiz ediliyor, lütfen bekleyin...');
+
+        try {
+            const product = await analyzeProductLink(analysisLink);
+            
+            // ScrapedDeal formatına çevir
+            const deal: ScrapedDeal = {
+                id: `manual_${Date.now()}`,
+                title: product.title,
+                price: product.newPrice,
+                source: 'other',
+                onualLink: product.link,
+                productLink: product.link,
+                imageUrl: product.imageUrl,
+                scrapedAt: new Date(),
+                // AnalyzedProduct'tan gelen ek verileri description'a ekle (çünkü EditDealPage oradan okuyor)
+                couponCode: '', 
+            };
+
+            // Store tespiti
+            const storeLower = product.store.toLowerCase();
+            if (storeLower.includes('trendyol')) deal.source = 'trendyol';
+            else if (storeLower.includes('hepsiburada')) deal.source = 'hepsiburada';
+            else if (storeLower.includes('amazon')) deal.source = 'amazon';
+            else if (storeLower.includes('n11')) deal.source = 'n11';
+            else deal.source = 'other';
+
+            // EditDealPage'e description hazırlama (AI'nın ürettiği metni oraya aktar)
+            // EditDealPage deal.couponCode varsa onu description'a koyuyor, ama biz direkt description'ı da etkileyebiliriz
+            // Aslında EditDealPage'i biraz modifiye etmemiz gerekebilir ki bu description'ı direkt alsın.
+            // Ama şimdilik deal nesnesini setSelectedDeal ile gönderiyoruz.
+            
+            // @ts-ignore
+            deal.aiDescription = product.description;
+            // @ts-ignore
+            deal.brandName = product.brand;
+            // @ts-ignore
+            deal.categoryName = product.category;
+            // @ts-ignore
+            deal.oldPriceValue = product.oldPrice;
+
+            setSelectedDeal(deal);
+            setActiveView('editDeal');
+            
+            setPipelineStatus('idle');
+            setPipelineMessage('');
+            setAnalysisLink('');
+        } catch (err: any) {
+            setPipelineStatus('error');
+            setPipelineMessage('Analiz hatası: ' + (err.message || 'Bilinmeyen bir hata oluştu'));
+            setTimeout(() => { setPipelineStatus('idle'); setPipelineMessage(''); }, 5000);
+        } finally {
+            setIsAnalyzing(false);
+        }
+    };
 
     // OnuAl Pipeline'ı tetikle (GitHub Actions workflow_dispatch)
     const triggerOnualPipeline = async () => {
@@ -270,6 +345,44 @@ const Dashboard: React.FC<DashboardProps> = ({ setActiveView }) => {
                     </div>
                 </button>
             )}
+
+            {/* AI Link Analysis Card */}
+            <div className="bg-gray-800 border-2 border-blue-500/30 rounded-2xl p-5 shadow-xl">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center text-xl">
+                        ✨
+                    </div>
+                    <div>
+                        <h3 className="text-white font-bold">Yapay Zeka Link Analizi</h3>
+                        <p className="text-gray-400 text-xs mt-0.5">Linki yapıştırın, AI her şeyi hazırlasın!</p>
+                    </div>
+                </div>
+                
+                <form onSubmit={handleAnalyzeLink} className="flex gap-2">
+                    <input
+                        type="url"
+                        value={analysisLink}
+                        onChange={(e) => setAnalysisLink(e.target.value)}
+                        placeholder="Ürün linkini buraya yapıştırın (Trendyol, Amazon, Hepsiburada vb.)"
+                        className="flex-1 bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-gray-600"
+                        disabled={isAnalyzing}
+                    />
+                    <button
+                        type="submit"
+                        disabled={isAnalyzing || !analysisLink}
+                        className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold px-6 py-3 rounded-xl transition-all flex items-center gap-2 whitespace-nowrap shadow-lg shadow-blue-900/20"
+                    >
+                        {isAnalyzing ? (
+                            <>
+                                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                                Analiz Ediliyor...
+                            </>
+                        ) : (
+                            <>Analiz Et</>
+                        )}
+                    </button>
+                </form>
+            </div>
 
             {/* Pipeline Status Toast */}
             {pipelineMessage && (

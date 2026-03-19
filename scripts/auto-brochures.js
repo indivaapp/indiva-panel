@@ -29,7 +29,7 @@ if (fs.existsSync(envPath)) {
 }
 
 const AI_API_KEY = process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY;
-const MODEL = 'google/gemini-3-flash-preview';
+const MODEL = 'google/gemini-2.5-flash';
 
 // ─── Firebase ────────────────────────────────────────────────────────────────
 function initFirebase() {

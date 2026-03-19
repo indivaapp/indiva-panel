@@ -149,8 +149,60 @@ const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose
                         </div>
 
                         <div>
-                            <label className="block text-sm text-gray-400 mb-1">Açıklama</label>
-                            <textarea name="description" value={formData.description || ''} onChange={handleChange} className="w-full p-3 bg-gray-700 rounded-md border border-gray-600 text-white" rows={3}></textarea>
+                            <div className="flex justify-between items-end mb-1">
+                                <label className="block text-sm text-gray-400 font-medium">Açıklama</label>
+                                <button 
+                                    type="button" 
+                                    onClick={async () => {
+                                        if (!formData.title) {
+                                            setError('Açıklama yazılabilmesi için ürün başlığı gereklidir.');
+                                            return;
+                                        }
+                                        const btn = document.getElementById('edit-ai-btn');
+                                        if(btn) btn.innerText = 'Yazılıyor...';
+                                        try {
+                                            const prompt = `Teknik Ürün Analisti kimliğiyle, şu ürün için 45-60 kelimelik, donanım/teknik özellik odaklı, profesyonel bir inceleme metni yaz. Ürünün değerini teknik verilerle açıkla.
+                                            Format: "AÇIKLAMA: [metin] | KATEGORİ: [kategori]". 
+                                            Ürün: ${formData.title}`;
+                                            
+                                            const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                                                method: 'POST',
+                                                headers: {
+                                                    'Content-Type': 'application/json',
+                                                    'Authorization': `Bearer ${(import.meta as any).env.VITE_OPENROUTER_API_KEY}`
+                                                },
+                                                body: JSON.stringify({
+                                                    model: 'google/gemini-2.5-flash',
+                                                    messages: [{ role: 'user', content: prompt }]
+                                                })
+                                            });
+
+                                            if (!response.ok) throw new Error('API Hatası');
+                                            const result = await response.json();
+                                            const text = result.choices[0].message.content;
+                                            
+                                            if (text.includes('| KATEGORİ:')) {
+                                                const parts = text.split('| KATEGORİ:');
+                                                let aiDesc = parts[0].replace('AÇIKLAMA:', '').trim().replace(/\*\*/g, '');
+                                                let aiCat = parts[1].trim();
+                                                setFormData(prev => ({ ...prev, description: aiDesc, category: aiCat }));
+                                            } else {
+                                                setFormData(prev => ({ ...prev, description: text.replace(/\*\*/g, '') }));
+                                            }
+                                        } catch (err) {
+                                            console.error(err);
+                                            setError('AI şu an yanıt veremiyor.');
+                                        } finally {
+                                            if(btn) btn.innerText = '✨ AI ile Yaz';
+                                        }
+                                    }}
+                                    id="edit-ai-btn"
+                                    className="text-[10px] bg-purple-600 hover:bg-purple-500 text-white py-0.5 px-2 rounded transition-colors font-bold"
+                                >
+                                    ✨ AI ile Yaz
+                                </button>
+                            </div>
+                            <textarea name="description" value={formData.description || ''} onChange={handleChange} className="w-full p-3 bg-gray-700 rounded-md border border-gray-600 text-white border-l-4 border-l-purple-500" rows={3}></textarea>
                         </div>
 
                         <div>

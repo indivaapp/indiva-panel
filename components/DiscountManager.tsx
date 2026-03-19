@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { addDiscount } from '../services/firebase';
 import { uploadToImgbb } from '../services/imgbb';
+import { analyzeProductLink } from '../services/linkAnalyzer';
 import type { ViewType } from '../types';
 
 interface DiscountManagerProps {
@@ -221,7 +222,9 @@ const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmi
                                     const btn = document.getElementById('ai-btn');
                                     if(btn) btn.innerText = 'Düşünüyor...';
                                     try {
-                                        const prompt = `Şu ürün için e-ticaret uygulamama eğlenceli, dikkat çekici, aciliyet (FOMO) hissi veren ve emojiler içeren kısa bir pazarlama açıklaması (maksimum 2 cümle) yaz. Ayrıca bu ürünün hangi kategoriye ait olduğunu da bana İngilizce anahtar kelime olmadan, sadece şu Türkçe kategorilerden birini seçerek ver: Teknoloji, Giyim & Ayakkabı, Ev, Yaşam & Mutfak, Kozmetik & Kişisel Bakım, Süpermarket, Anne & Bebek, Mobilya, Kitap & Kırtasiye, Spor & Outdoor, Takı & Aksesuar, Otomotiv & Motosiklet, Pet Shop, Bahçe & Yapı Market, Oyuncak & Hobi, Sağlık & Medikal, Çanta & Valiz, Saat & Gözlük, Elektronik Aksesuar, Ofis & İş Dünyası, Hediyelik Eşya. Lütfen çıktıyı tam olarak şu formatta ver: "AÇIKLAMA: [senin yazdığın metin] | KATEGORİ: [seçilen kategori]". Ürün: ${title}`;
+                                        const prompt = `Şu ürün için Teknik Ürün Analisti kimliğiyle, 45-60 kelimelik, teknik detaylara (malzeme, performans, donanım) odaklanan, ikna edici ve profesyonel bir pazarlama metni yaz. Ürünün neden fırsat olduğunu teknik bir dille açıkla. Ayrıca şu kategorilerden birini seç: Teknoloji, Giyim & Ayakkabı, Ev, Yaşam & Mutfak, Kozmetik & Kişisel Bakım, Süpermarket, Anne & Bebek, Mobilya, Kitap & Kırtasiye, Spor & Outdoor, Takı & Aksesuar, Otomotiv & Motosiklet, Pet Shop, Bahçe & Yapı Market, Oyuncak & Hobi, Sağlık & Medikal, Çanta & Valiz, Saat & Gözlük, Elektronik Aksesuar, Ofis & İş Dünyası.
+                                        Format: "AÇIKLAMA: [metin] | KATEGORİ: [kategori]". 
+                                        Ürün: ${title}`;
                                         
                                         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
                                             method: 'POST',
@@ -239,29 +242,27 @@ const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmi
                                         const result = await response.json();
                                         const text = result.choices[0].message.content;
                                         
-                                        // AÇIKLAMA: bla bla | KATEGORİ: Teknoloji
                                         if (text.includes('| KATEGORİ:')) {
                                             const parts = text.split('| KATEGORİ:');
                                             let aiDesc = parts[0].replace('AÇIKLAMA:', '').trim();
                                             let aiCat = parts[1].trim();
-                                            // clean up formatting artifacts if any
                                             aiDesc = aiDesc.replace(/\*\*/g, '');
                                             setDescription(aiDesc);
                                             setCategory(aiCat);
                                         } else {
-                                            setDescription(text);
+                                            setDescription(text.replace(/\*\*/g, ''));
                                         }
                                     } catch (err) {
                                         console.error(err);
                                         setError('Yapay zeka asistanı şu an yanıt veremiyor.');
                                     } finally {
-                                        if(btn) btn.innerText = '✨ AI ile Doldur';
+                                        if(btn) btn.innerText = '✨ AI ile Yaz';
                                     }
                                 }}
                                 id="ai-btn"
                                 className="text-xs bg-purple-600 hover:bg-purple-500 text-white py-1 px-3 rounded-md transition-colors font-bold flex items-center gap-1"
                             >
-                                ✨ AI ile Doldur
+                                ✨ AI ile Yaz
                             </button>
                         </div>
                         <textarea placeholder="Ürün hakkında kısa bilgi..." value={description} onChange={e => setDescription(e.target.value)} className="w-full p-3 bg-gray-700 rounded-lg border border-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all border-l-4 border-l-purple-500" rows={3}></textarea>
@@ -295,8 +296,46 @@ const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmi
                     </div>
 
                     <div>
-                        <label className="block text-sm text-gray-400 mb-1 font-medium">Ürün Linki (Opsiyonel)</label>
-                        <input type="url" placeholder="https://..." value={link} onChange={e => setLink(e.target.value)} className="w-full p-3 bg-gray-700 rounded-lg border border-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" />
+                        <div className="flex justify-between items-end mb-1">
+                            <label className="block text-sm text-gray-400 font-medium">Ürün Linki</label>
+                            <button 
+                                type="button" 
+                                onClick={async () => {
+                                    if (!link) {
+                                        setError('Analiz için önce geçerli bir Ürün Linki girmelisiniz.');
+                                        return;
+                                    }
+                                    const btn = document.getElementById('analyze-btn');
+                                    if(btn) btn.innerText = 'Analiz Ediliyor...';
+                                    setIsLoading(true);
+                                    try {
+                                        const analyzed = await analyzeProductLink(link);
+                                        if (analyzed.error) throw new Error(analyzed.error);
+                                        
+                                        setTitle(analyzed.title);
+                                        setBrand(analyzed.brand);
+                                        setCategory(analyzed.category);
+                                        setDescription(analyzed.description);
+                                        if (analyzed.oldPrice) setOldPrice(analyzed.oldPrice.toString());
+                                        if (analyzed.newPrice) setNewPrice(analyzed.newPrice.toString());
+                                        if (analyzed.imageUrl) setUploadedImageUrl(analyzed.imageUrl);
+                                        
+                                        setSuccess('Ürün başarıyla analiz edildi ve form dolduruldu!');
+                                    } catch (err) {
+                                        console.error(err);
+                                        setError('Link analiz edilemedi. Lütfen manuel girin veya başka bir link deneyin.');
+                                    } finally {
+                                        if(btn) btn.innerText = '🤖 Link ile Analiz Et';
+                                        setIsLoading(false);
+                                    }
+                                }}
+                                id="analyze-btn"
+                                className="text-xs bg-blue-600 hover:bg-blue-500 text-white py-1 px-3 rounded-md transition-colors font-bold"
+                            >
+                                🤖 Link ile Analiz Et
+                            </button>
+                        </div>
+                        <input type="url" placeholder="https://..." value={link} onChange={e => setLink(e.target.value)} className="w-full p-3 bg-gray-700 rounded-lg border border-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all border-l-4 border-l-blue-500" />
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

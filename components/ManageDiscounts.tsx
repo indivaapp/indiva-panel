@@ -6,6 +6,65 @@ import EditDiscountModal from './EditDiscountModal';
 import DeleteImgButton from './DeleteImgButton';
 import { useToast } from './ToastProvider';
 
+// Geri sayım bileşeni
+const CountdownTimer: React.FC<{ expiredAt: any }> = ({ expiredAt }) => {
+    const [timeLeft, setTimeLeft] = useState<string>('');
+
+    useEffect(() => {
+        const calculateTime = () => {
+            if (!expiredAt) return '00:00';
+            
+            const expiredDate = expiredAt.toDate ? expiredAt.toDate() : new Date(expiredAt);
+            const deleteDate = new Date(expiredDate.getTime() + 60 * 60 * 1000); // 1 saat sonra silinecek
+            
+            const diff = deleteDate.getTime() - Date.now();
+            if (diff <= 0) return 'Siliniyor...';
+            
+            const minutes = Math.floor(diff / 1000 / 60);
+            const seconds = Math.floor((diff / 1000) % 60);
+            return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        };
+
+        const timer = setInterval(() => {
+            setTimeLeft(calculateTime());
+        }, 1000);
+
+        setTimeLeft(calculateTime());
+        return () => clearInterval(timer);
+    }, [expiredAt]);
+
+    return <span className="font-mono text-xs font-bold text-red-400 bg-red-900/30 px-2 py-0.5 rounded border border-red-500/50">{timeLeft}</span>;
+};
+
+// 24 Saatlik yayın süresi rozeti
+const ExpiryBadge: React.FC<{ createdAt: any }> = ({ createdAt }) => {
+    const [status, setStatus] = useState<{ label: string, color: string }>({ label: '', color: '' });
+
+    useEffect(() => {
+        const updateStatus = () => {
+            if (!createdAt) return;
+            const createdDate = createdAt.toDate ? createdAt.toDate() : new Date(createdAt);
+            const hoursPassed = (Date.now() - createdDate.getTime()) / (1000 * 60 * 60);
+            const hoursLeft = Math.max(0, 24 - hoursPassed);
+
+            if (hoursLeft <= 3) {
+                setStatus({ label: `${hoursLeft.toFixed(1)}s kaldı`, color: 'bg-red-600' });
+            } else if (hoursLeft <= 12) {
+                setStatus({ label: `${hoursLeft.toFixed(0)}s kaldı`, color: 'bg-orange-600' });
+            } else {
+                setStatus({ label: `${hoursLeft.toFixed(0)}s`, color: 'bg-blue-600/50' });
+            }
+        };
+
+        updateStatus();
+        const interval = setInterval(updateStatus, 60000); // Dakikada bir güncelle
+        return () => clearInterval(interval);
+    }, [createdAt]);
+
+    if (!status.label) return null;
+    return <span className={`px-2 py-0.5 text-[10px] font-bold rounded text-white ${status.color}`} title="24 saatlik otomatik yayın süresi">{status.label}</span>;
+};
+
 interface ManageDiscountsProps {
     setActiveView: (view: ViewType) => void;
     isAdmin: boolean;
@@ -293,9 +352,15 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
                                         <td className="px-6 py-4 whitespace-nowrap">
                                             <div className="flex items-center flex-wrap gap-1">
                                                 <div className="text-sm font-medium text-white">{discount.title}</div>
+                                                <ExpiryBadge createdAt={discount.createdAt} />
                                                 {discount.isAd && <span className="px-2 py-0.5 text-xs bg-yellow-600 text-black font-bold rounded">REKLAM</span>}
                                                 {discount.affiliateLinkUpdated === false && <span className="px-2 py-0.5 text-xs bg-orange-600 text-white font-bold rounded">AFF. BEKL.</span>}
-                                                {discount.status === 'İndirim Bitti' && <span className="px-2 py-0.5 text-xs bg-red-600 text-white font-bold rounded">İNDİRİM BİTTİ</span>}
+                                                {discount.status === 'İndirim Bitti' && (
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="px-2 py-0.5 text-xs bg-red-600 text-white font-bold rounded">İNDİRİM BİTTİ</span>
+                                                        <CountdownTimer expiredAt={discount.expiredAt} />
+                                                    </div>
+                                                )}
                                             </div>
                                             <div className="text-sm text-gray-400">{discount.brand}</div>
                                             {discount.screenshotUrl && <div className="text-xs text-green-500 mt-1">Kanıtlı İlan</div>}
@@ -337,11 +402,22 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
                                 <div className="flex-1 flex flex-col justify-between">
                                     <div>
                                         <div className="flex items-start justify-between flex-wrap gap-1">
-                                            <p className="font-bold text-white leading-tight">{discount.title}</p>
-                                            <div className="flex gap-1 flex-wrap">
+                                            <div className="flex flex-col gap-1">
+                                                <p className="font-bold text-white leading-tight">{discount.title}</p>
+                                                <div className="flex gap-2 items-center">
+                                                    <ExpiryBadge createdAt={discount.createdAt} />
+                                                    {discount.screenshotUrl && <p className="text-[10px] text-green-500 italic">✔ Kanıtlı</p>}
+                                                </div>
+                                            </div>
+                                            <div className="flex gap-1 flex-wrap items-center">
                                                 {discount.isAd && <span className="px-2 py-0.5 text-xs bg-yellow-600 text-black font-bold rounded">REKLAM</span>}
                                                 {discount.affiliateLinkUpdated === false && <span className="px-2 py-0.5 text-xs bg-orange-600 text-white font-bold rounded">AFF.</span>}
-                                                {discount.status === 'İndirim Bitti' && <span className="px-2 py-0.5 text-xs bg-red-600 text-white font-bold rounded">BİTTİ</span>}
+                                                {discount.status === 'İndirim Bitti' && (
+                                                    <>
+                                                        <span className="px-2 py-0.5 text-xs bg-red-600 text-white font-bold rounded">BİTTİ</span>
+                                                        <CountdownTimer expiredAt={discount.expiredAt} />
+                                                    </>
+                                                )}
                                             </div>
                                         </div>
                                         <p className="text-sm text-gray-400">{discount.brand}</p>

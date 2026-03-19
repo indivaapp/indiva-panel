@@ -145,7 +145,30 @@ function cleanTitle(title: string): string {
 }
 
 /**
- * Fetch with timeout, retry logic and enhanced headers to bypass bot detection
+ * Resolve short links to final URL
+ */
+async function resolveUrl(url: string): Promise<string> {
+    if (!url.includes('ty.gl') && !url.includes('amzn.to') && !url.includes('hb.biz') && !url.includes('onu.al')) {
+        return url;
+    }
+
+    console.log(`Resolving short link: ${url}`);
+    try {
+        const response = await fetch(url, {
+            method: 'HEAD',
+            redirect: 'follow',
+            headers: generateHeaders()
+        });
+        console.log(`Resolved to: ${response.url}`);
+        return response.url;
+    } catch (e) {
+        console.warn('Resolution failed, using original URL:', e);
+        return url;
+    }
+}
+
+/**
+ * Fetch with timeout...
  */
 async function fetchWithTimeout(url: string, timeout = 25000, retryCount = 0): Promise<string> {
     const maxRetries = 2;
@@ -521,12 +544,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 brochureLinks,
                 images: uniqueImages,
             });
-        } else if (action === 'analyze' && url) {
             // Analyze product URL - extract price and image
-            const targetUrl = Array.isArray(url) ? url[0] : url;
+            let targetUrl = Array.isArray(url) ? url[0] : url;
             console.log(`Analyzing product URL: ${targetUrl}`);
 
+            // 1. Resolve short links
+            targetUrl = await resolveUrl(targetUrl);
+
             const html = await fetchWithTimeout(targetUrl);
+
+            // 2. Content validity check - prevent hallucination
+            if (html.length < 500 || html.includes('captcha') || html.includes('robot') || html.includes('forbidden')) {
+                res.status(400).json({
+                    success: false,
+                    error: 'Sayfa içeriğine erişilemedi veya site bot tespit etti.'
+                });
+                return;
+            }
+
             const $ = cheerio.load(html);
 
             let title = '';

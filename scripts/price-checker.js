@@ -82,22 +82,14 @@ async function fetchHtml(url, timeoutMs = 15000) {
 
 function parseTurkishPrice(text) {
     if (!text) return 0;
-    // Türk sitelerinde genellikle: 1.234,56 TL veya 1,234.56 (nadir)
-    // Temizlik: Sadece rakam, virgül ve nokta kalsın
     let cleaned = text.replace(/[^\d.,]/g, '').trim();
 
-    // Eğer hem nokta hem virgül varsa:
-    // "1.234,56" -> Nokta binlik, virgül ondalıktır.
     if (cleaned.includes('.') && cleaned.includes(',')) {
         cleaned = cleaned.replace(/\./g, '').replace(',', '.');
     }
-    // Sadece virgül varsa ve sonda ise (ondalık)
     else if (cleaned.includes(',') && cleaned.indexOf(',') > cleaned.length - 4) {
         cleaned = cleaned.replace(',', '.');
     }
-    // Sadece nokta varsa ve sonda değilse (binlik olabilir)
-    // Ama "12.50" gibi bir şeyse ondalıktır. 
-    // Kural: Son 3 karakterden önceyse binliktir.
     else if (cleaned.includes('.') && cleaned.indexOf('.') <= cleaned.length - 4) {
         cleaned = cleaned.replace(/\./g, '');
     }
@@ -170,11 +162,9 @@ function isOutOfStock($, html) {
     ];
     const lowerHtml = html.toLowerCase();
 
-    // Explicit keyword check
     const stockTextFound = stockKeywords.some(kw => lowerHtml.includes(kw));
     if (stockTextFound) return true;
 
-    // Check for "passive" buttons or specific disabled attributes
     const passiveSelectors = [
         '.add-to-basket-button.passive',
         '.buy-now.passive',
@@ -202,28 +192,34 @@ async function verifyWithAI(url, currentTitle, oldPrice, html) {
     try {
         const $ = cheerio.load(html);
         
-        // Gereksiz etiketleri temizle (token tasarrufu)
-        $('script, style, svg, path, footer, nav, header').remove();
+        // ── AGRESİF HTML TEMİZLİĞİ (Token tasarrufu & Gürültü engelleme) ──
+        $('script, style, svg, path, footer, nav, header, iframe, noscript, .ads, .comments, .related-products').remove();
         
-        // Sadece gövde metnini al ve temizle
+        // Sadece anahtar metinleri al (Fiyat, Stok, Başlık olabilecek yerler)
         let bodyText = $('body').text()
             .replace(/\s+/g, ' ')
-            .substring(0, 2000) // İlk 2000 karakter genellikle yeterlidir
+            .substring(0, 3000) // 3000 karakter genellikle tüm hayati bilgileri içerir
             .trim();
 
-        const prompt = `Aşağıdaki ürün sayfasından alınan metni analiz et. 
-Ürün: "${currentTitle}"
-Eski Fiyat: ${oldPrice} TL
+        const prompt = `Sen bir fiyat ve stok takip uzmanısın. Aşağıdaki ürün sayfası verisini analiz et.
+Ürün Başlığı: "${currentTitle}"
+Beklenen Fiyat: ${oldPrice} TL
 
-Sorular:
-1. Ürün stokta mı? (Sepete ekle butonu aktif mi, 'stokta yok' yazıyor mu?)
-2. Güncel fiyat nedir? (Eski fiyattan çok yüksek mi?)
+SORULAR:
+1. Ürün şu an stokta mı? (Satın al/Sepete ekle butonu aktif mi? 'Tükendi' yazısı var mı?)
+2. Ürünün şu anki net satış fiyatı nedir?
 
-Yanıtını SADECE aşağıdaki JSON formatında ver:
+KURALLAR:
+- SADECE aşağıdaki JSON formatında yanıt ver. 
+- Eğer fiyatı bulamazsan currentPrice: 0 yap.
+- Eğer ürün stokta yoksa expired: true yap.
+- Eğer fiyat beklenen fiyattan %10'dan fazla artmışsa expired: true yap.
+
+JSON FORMATI:
 {
-  "expired": true/false,
-  "currentPrice": 0,
-  "reason": "kısa açıklama (stok yok/fiyat arttı/fiyat aynı)"
+  "expired": boolean,
+  "currentPrice": number,
+  "reason": "kısa açıklama"
 }`;
 
         const res = await fetch(API_URL, {
@@ -232,33 +228,47 @@ Yanıtını SADECE aşağıdaki JSON formatında ver:
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${apiKey}`,
                 'HTTP-Referer': 'https://indiva.app',
-                'X-Title': 'INDIVA Price Checker'
+                'X-Title': 'INDIVA AI Price Checker'
             },
             body: JSON.stringify({
                 model: 'google/gemini-2.5-flash',
                 messages: [
-                    { role: 'system', content: 'Sen bir fiyat/stok kontrol uzmanısın. Sadece JSON formatında cevap verirsin.' },
-                    { role: 'user', content: `SAYFA METNİ:\n${bodyText}\n\n${prompt}` }
+                    { role: 'system', content: 'Sadece JSON formatında teknik veri sağlayan bir asistansın.' },
+                    { role: 'user', content: `SAYFA VERİSİ:\n${bodyText}\n\n${prompt}` }
                 ],
-                response_format: { type: 'json_object' }
+                response_format: { type: 'json_object' },
+                temperature: 0.1
             }),
-            signal: AbortSignal.timeout(25000)
+            signal: AbortSignal.timeout(20000)
         });
 
-        if (!res.ok) return { expired: false, reason: `AI Error: ${res.status}` };
+        if (!res.ok) {
+            const errText = await res.text();
+            console.warn(`      ⚠️ AI API Hatası (${res.status}): ${errText.substring(0, 50)}`);
+            return { expired: false, reason: `AI Error: ${res.status}` };
+        }
 
         const data = await res.json();
-        const aiResponse = JSON.parse(data.choices[0].message.content);
+        const content = data.choices?.[0]?.message?.content?.trim() || '{}';
         
-        // Eğer AI fiyatı bulmuşsa ama 'expired: false' demişse bile, 
-        // manuel kontrol %30 fazlaysa expired sayalım (Güvenlik)
+        let aiResponse;
+        try {
+            aiResponse = JSON.parse(content);
+        } catch (parseErr) {
+            const match = content.match(/\{[\s\S]*\}/);
+            if (match) aiResponse = JSON.parse(match[0]);
+            else throw new Error('Geçersiz JSON formatı');
+        }
+
+        // Güvenlik: Eğer AI fiyatı bulmuşsa ama 'expired: false' demişse bile, 
+        // manuel kontrol %30 fazlaysa expired sayalım (Hard-limit)
         if (!aiResponse.expired && aiResponse.currentPrice > oldPrice * 1.3) {
             return { expired: true, reason: 'Fiyat Çok Yüksek (AI price detect)', price: aiResponse.currentPrice };
         }
 
         return { 
             expired: !!aiResponse.expired, 
-            reason: aiResponse.reason, 
+            reason: aiResponse.reason || 'AI tespiti', 
             price: aiResponse.currentPrice || 0 
         };
     } catch (e) {
@@ -267,14 +277,11 @@ Yanıtını SADECE aşağıdaki JSON formatında ver:
     }
 }
 
-// ─── Main Logic ──────────────────────────────────────────────────────────────
-
 async function checkPrices() {
     console.log(`\n🔍 AI Destekli Fiyat Kontrolü Başlatıldı: ${new Date().toLocaleString('tr-TR')}`);
     const db = initFirebase();
 
     try {
-        // 1. Durumu 'İndirim Bitti' OLMAYANLARI çek
         const snapshot = await db.collection('discounts')
             .where('status', 'in', ['aktif', 'active', null])
             .limit(300)
@@ -282,7 +289,6 @@ async function checkPrices() {
 
         const allDocs = snapshot.docs;
 
-        // Ek filtre: status alanı hiç olmayanları (undefined) da dahil et
         const undefSnapshot = await db.collection('discounts')
             .orderBy('createdAt', 'desc')
             .limit(100)
@@ -297,10 +303,8 @@ async function checkPrices() {
 
         const aktifDocs = combinedDocs.filter(doc => doc.data().status !== 'İndirim Bitti');
 
-        // 2. Bunlar arasından lastPriceCheck alanı olmayanlar (öncelikli)
         let toCheck = aktifDocs.filter(doc => !doc.data().lastPriceCheck);
 
-        // 3. Eğer 100 limitine ulaşmadıysak, en eski kontrol edilenlerden ekle
         if (toCheck.length < 100) {
             const alreadyChecked = aktifDocs
                 .filter(doc => doc.data().lastPriceCheck)
@@ -325,16 +329,18 @@ async function checkPrices() {
 
             console.log(`   📦 Kontrol ediliyor: ${data.title.substring(0, 50)}...`);
 
-            // ── 1. KURAL: 24 SAAT DOLDU MU? ──
+            // 1. KURAL: 24 SAAT DOLDU MU?
             const createdAt = data.createdAt?.toDate?.() || new Date(data.createdAt);
             const ageInHours = (Date.now() - createdAt.getTime()) / (1000 * 60 * 60);
 
             if (ageInHours > 24) {
                 console.log(`      ⏰ Süre Doldu (24s+): İndirim Bitti olarak işaretleniyor.`);
+                const deleteDate = new Date(Date.now() + 60 * 60 * 1000); // 60 dakika sonra
                 await doc.ref.update({
                     status: 'İndirim Bitti',
                     expiredAt: FieldValue.serverTimestamp(),
-                    expiresAt: FieldValue.serverTimestamp(), // UI expects expiresAt
+                    expiresAt: FieldValue.serverTimestamp(),
+                    deleteAt: deleteDate, // Firestore TTL için
                     lastCheckedPrice: data.newPrice || 0,
                     errorReason: '24 Saatlik Yayın Süresi Doldu',
                     lastPriceCheck: FieldValue.serverTimestamp()
@@ -343,7 +349,7 @@ async function checkPrices() {
                 continue;
             }
 
-            // ── 2. KURAL: SAYFA KONTROLÜ (Hybrid AI) ──
+            // 2. KURAL: SAYFA KONTROLÜ (Hybrid AI)
             const html = await fetchHtml(url);
 
             if (!html) {
@@ -359,7 +365,6 @@ async function checkPrices() {
             const tolerance = data.newPrice * 1.05;
             let shouldBeExpired = outOfStock || (currentPrice > 0 && currentPrice > tolerance);
 
-            // Eğer klasik kural "Bitti" diyorsa AI ile doğrula (False Positive önlemek için)
             if (shouldBeExpired) {
                 console.log(`      🤖 AI'ya soruluyor... (Klasik Kontrol: ${outOfStock ? 'Stok Yok' : 'Fiyat Artmış'})`);
                 const aiResult = await verifyWithAI(url, data.title, data.newPrice, html);
@@ -375,16 +380,16 @@ async function checkPrices() {
             if (shouldBeExpired) {
                 console.log(`      🚩 İndirim Bitti! (Eski: ${data.newPrice}, Yeni: ${currentPrice || 'Stok Yok'})`);
 
-                // Firestore Güncelle
+                const deleteDate = new Date(Date.now() + 60 * 60 * 1000); // 60 dakika sonra
                 await doc.ref.update({
                     status: 'İndirim Bitti',
                     expiredAt: FieldValue.serverTimestamp(),
-                    expiresAt: FieldValue.serverTimestamp(), // Eklendi (UI için)
+                    expiresAt: FieldValue.serverTimestamp(),
+                    deleteAt: deleteDate, // Firestore TTL için
                     lastCheckedPrice: currentPrice || 0,
                     lastPriceCheck: FieldValue.serverTimestamp()
                 });
 
-                // Bildirim Gönder (notifications koleksiyonuna ekleyerek - Panel Kaydı)
                 await db.collection('notifications').add({
                     title: `🏷️ İndirim Bitti: ${data.brand || 'Mağaza'}`,
                     body: `${data.title} indirimi sona erdi.`,
@@ -395,8 +400,6 @@ async function checkPrices() {
                     createdAt: FieldValue.serverTimestamp()
                 });
 
-                // ── SESSİZ KÖPRÜ (DATA BRIDGE) ──
-                // INDIVA uygulamasına sessiz bir sinyal göndererek durumun güncellenmesini tetikler.
                 try {
                     const messaging = getMessaging();
                     const nowIso = new Date().toISOString();
@@ -407,7 +410,7 @@ async function checkPrices() {
                             id: doc.id,
                             status: 'İndirim Bitti',
                             title: data.title || '',
-                            expiresAt: nowIso, // Değiştirildi (UI için)
+                            expiresAt: nowIso,
                             silent: 'true'
                         },
                         android: {
@@ -415,7 +418,7 @@ async function checkPrices() {
                         }
                     };
                     await messaging.send(bridgePayload);
-                    console.log(`      🔗 Köprü sinyali gönderildi (ID: ${doc.id}, Durum: İndirim Bitti, Zaman: ${nowIso})`);
+                    console.log(`      🔗 Köprü sinyali gönderildi (ID: ${doc.id})`);
                 } catch (msgErr) {
                     console.warn(`      ⚠️ Köprü sinyali hatası: ${msgErr.message}`);
                 }
@@ -423,14 +426,12 @@ async function checkPrices() {
                 updatedCount++;
             } else {
                 console.log(`      ✅ İndirim devam ediyor. (Güncel: ${currentPrice || data.newPrice} TL)`);
-                // Durumu 'aktif' olarak sabitle ve kontrol zamanını güncelle
                 await doc.ref.update({
                     lastPriceCheck: FieldValue.serverTimestamp(),
                     status: 'aktif'
                 });
             }
 
-            // Mağaza sunucularını yormamak için kısa bekleme
             await new Promise(r => setTimeout(r, 600));
         }
 
