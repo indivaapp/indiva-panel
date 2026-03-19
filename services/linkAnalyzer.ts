@@ -214,7 +214,7 @@ async function analyzeWithGroq(content: string, url: string, storeName: string):
                     'X-Title': 'Indiva Panel'
                 },
                 body: JSON.stringify({
-                    model: 'google/gemini-2.5-flash',
+                    model: 'google/gemini-2.0-flash-001',
                     messages: [{ role: 'user', content: prompt }],
                     temperature: 0.2, // Still deterministic
                     response_format: { type: "json_object" } // OpenRouter JSON mode

@@ -231,7 +231,7 @@ JSON FORMATI:
                 'X-Title': 'INDIVA AI Price Checker'
             },
             body: JSON.stringify({
-                model: 'google/gemini-2.5-flash',
+                model: 'google/gemini-2.0-flash-001',
                 messages: [
                     { role: 'system', content: 'Sadece JSON formatında teknik veri sağlayan bir asistansın.' },
                     { role: 'user', content: `SAYFA VERİSİ:\n${bodyText}\n\n${prompt}` }

@@ -221,9 +221,9 @@ async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, me
 
     try {
         const modelsToTry = [
-            'google/gemini-2.5-flash',
-            'google/gemini-2.5-flash-lite',
-            'google/gemini-flash-1.5'
+            'google/gemini-2.0-flash-001',
+            'google/gemini-flash-1.5',
+            'google/gemini-2.0-flash-lite-preview-02-05'
         ];
 
         /**
@@ -318,7 +318,8 @@ async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, me
         throw lastErr || new Error('Tüm modeller başarısız oldu');
 
     } catch (err) {
-        console.warn(`      ⚠️  AI Hatası: ${err.message}. Fallback kullanılıyor.`);
+        console.warn(`      ❌ AI HATA RAPORU: ${err.message}`);
+        console.warn(`      ⚠️  Sistem "Acil Durum" (Fallback) moduna geçti. Lütfen API anahtarını ve model ismini kontrol edin.`);
         return {
             category: detectCategory(productTitle),
             description: generateFallbackDescription(productTitle, discountPercent),
