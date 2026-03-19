@@ -1,5 +1,5 @@
-
 import React, { useState, useEffect } from 'react';
+import { GoogleGenAI } from '@google/genai';
 import type { Discount } from '../types';
 import { updateDiscount } from '../services/firebase';
 import { uploadToImgbb, deleteFromImgbb } from '../services/imgbb';
@@ -161,25 +161,22 @@ const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose
                                         const btn = document.getElementById('edit-ai-btn');
                                         if(btn) btn.innerText = 'Yazılıyor...';
                                         try {
+                                            const apiKey = (import.meta as any).env.VITE_GEMINI_API_KEY;
+                                            if (!apiKey) throw new Error('API Key bulunamadı');
+                                            
+                                            const genAI = new GoogleGenAI({ apiKey });
+
                                             const prompt = `Teknik Ürün Analisti kimliğiyle, şu ürün için 45-60 kelimelik, donanım/teknik özellik odaklı, profesyonel bir inceleme metni yaz. Ürünün değerini teknik verilerle açıkla.
-                                            Format: "AÇIKLAMA: [metin] | KATEGORİ: [kategori]". 
+                                            Örn: "AÇIKLAMA: [metin] | KATEGORİ: [kategori]". 
                                             Ürün: ${formData.title}`;
                                             
-                                            const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-                                                method: 'POST',
-                                                headers: {
-                                                    'Content-Type': 'application/json',
-                                                    'Authorization': `Bearer ${(import.meta as any).env.VITE_OPENROUTER_API_KEY}`
-                                                },
-                                                body: JSON.stringify({
-                                                    model: 'google/gemini-2.5-flash',
-                                                    messages: [{ role: 'user', content: prompt }]
-                                                })
+                                            const response = await genAI.models.generateContent({
+                                                model: 'gemini-2.5-flash-lite',
+                                                contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                                                config: { temperature: 0.1 }
                                             });
 
-                                            if (!response.ok) throw new Error('API Hatası');
-                                            const result = await response.json();
-                                            const text = result.choices[0].message.content;
+                                            const text = response.text || '';
                                             
                                             if (text.includes('| KATEGORİ:')) {
                                                 const parts = text.split('| KATEGORİ:');

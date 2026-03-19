@@ -1,5 +1,5 @@
-
 import React, { useState } from 'react';
+import { GoogleGenAI } from '@google/genai';
 import { addDiscount } from '../services/firebase';
 import { uploadToImgbb } from '../services/imgbb';
 import { analyzeProductLink } from '../services/linkAnalyzer';
@@ -222,25 +222,22 @@ const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmi
                                     const btn = document.getElementById('ai-btn');
                                     if(btn) btn.innerText = 'Düşünüyor...';
                                     try {
+                                        const apiKey = (import.meta as any).env.VITE_GEMINI_API_KEY;
+                                        if (!apiKey) throw new Error('API Key bulunamadı');
+                                        
+                                        const genAI = new GoogleGenAI({ apiKey });
+
                                         const prompt = `Şu ürün için Teknik Ürün Analisti kimliğiyle, 45-60 kelimelik, teknik detaylara (malzeme, performans, donanım) odaklanan, ikna edici ve profesyonel bir pazarlama metni yaz. Ürünün neden fırsat olduğunu teknik bir dille açıkla. Ayrıca şu kategorilerden birini seç: Teknoloji, Giyim & Ayakkabı, Ev, Yaşam & Mutfak, Kozmetik & Kişisel Bakım, Süpermarket, Anne & Bebek, Mobilya, Kitap & Kırtasiye, Spor & Outdoor, Takı & Aksesuar, Otomotiv & Motosiklet, Pet Shop, Bahçe & Yapı Market, Oyuncak & Hobi, Sağlık & Medikal, Çanta & Valiz, Saat & Gözlük, Elektronik Aksesuar, Ofis & İş Dünyası.
                                         Format: "AÇIKLAMA: [metin] | KATEGORİ: [kategori]". 
                                         Ürün: ${title}`;
                                         
-                                        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-                                            method: 'POST',
-                                            headers: {
-                                                'Content-Type': 'application/json',
-                                                'Authorization': `Bearer ${(import.meta as any).env.VITE_OPENROUTER_API_KEY}`
-                                            },
-                                            body: JSON.stringify({
-                                                model: 'google/gemini-2.5-flash',
-                                                messages: [{ role: 'user', content: prompt }]
-                                            })
+                                        const response = await genAI.models.generateContent({
+                                            model: 'gemini-2.5-flash-lite',
+                                            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                                            config: { temperature: 0.1 }
                                         });
 
-                                        if (!response.ok) throw new Error('API Hatası');
-                                        const result = await response.json();
-                                        const text = result.choices[0].message.content;
+                                        const text = response.text || '';
                                         
                                         if (text.includes('| KATEGORİ:')) {
                                             const parts = text.split('| KATEGORİ:');

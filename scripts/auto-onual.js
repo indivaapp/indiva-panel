@@ -7,10 +7,7 @@
  * Çalıştırma: node scripts/auto-onual.js
  */
 
-import * as cheerio from 'cheerio';
-import { initializeApp, cert, getApps } from 'firebase-admin/app';
-import { getFirestore, FieldValue, FieldPath } from 'firebase-admin/firestore';
-import { getMessaging } from 'firebase-admin/messaging';
+import { GoogleGenAI } from '@google/genai';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -42,8 +39,7 @@ const MAX_NEW_PRODUCTS = 15; // Biraz artırılabilir, artık daha verimli
 const REQUEST_DELAY_MS = 1000; // İstekler arası bekleme (ms)
 
 // AI Config
-const API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const MODEL = 'google/gemini-2.5-flash';
+const MODEL = 'gemini-2.5-flash-lite';
 
 // Kategorileri tespit için anahtar kelimeler
 const CATEGORY_MAP = [
@@ -150,69 +146,26 @@ function simulateOldPrice(newPrice) {
 }
 
 /**
- * OpenRouter üzerinden AI ile Türkçe ürün açıklaması oluştur
- * Birincil model: Gemini 2.5 Flash Lite (OpenRouter)
- */
-/**
- * AI üzerinden hem kategori hem de açıklama oluştur (JSON formatında)
+ * Gemini SDK kullanarak yapay zeka analizi yapar (Model: gemini-2.5-flash-lite)
  */
 async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, metaDescription = '') {
-    const discountPercent = oldPrice > 0 ? Math.round(((oldPrice - newPrice) / oldPrice) * 100) : 0;
+    if (!apiKey) return { category: detectCategory(productTitle), description: generateFallbackDescription(productTitle, 0), aiFomoScore: 5 };
 
-    const CATEGORY_MAPPING = {
-        "Elektronik": "Teknoloji",
-        "Cep Telefonu": "Teknoloji",
-        "Bilgisayar": "Teknoloji",
-        "Mutfak": "Ev, Yaşam & Mutfak",
-        "Ev Aletleri": "Ev, Yaşam & Mutfak",
-        "Giyim": "Giyim & Ayakkabı",
-        "Ayakkabı": "Giyim & Ayakkabı",
-        "Aksesuar": "Giyim & Ayakkabı", // Genel aksesuar, teknoloji aksesuarı değil
-        "Kozmetik": "Kozmetik & Kişisel Bakım",
-        "Kişisel Bakım": "Kozmetik & Kişisel Bakım",
-        "Market": "Süpermarket",
-        "Gıda": "Süpermarket",
-        "Anne & Bebek": "Anne & Bebek",
-        "Oyuncak": "Oyuncak & Hobi",
-        "Spor": "Spor & Outdoor",
-        "Kitap": "Kitap & Kırtasiye",
-        "Sağlık": "Sağlık & Medikal",
-        "Evcil Hayvan": "Pet Shop",
-        "Otomotiv": "Otomotiv & Motosiklet",
-        "Bahçe": "Bahçe & Yapı Market",
-        "Hobi": "Oyuncak & Hobi",
-        "Ofis": "Ofis & Kırtasiye",
-        "Takı": "Takı & Aksesuar",
-        "Çanta": "Çanta & Valiz",
-        "Saat": "Saat & Gözlük",
-        "Hediyelik": "Hediyelik Eşya"
-    };
+    const genAI = new GoogleGenAI({ apiKey });
 
     const systemInstruction = `Sen INDIVA uygulamasının kıdemli Teknik Ürün Analisti ve e-ticaret metin yazarı uzmanısın. 
-    Görevin, paylaşılan ürün fırsatlarını derinlemesine analiz ederek kullanıcılar için "profesyonel bir inceleme ve teknik analiz" hazırlamaktır.
+    Görevin, paylaşılan ürün başlığını ve detaylarını analiz ederek "profesyonel bir inceleme ve fırsat puanlaması" yapmaktır.
 
-    TEMEL KURALLAR:
-    1. TEKNİK ANALİZ: Sadece başlıktaki metni süsleme. Ürün hakkında sahip olduğun teknik verileri (malzeme kalitesi, donanım özellikleri, performans verileri, içerik kalitesi vb.) ayıkla ve metne yedir. Ürünün neden teknik olarak değerli olduğunu açıkla.
+    GÖREV KURALLARI:
+    1. TEKNİK ANALİZ: Sadece başlığı süsleme. Ürünün segmentindeki yerini, malzeme kalitesini veya kullanım amacını teknik bir ciddiyetle ele al.
     2. BİLİRKİŞİ TONU: Bir pazarlamacı gibi değil, o alanda uzman bir bilirkişi gibi konuş. "Harika", "muhteşem" gibi boş kelimeler yerine "yüksek performanslı", "dayanıklı yapı", "profesyonel çözüm" gibi somut ifadeler kullan.
-    3. PAZARLAMA: Ürünün fiyat avantajını teknik bir gereklilikle (malzeme kalitesi, nadirlik, uzun ömürlülük, performans) destekle.
-    4. KISITLAMA: Metin 45-60 kelime arası, tek paragraf ve akıcı olmalı. Emocileri (2-4 adet) stratejik kullan.
-    5. KATEGORİ: Ürünü aşağıdaki listeden en doğru kategoriye ata.
-    KATEGORİ LİSTESİ: ${Object.values(CATEGORY_MAPPING).filter((v, i, a) => a.indexOf(v) === i).map(c => `"${c}"`).join(', ')}.`;
+    3. FOMO PUANI (aiFomoScore): Fırsatın gerçekçiliğini 1-10 arası puanla. (10: Kaçırılmayacak teknik fırsat).
+    4. KISITLAMA: Açıklama 45-60 kelime arası, tek paragraf ve akıcı olmalı. Emocileri (2-4 adet) stratejik kullan.
+    5. CEVAP: SADECE saf JSON formatında cevap ver.`;
 
-    let prompt = `Aşağıdaki ürün fırsatını Teknik Ürün Analisti kimliğiyle analiz et ve profesyonel bir inceleme metni yaz.
-
-    ÜRÜN: ${productTitle}
-    ${metaDescription ? `EK VERİ: ${metaDescription}` : ''}
-    ${discountPercent > 0 ? `İNDİRİM: %${discountPercent}` : ''}
-
-    TALİMATLAR:
-    - Metne ürünün değerini vurgulayan profesyonel bir girişle başla.
-    - Ürün hakkında (başlıkta olmayan) teknik detayları, kullanım ömrünü veya performans avantajlarını ekle.
-    - Bu fiyata neden kaçırılmaması gerektiğini teknik bir gerekçeyle ("bu donanıma bu fiyat" gibi) açıkla.
-    - 45-60 kelime arası olsun. Süslemelerden kaçın, somut verilere odaklan.
-    - YALNIZCA JSON formatında yanıt ver.
-
-    JSON FORMATI:
+    const prompt = `Ürün: "${productTitle}" | Fiyat: ${oldPrice} TL -> ${newPrice} TL | Açıklama: ${metaDescription}
+    
+    JSON FORMATI (Açıklama profesyonel ve teknik bir inceleme olmalıdır):
     {
       "category": "Kategori",
       "aiFomoScore": 9,
@@ -220,160 +173,68 @@ async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, me
     }`;
 
     try {
-        const modelsToTry = [
-            'google/gemini-2.0-flash-001',
-            'google/gemini-flash-1.5',
-            'google/gemini-2.0-flash-lite-preview-02-05'
-        ];
-
-        /**
-         * OpenRouter'a tek model için istek at, 429 rate-limit gelirse bekleyip tekrar dene.
-         */
-        async function tryModel(currentModel) {
-            const MAX_RETRIES = 3;
-            for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-                console.log(`      🤖 AI analiz yapıyor (${currentModel}, deneme ${attempt}/${MAX_RETRIES})...`);
-                let res;
-                try {
-                    res = await fetch(API_URL, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${apiKey}`,
-                            'HTTP-Referer': 'https://indiva.app',
-                            'X-Title': 'INDIVA Admin Panel'
-                        },
-                        body: JSON.stringify({
-                            model: currentModel,
-                            messages: [
-                                { role: 'system', content: systemInstruction },
-                                { role: 'user', content: prompt }
-                            ],
-                            temperature: 0.7,
-                            response_format: { type: 'json_object' }
-                        }),
-                        signal: AbortSignal.timeout(35000) // 35 saniye — Gemini 2.5 Flash bazen 20-25sn alıyor
-                    });
-                } catch (fetchErr) {
-                    // Network/timeout hatası
-                    if (attempt < MAX_RETRIES) {
-                        const waitSec = attempt * 5;
-                        console.warn(`      ⚠️  Bağlantı hatası (${fetchErr.message}), ${waitSec}s sonra tekrar deneniyor...`);
-                        await sleep(waitSec * 1000);
-                        continue;
-                    }
-                    throw fetchErr;
-                }
-
-                // Rate limit (429) — bekleyip tekrar dene
-                if (res.status === 429) {
-                    const retryAfter = parseInt(res.headers.get('retry-after') || '15', 10);
-                    const waitSec = Math.min(retryAfter, 30);
-                    console.warn(`      ⚠️  Rate limit (429)! ${waitSec}s bekleniyor...`);
-                    await sleep(waitSec * 1000);
-                    continue;
-                }
-
-                if (!res.ok) {
-                    const errText = await res.text();
-                    throw new Error(`HTTP ${res.status}: ${errText.substring(0, 120)}`);
-                }
-
-                const data = await res.json();
-                const content = data.choices?.[0]?.message?.content?.trim() || '';
-
-                if (content) {
-                    const match = content.match(/\{[\s\S]*\}/);
-                    if (match) {
-                        const parsed = JSON.parse(match[0]);
-                        if (parsed.category && parsed.description) {
-                            parsed.aiFomoScore = Number.isFinite(parsed.aiFomoScore)
-                                ? Math.max(1, Math.min(10, parsed.aiFomoScore))
-                                : 5;
-                            console.log(`      ✅ AI Başarılı [${currentModel}]: [${parsed.category}] FOMO: ${parsed.aiFomoScore}`);
-                            return parsed;
-                        }
-                    }
-                }
-                throw new Error(`Geçersiz yanıt formatı`);
+        const response = await genAI.models.generateContent({
+            model: MODEL,
+            contents: [{ role: 'user', parts: [{ text: `${systemInstruction}\n\n${prompt}` }] }],
+            config: {
+                // Not: SDK'da v1alpha/v1beta farkına göre response_format değişebilir
+                // Ama standart generateContent için text parse etmek daha güvenlidir
+                temperature: 0.2
             }
-            throw new Error(`${MAX_RETRIES} denemede sonuç alınamadı`);
-        }
+        });
 
-        let lastErr = null;
-        for (const currentModel of modelsToTry) {
-            try {
-                const result = await tryModel(currentModel);
-                return result;
-            } catch (err) {
-                console.warn(`      ⚠️  [${currentModel}] başarısız: ${err.message}`);
-                lastErr = err;
-                // Bir sonraki modele geçmeden kısa bekleme
-                if (modelsToTry.indexOf(currentModel) < modelsToTry.length - 1) {
-                    console.log(`      🔄 2s sonra sıradaki model deneniyor...`);
-                    await sleep(2000);
-                }
-            }
-        }
-        throw lastErr || new Error('Tüm modeller başarısız oldu');
+        const text = response.text || '';
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        const jsonStr = jsonMatch ? jsonMatch[0] : text;
+        const aiData = JSON.parse(jsonStr.trim());
+
+        // Kategori Map Uygula
+        const CATEGORY_MAPPING = {
+            "Elektronik": "Teknoloji",
+            "Cep Telefonu": "Teknoloji",
+            "Bilgisayar": "Teknoloji",
+            "Mutfak": "Ev, Yaşam & Mutfak",
+            "Ev Aletleri": "Ev, Yaşam & Mutfak"
+        };
+        const finalCategory = CATEGORY_MAPPING[aiData.category] || aiData.category || detectCategory(productTitle);
+
+        return {
+            category: finalCategory,
+            description: aiData.description || generateFallbackDescription(productTitle, 0),
+            aiFomoScore: parseInt(aiData.aiFomoScore) || 5
+        };
 
     } catch (err) {
         console.warn(`      ❌ AI HATA RAPORU: ${err.message}`);
-        console.warn(`      ⚠️  Sistem "Acil Durum" (Fallback) moduna geçti. Lütfen API anahtarını ve model ismini kontrol edin.`);
         return {
             category: detectCategory(productTitle),
-            description: generateFallbackDescription(productTitle, discountPercent),
-            aiFomoScore: discountPercent >= 50 ? 8 : (discountPercent > 20 ? 6 : 4)
+            description: generateFallbackDescription(productTitle, 0),
+            aiFomoScore: 5
         };
     }
 }
 
 /**
- * AI to generate push notifications (short, humorous, urgent)
+ * AI to generate push notifications using Google SDK
  */
 async function generatePushNotifications(apiKey, productTitle, discountPercent) {
-    if (discountPercent < 10) return []; // Only generate for good deals
+    if (discountPercent < 10) return [];
 
-    const prompt = `Şu e-ticaret ürünü için uygulamamın kullanıcılarına göndereceğim 3 farklı Push Bildirimi (mobil bildirim mesajı) oluştur:
-Ürün: "${productTitle}"
-İndirim: %${discountPercent}
-
-Format:
-1. Kısa ve Öz (Sadece en önemli bilgiyi ver, clickbait yapma)
-2. Mizahi/Eğlenceli (Kullanıcıda tebessüm yaratacak, zekice bir bağlantı kur)
-3. Aciliyet/FOMO Bildiren (Fırsatı kaçırmaktan korkutacak, hemen tıklamaya itecek)
-
-Lütfen sadece bir JSON array'i döndür. Array içinde string'ler olsun. Örnek: ["Kısa metin", "Komik metin", "Acil metin"]`;
+    const genAI = new GoogleGenAI({ apiKey });
+    const prompt = `Şu e-ticaret ürünü için 3 farklı Push Bildirimi oluştur (Kısa, Mizahi, FOMO):
+    Ürün: "${productTitle}" | İndirim: %${discountPercent}
+    SADECE JSON array döndür: ["bildirim1", "bildirim2", "bildirim3"]`;
 
     try {
-        console.log(`      📢 AI Bildirimleri Üretiyor...`);
-        const res = await fetch(API_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`,
-                'HTTP-Referer': 'https://indiva.app',
-                'X-Title': 'INDIVA Admin Panel'
-            },
-            body: JSON.stringify({
-                model: 'google/gemini-2.5-flash-lite',
-                messages: [{ role: 'user', content: prompt }]
-            }),
-            signal: AbortSignal.timeout(10000)
+        const response = await genAI.models.generateContent({
+            model: MODEL,
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            config: { temperature: 0.7 }
         });
 
-        if (!res.ok) throw new Error('API Hatası');
-        const data = await res.json();
-        const content = data.choices?.[0]?.message?.content?.trim() || '';
-        
-        const match = content.match(/\[[\s\S]*\]/);
-        if (match) {
-            const parsed = JSON.parse(match[0]);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-                console.log(`      ✅ 3 Adet Push Notifikasyonu üretildi`);
-                return parsed;
-            }
-        }
+        const text = response.text || '';
+        const match = text.match(/\[[\s\S]*\]/);
+        if (match) return JSON.parse(match[0]);
         return [];
     } catch (err) {
         console.warn(`      ⚠️  Bildirim Üretme Hatası: ${err.message}`);

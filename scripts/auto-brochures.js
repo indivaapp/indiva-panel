@@ -5,10 +5,7 @@
  * Gemini 3 Flash ile analiz ederek kategori, başlık ve geçerlilik tarihini belirler.
  * Firestore'daki ilgili market koleksiyonlarına kaydeder.
  */
-
-import * as cheerio from 'cheerio';
-import { initializeApp, cert, getApps } from 'firebase-admin/app';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { GoogleGenAI } from '@google/genai';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -28,8 +25,8 @@ if (fs.existsSync(envPath)) {
     }
 }
 
-const AI_API_KEY = process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY;
-const MODEL = 'google/gemini-2.5-flash';
+const AI_API_KEY = process.env.GEMINI_API_KEY;
+const MODEL = 'gemini-2.5-flash-lite';
 
 // ─── Firebase ────────────────────────────────────────────────────────────────
 function initFirebase() {
@@ -71,6 +68,8 @@ async function fetchHtml(url, timeoutMs = 15000) {
 async function analyzeBrochureWithAI(pageTitle, pageContent) {
     if (!AI_API_KEY) return null;
 
+    const genAI = new GoogleGenAI({ apiKey: AI_API_KEY });
+
     const systemInstruction = `Sen bir aktüel ürünler uzmanısın. Sana sunulan bir web sayfasının başlığını ve içeriğini analiz ederek, bu sayfanın hangi markaya (BİM, A101, ŞOK) ait olduğunu, katalog başlığını ve geçerlilik tarihini belirleyeceksin.
     
 GÜNCEL TARİH: ${new Date().toLocaleDateString('tr-TR')}
@@ -79,40 +78,22 @@ KURALLAR:
 1. Sadece GÜNCEL veya GELECEK tarihli katalogları belirle.
 2. "validityDate" formatı gün/ay/yıl bazlı anlaşılır olmalı (Örn: "27 Şubat - 6 Mart 2026").
 3. Eğer katalog 2 haftadan daha eskiyse (geçmişte kalmışsa), bunu analiz sonucunda belirtme veya storeName'i null döndür.
-
-JSON formatında yanıt ver:
-{
-  "storeName": "bim" | "a101" | "sok" | null,
-  "title": "Katalog Başlığı (Örn: 23 Şubat Cuma)",
-  "validityDate": "Geçerlilik Tarihi (Örn: 27 Şubat - 6 Mart 2026)",
-  "startDate": "YYYY-MM-DD",
-  "isExpired": boolean
-}`;
+4. SADECE JSON formatında yanıt ver.`;
 
     const prompt = `Sayfa Başlığı: ${pageTitle}\n\nSayfa İçeriği Önizleme: ${pageContent.substring(0, 1500)}`;
 
     try {
-        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${AI_API_KEY}`,
-                'Content-Type': 'application/json',
-                'HTTP-Referer': 'https://indiva.app',
-                'X-Title': 'Indiva Admin Panel'
-            },
-            body: JSON.stringify({
-                model: MODEL,
-                messages: [
-                    { role: 'system', content: systemInstruction },
-                    { role: 'user', content: prompt }
-                ],
-                response_format: { type: 'json_object' }
-            })
+        const response = await genAI.models.generateContent({
+            model: MODEL,
+            contents: [{ role: 'user', parts: [{ text: `${systemInstruction}\n\n${prompt}` }] }],
+            config: {
+                temperature: 0.1
+            }
         });
 
-        const data = await response.json();
-        const content = data.choices[0].message.content;
-        return JSON.parse(content);
+        const text = response.text || '';
+        const match = text.match(/\{[\s\S]*\}/);
+        return JSON.parse(match ? match[0] : text);
     } catch (e) {
         console.error('   ⚠️ AI Analiz Hatası:', e.message);
         return null;

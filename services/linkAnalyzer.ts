@@ -1,5 +1,7 @@
+import { GoogleGenAI } from '@google/genai';
+
 /**
- * Link Analyzer Service - Jina Reader + Groq + Microlink Image
+ * Link Analyzer Service - Jina Reader + Google Gemini SDK + Microlink Image
  */
 
 export interface AnalyzedProduct {
@@ -157,9 +159,9 @@ async function fetchProductDataFromVercel(url: string): Promise<{
 }
 
 /**
- * Groq API ile analiz et
+ * Google Gemini SDK ile analiz et
  */
-async function analyzeWithGroq(content: string, url: string, storeName: string): Promise<{
+async function analyzeWithGemini(content: string, url: string, storeName: string): Promise<{
     title: string;
     brand: string;
     category: string;
@@ -170,7 +172,12 @@ async function analyzeWithGroq(content: string, url: string, storeName: string):
     imageUrl: string;
 }> {
     // @ts-ignore  
-    const OPENROUTER_API_KEY = (import.meta as any).env?.VITE_OPENROUTER_API_KEY || '';
+    const GEMINI_API_KEY = (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+
+    if (!GEMINI_API_KEY) throw new Error('Gemini API anahtarı bulunamadı.');
+
+    const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+    const MODEL = 'gemini-2.5-flash-lite';
 
     const prompt = `Sen INDIVA uygulamasının kıdemli Teknik Ürün Analisti ve e-ticaret metin yazarı uzmanısın. 
     Görevin, paylaşılan ürün sayfasını derinlemesine analiz ederek kullanıcılar için "profesyonel bir inceleme ve fırsat paylaşımı" hazırlamaktır.
@@ -203,31 +210,37 @@ async function analyzeWithGroq(content: string, url: string, storeName: string):
 
     let text = '';
 
-    if (OPENROUTER_API_KEY) {
-        try {
-            const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-                    'HTTP-Referer': 'https://indiva-panel.vercel.app', // Optional for OpenRouter
-                    'X-Title': 'Indiva Panel'
-                },
-                body: JSON.stringify({
-                    model: 'google/gemini-2.0-flash-001',
-                    messages: [{ role: 'user', content: prompt }],
-                    temperature: 0.2, // Still deterministic
-                    response_format: { type: "json_object" } // OpenRouter JSON mode
-                })
-            });
+    try {
+        const systemInstruction = `Sen INDIVA uygulamasının kıdemli Teknik Ürün Analisti ve e-ticaret metin yazarı uzmanısın. 
+        Görevin, paylaşılan ürün sayfasını derinlemesine analiz ederek kullanıcılar için "profesyonel bir inceleme ve fırsat paylaşımı" hazırlamaktır.`;
 
-            if (response.ok) {
-                const data = await response.json();
-                text = data.choices?.[0]?.message?.content || '';
+        const userPrompt = `SAYFA İÇERİĞİ:
+        ${content.slice(0, 15000)}
+
+        GÖREV: Ürün bilgilerini JSON formatında teknik bir ciddiyetle döndür.
+        
+        JSON YAPISI:
+        - title: Ürünün TAM ve resmi adı
+        - brand: Kesin marka adı
+        - category: Listedeki en uygun kategori (Teknoloji, Giyim, Ev, Kozmetik, Anne/Bebek, Spor, Pet vb.)
+        - oldPrice: Tespit edilen piyasa fiyatı (Sadece sayı)
+        - newPrice: Güncel kampanya fiyatı (Sadece sayı)
+        - discountPercent: Hesaplanan indirim (Sadece sayı)
+        - description: Uzman kurallarına göre yazılmış 45-60 kelimelik analiz metni.
+        
+        Açıklama profesyonel ve teknik bir inceleme olmalıdır. Sadece JSON döndür.`;
+
+        const response = await genAI.models.generateContent({
+            model: MODEL,
+            contents: [{ role: 'user', parts: [{ text: `${systemInstruction}\n\n${userPrompt}` }] }],
+            config: {
+                temperature: 0.1
             }
-        } catch (err) {
-            console.warn('OpenRouter/Gemini 2.5 hatası:', err);
-        }
+        });
+
+        text = response.text || '';
+    } catch (err) {
+        console.warn('Gemini SDK Hatası:', err);
     }
 
     if (!text) throw new Error('AI yanıt vermedi');
@@ -301,7 +314,7 @@ export async function analyzeProductLink(link: string): Promise<AnalyzedProduct>
     }
 
     // 3. AI ile analiz et
-    const aiResult = await analyzeWithGroq(pageContent, resolvedUrl, storeName);
+    const aiResult = await analyzeWithGemini(pageContent, resolvedUrl, storeName);
 
     // 3. Fiyatları belirle - Vercel API öncelikli, sonra AI
     let finalNewPrice = vercelData.newPrice || aiResult.newPrice;

@@ -7,10 +7,7 @@
  * Çalıştırma: node scripts/price-checker.js
  */
 
-import * as cheerio from 'cheerio';
-import { initializeApp, cert, getApps } from 'firebase-admin/app';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import { getMessaging } from 'firebase-admin/messaging';
+import { GoogleGenAI } from '@google/genai';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -183,87 +180,38 @@ function isOutOfStock($, html) {
 
 // ─── Main Logic ──────────────────────────────────────────────────────────────
 
-const API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const MODEL = 'gemini-2.5-flash-lite';
 
 async function verifyWithAI(url, currentTitle, oldPrice, html) {
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) return { expired: false, reason: 'API Key yok' };
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return { expired: false, reason: 'Gemini API Key yok' };
 
     try {
+        const genAI = new GoogleGenAI({ apiKey });
         const $ = cheerio.load(html);
         
-        // ── AGRESİF HTML TEMİZLİĞİ (Token tasarrufu & Gürültü engelleme) ──
-        $('script, style, svg, path, footer, nav, header, iframe, noscript, .ads, .comments, .related-products').remove();
+        $('script, style, svg, path, footer, nav, header, iframe, noscript').remove();
+        let bodyText = $('body').text().replace(/\s+/g, ' ').substring(0, 5000).trim();
+
+        const prompt = `Ürün: "${currentTitle}" | Beklenen Fiyat: ${oldPrice} TL
+        Şu sayfa verisine göre ürün stokta mı ve güncel fiyatı nedir?
+        SADECE JSON döndür: {"expired": boolean, "currentPrice": number, "reason": "kısa açıklama"}
         
-        // Sadece anahtar metinleri al (Fiyat, Stok, Başlık olabilecek yerler)
-        let bodyText = $('body').text()
-            .replace(/\s+/g, ' ')
-            .substring(0, 3000) // 3000 karakter genellikle tüm hayati bilgileri içerir
-            .trim();
+        SAYFA VERİSİ:
+        ${bodyText}`;
 
-        const prompt = `Sen bir fiyat ve stok takip uzmanısın. Aşağıdaki ürün sayfası verisini analiz et.
-Ürün Başlığı: "${currentTitle}"
-Beklenen Fiyat: ${oldPrice} TL
-
-SORULAR:
-1. Ürün şu an stokta mı? (Satın al/Sepete ekle butonu aktif mi? 'Tükendi' yazısı var mı?)
-2. Ürünün şu anki net satış fiyatı nedir?
-
-KURALLAR:
-- SADECE aşağıdaki JSON formatında yanıt ver. 
-- Eğer fiyatı bulamazsan currentPrice: 0 yap.
-- Eğer ürün stokta yoksa expired: true yap.
-- Eğer fiyat beklenen fiyattan %10'dan fazla artmışsa expired: true yap.
-
-JSON FORMATI:
-{
-  "expired": boolean,
-  "currentPrice": number,
-  "reason": "kısa açıklama"
-}`;
-
-        const res = await fetch(API_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`,
-                'HTTP-Referer': 'https://indiva.app',
-                'X-Title': 'INDIVA AI Price Checker'
-            },
-            body: JSON.stringify({
-                model: 'google/gemini-2.0-flash-001',
-                messages: [
-                    { role: 'system', content: 'Sadece JSON formatında teknik veri sağlayan bir asistansın.' },
-                    { role: 'user', content: `SAYFA VERİSİ:\n${bodyText}\n\n${prompt}` }
-                ],
-                response_format: { type: 'json_object' },
-                temperature: 0.1
-            }),
-            signal: AbortSignal.timeout(20000)
+        const response = await genAI.models.generateContent({
+            model: MODEL,
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            config: { temperature: 0.1 }
         });
 
-        if (!res.ok) {
-            const errText = await res.text();
-            console.warn(`      ⚠️ AI API Hatası (${res.status}): ${errText.substring(0, 50)}`);
-            return { expired: false, reason: `AI Error: ${res.status}` };
-        }
+        const text = response.text || '';
+        const match = text.match(/\{[\s\S]*\}/);
+        const aiResponse = JSON.parse(match ? match[0] : text);
 
-        const data = await res.json();
-        const content = data.choices?.[0]?.message?.content?.trim() || '{}';
-        
-        let aiResponse;
-        try {
-            aiResponse = JSON.parse(content);
-        } catch (parseErr) {
-            const match = content.match(/\{[\s\S]*\}/);
-            if (match) aiResponse = JSON.parse(match[0]);
-            else throw new Error('Geçersiz JSON formatı');
-        }
-
-        // Güvenlik: Eğer AI fiyatı bulmuşsa ama 'expired: false' demişse bile, 
-        // manuel kontrol %30 fazlaysa expired sayalım (Hard-limit)
         if (!aiResponse.expired && aiResponse.currentPrice > oldPrice * 1.3) {
-            return { expired: true, reason: 'Fiyat Çok Yüksek (AI price detect)', price: aiResponse.currentPrice };
+            return { expired: true, reason: 'Fiyat Çok Yüksek (AI tespiti)', price: aiResponse.currentPrice };
         }
 
         return { 
@@ -272,7 +220,7 @@ JSON FORMATI:
             price: aiResponse.currentPrice || 0 
         };
     } catch (e) {
-        console.error(`      ⚠️ AI Doğrulama Hatası: ${e.message}`);
+        console.error(`      ⚠️ AI Hatası: ${e.message}`);
         return { expired: false, reason: 'AI Hatası' };
     }
 }
