@@ -13,7 +13,6 @@ interface DiscountManagerProps {
 const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmin }) => {
     // Form fields state
     const [title, setTitle] = useState('');
-    const [description, setDescription] = useState('');
     const [brand, setBrand] = useState('');
     const [category, setCategory] = useState('');
     const [link, setLink] = useState('');
@@ -89,7 +88,6 @@ const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmi
 
     const resetForm = () => {
         setTitle('');
-        setDescription('');
         setBrand('');
         setCategory('');
         setLink('');
@@ -131,7 +129,6 @@ const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmi
         try {
             await addDiscount({
                 title,
-                description,
                 brand,
                 category,
                 link,
@@ -209,61 +206,6 @@ const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmi
                         </div>
                     </div>
 
-                    <div>
-                        <div className="flex justify-between items-end mb-1">
-                            <label className="block text-sm text-gray-400 font-medium">Ürün Açıklaması</label>
-                            <button 
-                                type="button" 
-                                onClick={async () => {
-                                    if (!title) {
-                                        setError('Yapay zekanın açıklama yazabilmesi için önce Ürün Başlığını girmelisiniz.');
-                                        return;
-                                    }
-                                    const btn = document.getElementById('ai-btn');
-                                    if(btn) btn.innerText = 'Düşünüyor...';
-                                    try {
-                                        const apiKey = (import.meta as any).env.VITE_GEMINI_API_KEY;
-                                        if (!apiKey) throw new Error('API Key bulunamadı');
-                                        
-                                        const genAI = new GoogleGenAI({ apiKey });
-
-                                        const prompt = `Şu ürün için Teknik Ürün Analisti kimliğiyle, 45-60 kelimelik, teknik detaylara (malzeme, performans, donanım) odaklanan, ikna edici ve profesyonel bir pazarlama metni yaz. Ürünün neden fırsat olduğunu teknik bir dille açıkla. Ayrıca şu kategorilerden birini seç: Teknoloji, Giyim & Ayakkabı, Ev, Yaşam & Mutfak, Kozmetik & Kişisel Bakım, Süpermarket, Anne & Bebek, Mobilya, Kitap & Kırtasiye, Spor & Outdoor, Takı & Aksesuar, Otomotiv & Motosiklet, Pet Shop, Bahçe & Yapı Market, Oyuncak & Hobi, Sağlık & Medikal, Çanta & Valiz, Saat & Gözlük, Elektronik Aksesuar, Ofis & İş Dünyası.
-                                        Format: "AÇIKLAMA: [metin] | KATEGORİ: [kategori]". 
-                                        Ürün: ${title}`;
-                                        
-                                        const response = await genAI.models.generateContent({
-                                            model: 'gemini-2.5-flash-lite',
-                                            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                                            config: { temperature: 0.1 }
-                                        });
-
-                                        const text = response.text || '';
-                                        
-                                        if (text.includes('| KATEGORİ:')) {
-                                            const parts = text.split('| KATEGORİ:');
-                                            let aiDesc = parts[0].replace('AÇIKLAMA:', '').trim();
-                                            let aiCat = parts[1].trim();
-                                            aiDesc = aiDesc.replace(/\*\*/g, '');
-                                            setDescription(aiDesc);
-                                            setCategory(aiCat);
-                                        } else {
-                                            setDescription(text.replace(/\*\*/g, ''));
-                                        }
-                                    } catch (err) {
-                                        console.error(err);
-                                        setError('Yapay zeka asistanı şu an yanıt veremiyor.');
-                                    } finally {
-                                        if(btn) btn.innerText = '✨ AI ile Yaz';
-                                    }
-                                }}
-                                id="ai-btn"
-                                className="text-xs bg-purple-600 hover:bg-purple-500 text-white py-1 px-3 rounded-md transition-colors font-bold flex items-center gap-1"
-                            >
-                                ✨ AI ile Yaz
-                            </button>
-                        </div>
-                        <textarea placeholder="Ürün hakkında kısa bilgi..." value={description} onChange={e => setDescription(e.target.value)} className="w-full p-3 bg-gray-700 rounded-lg border border-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all border-l-4 border-l-purple-500" rows={3}></textarea>
-                    </div>
 
                     <div>
                         <label className="block text-sm text-gray-400 mb-1 font-medium">Kategori</label>
@@ -312,7 +254,6 @@ const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmi
                                         setTitle(analyzed.title);
                                         setBrand(analyzed.brand);
                                         setCategory(analyzed.category);
-                                        setDescription(analyzed.description);
                                         if (analyzed.oldPrice) setOldPrice(analyzed.oldPrice.toString());
                                         if (analyzed.newPrice) setNewPrice(analyzed.newPrice.toString());
                                         if (analyzed.imageUrl) setUploadedImageUrl(analyzed.imageUrl);

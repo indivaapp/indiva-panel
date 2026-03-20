@@ -23,7 +23,7 @@ export type FirestoreTimestamp = Timestamp;
 export interface Discount {
     id: string;
     title: string;
-    description: string;
+    description?: string;
     brand: string;
     category: string;
     link: string;

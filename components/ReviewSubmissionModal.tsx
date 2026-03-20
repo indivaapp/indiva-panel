@@ -15,7 +15,6 @@ const ReviewSubmissionModal: React.FC<ReviewSubmissionModalProps> = ({ submissio
     const [formData, setFormData] = useState({
         title: submission.title || '',
         brand: submission.brand || '',
-        description: submission.description || '',
         category: submission.category || '',
         link: submission.link || '',
         oldPrice: submission.oldPrice || '',
@@ -59,7 +58,6 @@ const ReviewSubmissionModal: React.FC<ReviewSubmissionModalProps> = ({ submissio
             // 2. Add to Discounts collection
             await addDiscount({
                 title: formData.title,
-                description: formData.description,
                 brand: formData.brand,
                 category: formData.category,
                 link: formData.link,
@@ -112,10 +110,6 @@ const ReviewSubmissionModal: React.FC<ReviewSubmissionModalProps> = ({ submissio
                             </div>
                         </div>
 
-                        <div>
-                            <label className="block text-sm text-gray-400 mb-1">Açıklama</label>
-                            <textarea name="description" value={formData.description} onChange={handleChange} className="w-full p-3 bg-gray-700 rounded-md border border-gray-600 text-white" rows={3}></textarea>
-                        </div>
 
                         <div>
                             <label className="block text-sm text-gray-400 mb-1">Kategori</label>

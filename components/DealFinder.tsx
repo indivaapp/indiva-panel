@@ -8,7 +8,6 @@ import type { ViewType } from '../types';
 interface ScrapedDeal {
     id: string;
     title: string;
-    description: string;
     newPrice: number;
     oldPrice: number;
     link: string;
@@ -126,82 +125,11 @@ const DealFinder: React.FC<DealFinderProps> = ({ isAdmin, setActiveView, setSele
     const [showOnlyNew, setShowOnlyNew] = useState(true); // Sadece yenileri göster
     const [editForm, setEditForm] = useState({
         title: '',
-        description: '',
         oldPrice: 0,
         newPrice: 0,
         link: ''
     });
 
-    // Gemini API ile açıklama oluştur
-    const generateAIDescription = async () => {
-        if (!editingDeal) return;
-
-        setIsGeneratingAI(true);
-
-        try {
-            // @ts-ignore
-            const GEMINI_API_KEY = (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
-
-            if (!GEMINI_API_KEY) {
-                throw new Error('Gemini API key tanımlı değil');
-            }
-
-            const storeName = editingDeal.storeName || 'Online Mağaza';
-            const price = editForm.newPrice || editingDeal.newPrice || 0;
-            const title = editForm.title || editingDeal.title;
-
-            const prompt = `Sen profesyonel bir Türk e-ticaret pazarlamacısısın. Aşağıdaki ürün için çekici bir satış açıklaması yaz.
-
-Ürün: ${title}
-Fiyat: ${price} TL
-Mağaza: ${storeName}
-
-Kurallar:
-- Türkçe yaz, 50-80 kelime olsun
-- Ürünün faydalarını vurgula
-- ${price} TL fiyatın iyi bir fırsat olduğunu belirt
-- ${storeName}'ın güvenilirliğini vurgula
-- 2-3 emoji kullan (🔥 💰 ⭐ ✨ 🎁)
-- Aciliyet hissi yarat (stoklar sınırlı vb.)
-- Doğrudan açıklamayı yaz, başka bir şey ekleme`;
-
-            const response = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text: prompt }] }],
-                        generationConfig: {
-                            temperature: 0.8,
-                            maxOutputTokens: 300
-                        }
-                    })
-                }
-            );
-
-            if (!response.ok) {
-                throw new Error(`API hatası: ${response.status}`);
-            }
-
-            const data = await response.json();
-            const generatedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-            if (generatedText) {
-                setEditForm(prev => ({ ...prev, description: generatedText.trim() }));
-                setSuccessMessage('✨ AI açıklama oluşturdu!');
-                setTimeout(() => setSuccessMessage(null), 2000);
-            } else {
-                throw new Error('AI yanıt vermedi');
-            }
-        } catch (err: any) {
-            console.error('AI hatası:', err);
-            setError('AI açıklama oluşturulamadı: ' + err.message);
-            setTimeout(() => setError(null), 3000);
-        } finally {
-            setIsGeneratingAI(false);
-        }
-    };
 
     // Sayfa yüklendiğinde ilanları çek
     useEffect(() => {
@@ -229,7 +157,6 @@ Kurallar:
                 return {
                     id: docSnap.id,
                     title: fixTurkishChars(data.title || ''),
-                    description: data.description || '',
                     newPrice: data.newPrice || 0,
                     oldPrice: data.oldPrice || 0,
                     link: data.link || '',
@@ -275,7 +202,7 @@ Kurallar:
             const GITHUB_TOKEN = (import.meta as any).env?.VITE_GITHUB_TOKEN || '';
             const REPO_OWNER = 'AdemHan';
             const REPO_NAME = 'indiva-app';
-            const WORKFLOW_ID = 'auto-publish.yml';
+            const WORKFLOW_ID = 'auto-onual.yml';
 
             if (!GITHUB_TOKEN) {
                 throw new Error('GitHub token tanımlı değil. VITE_GITHUB_TOKEN environment variable ekleyin.');
@@ -357,7 +284,6 @@ Kurallar:
         setEditingDeal(deal);
         setEditForm({
             title: deal.title,
-            description: deal.description,
             oldPrice: deal.oldPrice,
             newPrice: deal.newPrice,
             link: deal.link
@@ -373,7 +299,6 @@ Kurallar:
 
             await updateDoc(doc(db, 'discounts', editingDeal.id), {
                 title: editForm.title,
-                description: editForm.description,
                 oldPrice: editForm.oldPrice,
                 newPrice: editForm.newPrice,
                 link: editForm.link,
@@ -542,34 +467,6 @@ Kurallar:
                                     />
                                 </div>
 
-                                <div>
-                                    <div className="flex items-center justify-between mb-1">
-                                        <label className="block text-gray-400 text-sm">Açıklama</label>
-                                        <button
-                                            type="button"
-                                            onClick={generateAIDescription}
-                                            disabled={isGeneratingAI}
-                                            className="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white text-xs rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1"
-                                        >
-                                            {isGeneratingAI ? (
-                                                <>
-                                                    <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                                                    Oluşturuluyor...
-                                                </>
-                                            ) : (
-                                                <>✨ AI ile Yaz</>
-                                            )}
-                                        </button>
-                                    </div>
-                                    <textarea
-                                        value={editForm.description}
-                                        onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value }))}
-                                        rows={4}
-                                        placeholder="Ürün açıklamasını buraya yazın veya AI ile oluşturun..."
-                                        className="w-full px-4 py-3 bg-gray-900 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500 resize-none"
-                                    />
-                                </div>
-
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
                                         <label className="block text-gray-400 text-sm mb-1">Eski Fiyat (TL)</label>
@@ -621,7 +518,7 @@ Kurallar:
                                 </button>
                                 <button
                                     onClick={saveAndPublish}
-                                    disabled={isLoading || !editForm.title || !editForm.description}
+                                    disabled={isLoading || !editForm.title}
                                     className="flex-1 py-3 bg-green-600 hover:bg-green-500 text-white font-bold rounded-lg transition-colors disabled:opacity-50"
                                 >
                                     ✅ Kaydet ve Yayınla
@@ -668,9 +565,6 @@ Kurallar:
                                         <span className="text-gray-500">•</span>
                                         <span className="text-gray-500">{deal.storeName}</span>
                                     </div>
-                                    {!deal.description && (
-                                        <span className="text-xs text-yellow-500 mt-1 inline-block">⚠️ Açıklama gerekli</span>
-                                    )}
                                 </div>
 
                                 <button

@@ -96,9 +96,6 @@ const SubmissionReview: React.FC<SubmissionReviewProps> = ({ isAdmin }) => {
                                     Gönderen: {submission.userId || 'Anonim'} | 
                                     Tarih: {submission.createdAt ? new Date((submission.createdAt as any).seconds * 1000).toLocaleDateString() : 'Tarih yok'}
                                 </p>
-                                {submission.description && (
-                                    <p className="text-sm text-gray-400 mt-2 line-clamp-2 bg-gray-700/50 p-2 rounded">{submission.description}</p>
-                                )}
                             </div>
 
                             <div className="flex flex-row md:flex-col gap-2 w-full md:w-auto shrink-0">

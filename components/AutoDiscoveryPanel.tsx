@@ -144,7 +144,6 @@ const AutoDiscoveryPanel: React.FC<AutoDiscoveryPanelProps> = ({ isAdmin }) => {
             await addDiscount({
                 title: analyzed.title,
                 brand: analyzed.brand || 'Bilinmiyor',
-                description: analyzed.description || currentDeal.title,
                 category: analyzed.category || 'Genel',
                 oldPrice: analyzed.oldPrice || 0,
                 newPrice: analyzed.newPrice || currentDeal.price || 0,

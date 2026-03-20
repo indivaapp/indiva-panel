@@ -25,7 +25,6 @@ export interface EnrichedDeal extends ScrapedDeal {
     cleanTitle: string;
     category: string;
     brand: string;
-    description: string;
     confidenceScore: number;
     aiProcessed: boolean;
 }
@@ -35,7 +34,6 @@ interface AIResponse {
     cleanTitle: string;
     category: string;
     brand: string;
-    description: string;
     confidence: number;
 }
 
@@ -106,7 +104,6 @@ function parseAIResponse(text: string): AIResponse {
             cleanTitle: parsed.cleanTitle || '',
             category: CATEGORIES.includes(parsed.category) ? parsed.category : 'Diğer',
             brand: parsed.brand || '',
-            description: parsed.description || '',
             confidence: Math.min(100, Math.max(0, parsed.confidence || 50))
         };
     } catch (error) {
@@ -134,21 +131,6 @@ GÖREV:
 
 3. Marka tespit et: Başlıktan markayı çıkar (yoksa boş bırak)
 
-   AŞAĞIDAKİ KELİME VE KALIPLARI KULLANMAN KESİNLİKLE YASAKTIR:
-   "Modern çizgileri", "kullanıcı dostu", "harika bir deneyim", "estetik tasarım", "beklentilerin ötesinde", "hayatınızı kolaylaştıracak", "bir parça", "şık görünüm", "performans vaat ediyor".
-
-4. AÇIKLAMA YAZ (ÇOK ÖNEMLİ!):
-   - Sen bir uzman Teknik Ürün Analistisin. Pazarlamacı gibi değil, bilirkişi gibi konuş.
-   - Sadece başlıkta yazanları değil, bu ürünün/markanın bilinen gerçek teknik özelliklerini (knowledge base) kullanarak derinlemesine bilgi ver.
-   - ÜRÜN İSMİNİ BAŞTA TEKRAR ETME! Direkt teknik bir özellik veya kullanım avantajıyla başla.
-   - Her açıklamada mutlaka somut bir teknik veri (Örn: Ekran tipi, malzeme içeriği, gramaj, bağlantı hızı vb.) bulunmalıdır.
-   - 50-70 kelime arası, ciddi, bilgilendirici ve ikna edici bir metin olmalı.
-   - Türkçe yaz ve metne sadece ürünle ilgili 1-2 emoji yerleştir.
-   ${deal.couponCode ? `- Kupon kodu varsa metnin sonunda doğal bir şekilde hatırlat: ${deal.couponCode}` : ''}
-
-   ÖRNEK İYİ AÇIKLAMA:
-   "Bu kablosuz kulaklık, aktif gürültü engelleme özelliğiyle müzik dinleme deneyiminizi üst seviyeye taşıyor! Uzun pil ömrü sayesinde tüm gün kesintisiz kullanabilirsiniz. Sınırlı süreli bu indirimi kaçırmayın, stoklar tükenmeden hemen sepete ekleyin!"
-
 5. Güven skoru ver: 0-100 (tüm bilgiler net ve eksiksizse yüksek)
 
 SADECE JSON DÖNDÜR:
@@ -156,7 +138,6 @@ SADECE JSON DÖNDÜR:
   "cleanTitle": "temiz ürün başlığı",
   "category": "kategori",
   "brand": "marka",
-  "description": "3-4 cümlelik teşvik edici açıklama",
   "confidence": 85
 }`;
 
@@ -169,7 +150,6 @@ SADECE JSON DÖNDÜR:
             cleanTitle: aiResponse.cleanTitle || deal.title,
             category: aiResponse.category,
             brand: aiResponse.brand,
-            description: aiResponse.description,
             confidenceScore: aiResponse.confidence,
             aiProcessed: true
         };
@@ -182,7 +162,6 @@ SADECE JSON DÖNDÜR:
             cleanTitle: cleanTitleBasic(deal.title),
             category: 'Diğer',
             brand: '',
-            description: '',
             confidenceScore: 30, // Düşük skor - manuel kontrol gerekli
             aiProcessed: false
         };
@@ -216,7 +195,6 @@ export async function batchEnrichDeals(deals: ScrapedDeal[]): Promise<EnrichedDe
                 cleanTitle: cleanTitleBasic(deal.title),
                 category: 'Diğer',
                 brand: '',
-                description: '',
                 confidenceScore: 0,
                 aiProcessed: false
             });

@@ -28,8 +28,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: data/processed_onual_ids.json
-          key: onual-ids-v1-${{ github.run_id }}
+          key: onual-ids-v2-${{ github.run_number }}
           restore-keys: |
+            onual-ids-v2-
             onual-ids-v1-
 
       - name: Run Auto-Onual Pipeline

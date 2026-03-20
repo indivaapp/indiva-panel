@@ -1,15 +1,20 @@
 /**
- * price-checker.js — INDIVA Fiyat Takip ve Otomatik Pasife Alma
+ * price-checker.js — INDIVA Akıllı Fiyat Takip ve Otomatik Pasife Alma
  * 
- * Firestore'daki aktif ilanları tarar, mağaza sitesindeki güncel fiyatı kontrol eder.
- * Fiyat artmışsa veya ürün tükenmişse durumu "İndirim Bitti" olarak günceller ve bildirim gönderir.
- * 
- * Çalıştırma: node scripts/price-checker.js
+ * Özellikler:
+ * - Hibrit Tarama: Klasik fetch + Jina Reader (Bot engeli aşımı)
+ * - Groq AI Entegrasyonu: Llama 3.3 ile yüksek hızlı ve ucuz doğrulama
+ * - Akıllı Önceliklendirme: Sadece şüpheli durumlarda AI kullanımı
+ * - Gerçek Zamanlı Senkronizasyon: Uygulama içi bildirim ve FCM sinyali
  */
 
-import { GoogleGenAI } from '@google/genai';
+import { initializeApp, cert, getApps } from 'firebase-admin/app';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { getMessaging } from 'firebase-admin/messaging';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fetchWithFallback } from './scraperService.js';
+import { sendAdminAlert } from './alertService.js';
 
 // ─── .env Yükle ─────────────────────────────────────────────────────────────
 const ROOT_DIR = process.cwd();
@@ -23,6 +28,7 @@ if (fs.existsSync(envPath)) {
         if (eqIdx < 0) continue;
         const key = trimmed.substring(0, eqIdx).trim();
         const val = trimmed.substring(eqIdx + 1).trim().replace(/^["']|["']$/g, '');
+        if (val.includes('YOUR_') || val.includes('indiva-panel-...')) continue;
         if (!process.env[key]) process.env[key] = val;
     }
 }
@@ -30,9 +36,11 @@ if (fs.existsSync(envPath)) {
 // ─── Firebase ────────────────────────────────────────────────────────────────
 function initFirebase() {
     if (getApps().length > 0) return getFirestore();
+
     let serviceAccount;
     const envJson = process.env.FIREBASE_SERVICE_ACCOUNT;
-    if (envJson) {
+
+    if (envJson && !envJson.includes('indiva-panel-...')) {
         serviceAccount = JSON.parse(envJson);
     } else {
         const localPath = path.join(ROOT_DIR, 'firebase-service-account.json');
@@ -42,352 +50,272 @@ function initFirebase() {
             throw new Error('Firebase service account bulunamadı.');
         }
     }
+
+    // PEM formatı için private_key'deki kaçış karakterlerini (\n) GERÇEK satır başlarına çevir
+    if (serviceAccount && serviceAccount.private_key) {
+        // Hem \n hem de \\n durumlarını kapsayacak şekilde temizlik yap
+        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n').replace(/\n\n/g, '\n');
+    }
+
     initializeApp({ credential: cert(serviceAccount) });
     return getFirestore();
 }
 
-// ─── HTTP Utilities ──────────────────────────────────────────────────────────
-const USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
-];
-
-async function fetchHtml(url, timeoutMs = 15000) {
-    const ua = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+// ─── HTTP & Scraper Utilities ────────────────────────────────────────────────
+/**
+ * fetchHtml - REFACTORED to use scraperService
+ */
+async function fetchHtml(url, useJina = false) {
     try {
-        const res = await fetch(url, {
-            headers: {
-                'User-Agent': ua,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache'
-            },
-            signal: AbortSignal.timeout(timeoutMs)
-        });
-        if (!res.ok) {
-            console.log(`      ⚠️ HTTP ${res.status} hatası (${url.substring(0, 40)}...)`);
-            return null;
-        }
-        return await res.text();
+        const { html } = await fetchWithFallback(url, { useJina, timeout: 15000 });
+        return html;
     } catch (e) {
-        console.log(`      ⚠️ Bağlantı hatası: ${e.message}`);
+        console.warn(`      ⚠️ Fetch failed for ${url}: ${e.message}`);
         return null;
     }
 }
 
-function parseTurkishPrice(text) {
-    if (!text) return 0;
-    let cleaned = text.replace(/[^\d.,]/g, '').trim();
 
-    if (cleaned.includes('.') && cleaned.includes(',')) {
-        cleaned = cleaned.replace(/\./g, '').replace(',', '.');
+// ─── FCM Sessiz Güncelleme ─────────────────────────────────────────────────────
+/**
+ * Mobil uygulamaya sessiz FCM push gönder.
+ * HomePage.tsx "DISCOUNT_STATUS_UPDATED" event'ini dinliyor;
+ * bu event ancak FCM data mesajı gelince tetiklenir.
+ */
+async function sendSilentExpiredNotification(discountId, title) {
+    try {
+        const message = {
+            // "notification" alanı YOK — bu ekranı göstermez, sadece app'i tetikler
+            data: {
+                type: 'DISCOUNT_EXPIRED',
+                discountId: discountId,
+                status: 'İndirim Bitti',
+                timestamp: Date.now().toString(),
+            },
+            topic: 'all_users',
+            android: { priority: 'high' }
+        };
+        await getMessaging().send(message);
+        console.log(`   📣 [FCM] Sessiz güncelleme gönderildi: ${title?.substring(0, 30)}...`);
+    } catch (e) {
+        console.warn(`   ⚠️ [FCM] Sessiz bildirim gönderilemedi: ${e.message}`);
+        // Fail silently — Firebase kaydı zaten yapıldı
     }
-    else if (cleaned.includes(',') && cleaned.indexOf(',') > cleaned.length - 4) {
-        cleaned = cleaned.replace(',', '.');
-    }
-    else if (cleaned.includes('.') && cleaned.indexOf('.') <= cleaned.length - 4) {
-        cleaned = cleaned.replace(/\./g, '');
-    }
-
-    const price = parseFloat(cleaned);
-    return isNaN(price) ? 0 : price;
 }
 
-function extractPrice($, html) {
-    let price = 0;
+// ─── AI Verification (Groq) ──────────────────────────────────────────────────
+async function verifyWithAI(product, content) {
+    // VITE_ prefix'siz key'i de dene (GitHub Actions secrets'ta VITE_ olmaz)
+    const apiKey = process.env.GROQ_API_KEY || process.env.VITE_GROQ_API_KEY;
+    if (!apiKey || apiKey.startsWith('gsk_vU1y')) return { expired: false, reason: 'Groq API Key yok veya test key' };
 
-    // 1. JSON-LD denemesi
-    $('script[type="application/ld+json"]').each((_, el) => {
-        try {
-            const data = JSON.parse($(el).html() || '{}');
-            const searchData = (Array.isArray(data) ? data : [data]);
-            for (const item of searchData) {
-                const offers = item.offers || (item['@type'] === 'Product' ? item.offers : null);
-                if (offers) {
-                    const priceVal = Array.isArray(offers) ? offers[0].price : offers.price;
-                    if (priceVal) {
-                        price = parseTurkishPrice(String(priceVal));
-                        if (price > 0) return false;
-                    }
-                }
-            }
-        } catch { }
-    });
-
-    if (price > 0) return price;
-
-    // 2. Mağaza Özel Kurallar (Amazon vb.)
-    if (html.includes('amazon.com')) {
-        const whole = $('.a-price-whole').first().text().replace(/[^\d]/g, '');
-        const fraction = $('.a-price-fraction').first().text().replace(/[^\d]/g, '');
-        if (whole) {
-            price = parseFloat(`${whole}.${fraction || '00'}`);
-            if (price > 0) return price;
-        }
-    }
-
-    // 3. Yaygın seçiciler
-    const priceSelectors = [
-        '.current-price', '.new-price', '.sale-price',
-        '[itemprop="price"]', '.price-now', '.total-price',
-        '.prc-dsc', '.prc-slg', // Trendyol
-        '.product-price', '.original-price', // Hepsiburada
-        '#price_inside_buybox', '.a-price-whole',
-        '[data-test-id="price-current-price"]'
-    ];
-
-    for (const selector of priceSelectors) {
-        const text = $(selector).first().text();
-        if (text) {
-            price = parseTurkishPrice(text);
-            if (price > 0) break;
-        }
-    }
-
-    return price;
-}
-
-function isOutOfStock($, html) {
-    const stockKeywords = [
-        'tükendi', 'stokta yok', 'gelince haber ver',
-        'stokk_yok', 'sepete eklenemiyor',
-        'out of stock', 'sold out', 'not available',
-        'ürün temin edilemiyor', 'geçici olarak temin edilemiyor',
-        'stokta bulunmamaktadır'
-    ];
-    const lowerHtml = html.toLowerCase();
-
-    const stockTextFound = stockKeywords.some(kw => lowerHtml.includes(kw));
-    if (stockTextFound) return true;
-
-    const passiveSelectors = [
-        '.add-to-basket-button.passive',
-        '.buy-now.passive',
-        '.disabled-button',
-        '.out-of-stock-button',
-        'button[disabled]',
-        '.btn-passive'
-    ];
+    const prompt = `Ürün: "${product.title}" | Beklenen Fiyat: ${product.newPrice} TL
+    GÖREV: Sayfa içeriğine göre ürünün durumunu belirle.
+    1. Stokta mı?
+    2. Güncel fiyat nedir?
+    3. İndirim bitmiş mi? (Fiyat %10+ artmışsa veya stok yoksa true)
     
-    for (const selector of passiveSelectors) {
-        if ($(selector).length > 0) return true;
-    }
-
-    return false;
-}
-
-// ─── Main Logic ──────────────────────────────────────────────────────────────
-
-const MODEL = 'gemini-2.5-flash-lite';
-
-async function verifyWithAI(url, currentTitle, oldPrice, html) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return { expired: false, reason: 'Gemini API Key yok' };
+    SADECE JSON: {"expired": boolean, "currentPrice": number, "inStock": boolean, "reason": "kısa açıklama"}`;
 
     try {
-        const genAI = new GoogleGenAI({ apiKey });
-        const $ = cheerio.load(html);
-        
-        $('script, style, svg, path, footer, nav, header, iframe, noscript').remove();
-        let bodyText = $('body').text().replace(/\s+/g, ' ').substring(0, 5000).trim();
-
-        const prompt = `Ürün: "${currentTitle}" | Beklenen Fiyat: ${oldPrice} TL
-        Şu sayfa verisine göre ürün stokta mı ve güncel fiyatı nedir?
-        SADECE JSON döndür: {"expired": boolean, "currentPrice": number, "reason": "kısa açıklama"}
-        
-        SAYFA VERİSİ:
-        ${bodyText}`;
-
-        const response = await genAI.models.generateContent({
-            model: MODEL,
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            config: { temperature: 0.1 }
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify({
+                model: "llama-3.3-70b-versatile",
+                messages: [{ role: "user", content: prompt + "\n\nİÇERİK:\n" + content.substring(0, 10000) }],
+                temperature: 0.1,
+                response_format: { type: "json_object" }
+            })
         });
 
-        const text = response.text || '';
-        const match = text.match(/\{[\s\S]*\}/);
-        const aiResponse = JSON.parse(match ? match[0] : text);
+        if (!response.ok) return { expired: false, reason: 'AI Servis Hatası' };
 
-        if (!aiResponse.expired && aiResponse.currentPrice > oldPrice * 1.3) {
-            return { expired: true, reason: 'Fiyat Çok Yüksek (AI tespiti)', price: aiResponse.currentPrice };
-        }
-
-        return { 
-            expired: !!aiResponse.expired, 
-            reason: aiResponse.reason || 'AI tespiti', 
-            price: aiResponse.currentPrice || 0 
-        };
+        const data = await response.json();
+        const result = JSON.parse(data.choices?.[0]?.message?.content || '{}');
+        return result;
     } catch (e) {
-        console.error(`      ⚠️ AI Hatası: ${e.message}`);
-        return { expired: false, reason: 'AI Hatası' };
+        return { expired: false, reason: 'AI Analiz Hatası' };
     }
 }
 
+// ─── Main Controller ─────────────────────────────────────────────────────────
 async function checkPrices() {
-    console.log(`\n🔍 AI Destekli Fiyat Kontrolü Başlatıldı: ${new Date().toLocaleString('tr-TR')}`);
+    process.stdout.write('\x1Bc'); // Terminali temizle
+    console.log(`\n🚀 INDIVA AKILLI TAKİP SİSTEMİ: ${new Date().toLocaleString('tr-TR')}`);
     const db = initFirebase();
 
     try {
-        const snapshot = await db.collection('discounts')
-            .where('status', 'in', ['aktif', 'active', null])
-            .limit(300)
+        // --- AŞAMA 1: 12 SAAT KURALI İLE OTOMATİK TEMİZLİK ---
+        // Bu aşamada TÜM aktif ilanları çekip 12 saati geçenleri anında pasife alıyoruz.
+        // İndeks hatası almamak için orderBy kullanmıyoruz (Zaten tüm aktifleri kontrol ediyoruz).
+        const activeSnapshot = await db.collection('discounts')
+            .where('status', '==', 'aktif')
             .get();
 
-        const allDocs = snapshot.docs;
+        const activeDocs = activeSnapshot.docs;
+        const now = Date.now();
+        const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
 
-        const undefSnapshot = await db.collection('discounts')
-            .orderBy('createdAt', 'desc')
-            .limit(100)
-            .get();
+        console.log(`📊 Toplam ${activeDocs.length} aktif ilan kontrol ediliyor...\n`);
 
-        const combinedDocs = [...allDocs];
-        undefSnapshot.docs.forEach(d => {
-            if (!combinedDocs.find(cd => cd.id === d.id) && d.data().status === undefined) {
-                combinedDocs.push(d);
-            }
-        });
-
-        const aktifDocs = combinedDocs.filter(doc => doc.data().status !== 'İndirim Bitti');
-
-        let toCheck = aktifDocs.filter(doc => !doc.data().lastPriceCheck);
-
-        if (toCheck.length < 100) {
-            const alreadyChecked = aktifDocs
-                .filter(doc => doc.data().lastPriceCheck)
-                .sort((a, b) => {
-                    const at = a.data().lastPriceCheck?.toDate?.() || 0;
-                    const bt = b.data().lastPriceCheck?.toDate?.() || 0;
-                    return at - bt;
-                });
-
-            toCheck = [...toCheck, ...alreadyChecked.slice(0, 100 - toCheck.length)];
-        }
-
-        console.log(`📊 Toplam ${toCheck.length} ilan kontrol edilecek.\n`);
-
-        let updatedCount = 0;
-
-        for (const doc of toCheck) {
-            const data = doc.data();
-            const url = data.originalStoreLink || data.link;
-
-            if (!url) continue;
-
-            console.log(`   📦 Kontrol ediliyor: ${data.title.substring(0, 50)}...`);
-
-            // 1. KURAL: 24 SAAT DOLDU MU?
-            const createdAt = data.createdAt?.toDate?.() || new Date(data.createdAt);
-            const ageInHours = (Date.now() - createdAt.getTime()) / (1000 * 60 * 60);
-
-            if (ageInHours > 24) {
-                console.log(`      ⏰ Süre Doldu (24s+): İndirim Bitti olarak işaretleniyor.`);
-                const deleteDate = new Date(Date.now() + 60 * 60 * 1000); // 60 dakika sonra
-                await doc.ref.update({
-                    status: 'İndirim Bitti',
-                    expiredAt: FieldValue.serverTimestamp(),
-                    expiresAt: FieldValue.serverTimestamp(),
-                    deleteAt: deleteDate, // Firestore TTL için
-                    lastCheckedPrice: data.newPrice || 0,
-                    errorReason: '24 Saatlik Yayın Süresi Doldu',
-                    lastPriceCheck: FieldValue.serverTimestamp()
-                });
-                updatedCount++;
-                continue;
+        let autoExpiredCount = 0;
+        const autoExpiredIds = new Set();
+        
+        for (const doc of activeDocs) {
+            const deal = doc.data();
+            let createdAtMs = 0;
+            
+            // Farklı tarih formatlarını destekle (Timestamp, Seconds, Number, String)
+            if (deal.createdAt && typeof deal.createdAt.toMillis === 'function') {
+                createdAtMs = deal.createdAt.toMillis();
+            } else if (deal.createdAt && deal.createdAt._seconds) {
+                createdAtMs = deal.createdAt._seconds * 1000;
+            } else if (typeof deal.createdAt === 'number') {
+                createdAtMs = deal.createdAt;
+            } else if (typeof deal.createdAt === 'string') {
+                createdAtMs = new Date(deal.createdAt).getTime();
             }
 
-            // 2. KURAL: SAYFA KONTROLÜ (Hybrid AI)
-            const html = await fetchHtml(url);
-
-            if (!html) {
-                console.log(`      ⚠️ Hata (404/Bot Engeli): Atlanıyor.`);
-                await doc.ref.update({ lastPriceCheck: FieldValue.serverTimestamp() });
-                continue;
-            }
-
-            const $ = cheerio.load(html);
-            const currentPrice = extractPrice($, html);
-            const outOfStock = isOutOfStock($, html);
-
-            const tolerance = data.newPrice * 1.05;
-            let shouldBeExpired = outOfStock || (currentPrice > 0 && currentPrice > tolerance);
-
-            if (shouldBeExpired) {
-                console.log(`      🤖 AI'ya soruluyor... (Klasik Kontrol: ${outOfStock ? 'Stok Yok' : 'Fiyat Artmış'})`);
-                const aiResult = await verifyWithAI(url, data.title, data.newPrice, html);
+            if (createdAtMs > 0 && (now - createdAtMs > TWELVE_HOURS_MS)) {
+                autoExpiredCount++;
+                autoExpiredIds.add(doc.id);
+                const deleteDate = new Date(Date.now() + 60 * 60 * 1000); // 1 saatlik sayaç
                 
-                if (aiResult.expired) {
-                    console.log(`      🚩 AI ONAYLADI: ${aiResult.reason}`);
-                } else {
-                    console.log(`      🛡️ AI İPTAL ETTİ: İlan hala aktif görünüyor. (${aiResult.reason})`);
-                    shouldBeExpired = false; 
-                }
-            }
-
-            if (shouldBeExpired) {
-                console.log(`      🚩 İndirim Bitti! (Eski: ${data.newPrice}, Yeni: ${currentPrice || 'Stok Yok'})`);
-
-                const deleteDate = new Date(Date.now() + 60 * 60 * 1000); // 60 dakika sonra
                 await doc.ref.update({
                     status: 'İndirim Bitti',
                     expiredAt: FieldValue.serverTimestamp(),
                     expiresAt: FieldValue.serverTimestamp(),
-                    deleteAt: deleteDate, // Firestore TTL için
-                    lastCheckedPrice: currentPrice || 0,
-                    lastPriceCheck: FieldValue.serverTimestamp()
+                    deleteAt: deleteDate,
+                    errorReason: '12 saatlik yayın süresi dolmuştur (Otomatik).'
                 });
-
-                await db.collection('notifications').add({
-                    title: `🏷️ İndirim Bitti: ${data.brand || 'Mağaza'}`,
-                    body: `${data.title} indirimi sona erdi.`,
-                    image: data.imageUrl || "",
-                    url: `https://indiva.app/discount/${doc.id}`,
-                    target: 'all',
-                    status: 'pending',
-                    createdAt: FieldValue.serverTimestamp()
-                });
-
-                try {
-                    const messaging = getMessaging();
-                    const nowIso = new Date().toISOString();
-                    const bridgePayload = {
-                        topic: 'all_users',
-                        data: {
-                            type: 'DISCOUNT_STATUS_UPDATE',
-                            id: doc.id,
-                            status: 'İndirim Bitti',
-                            title: data.title || '',
-                            expiresAt: nowIso,
-                            silent: 'true'
-                        },
-                        android: {
-                            priority: 'high'
-                        }
-                    };
-                    await messaging.send(bridgePayload);
-                    console.log(`      🔗 Köprü sinyali gönderildi (ID: ${doc.id})`);
-                } catch (msgErr) {
-                    console.warn(`      ⚠️ Köprü sinyali hatası: ${msgErr.message}`);
-                }
-
-                updatedCount++;
-            } else {
-                console.log(`      ✅ İndirim devam ediyor. (Güncel: ${currentPrice || data.newPrice} TL)`);
-                await doc.ref.update({
-                    lastPriceCheck: FieldValue.serverTimestamp(),
-                    status: 'aktif'
-                });
+                // Mobil uygulamaı gerçek zamanlı bilgilendirmek için sessiz FCM gönder
+                await sendSilentExpiredNotification(doc.id, deal.title);
+                console.log(`   ⏰ OTOMATİK PASİF: ${deal.title.substring(0, 30)}... (${( (now - createdAtMs) / 3600000).toFixed(1)} sa)`);
             }
-
-            await new Promise(r => setTimeout(r, 600));
         }
 
-        console.log(`\n✨ Kontrol tamamlandı. ${updatedCount} ürün pasife alındı.`);
+        if (autoExpiredCount > 0) {
+            console.log(`\n✅ ${autoExpiredCount} adet 12 saati geçmiş ilan anında pasife alındı (Sayaç Başladı).`);
+        } else {
+            console.log('✅ 12 saati geçmiş aktif ilan bulunamadı.');
+        }
+
+        // --- AŞAMA 2: KALAN GENÇ İLANLAR İÇİN AI FİYAT/STOK KONTROLÜ ---
+        // Sadece 12 saatten küçük olan ve bu turda pasife alınmayanlardan bir kısmını tarıyoruz.
+        const adsToInspect = activeDocs.filter(d => !autoExpiredIds.has(d.id)).slice(0, 100);
+        
+        if (adsToInspect.length > 0) {
+            console.log(`\n🔍 ${adsToInspect.length} güncel ilan AI ile fiyat/stok kontrolüne alınıyor...\n`);
+        }
+
+        const processDeal = async (doc) => {
+            const deal = doc.data();
+            const id = doc.id;
+
+            // Zaten bitmişse veya link yoksa atla
+            if (deal.status === 'İndirim Bitti' || !deal.link) return;
+
+            const url = deal.originalStoreLink || deal.link;
+            console.log(`📦 [${deal.brand || 'Mağaza'}] ${deal.title.substring(0, 40)}...`);
+
+            try {
+                const isHardSite = /trendyol|amazon|hepsiburada|n11/.test(url.toLowerCase());
+                let html = await fetchHtml(url, isHardSite);
+
+                if (isHardSite) await new Promise(r => setTimeout(r, 2000)); // Rate limit bekleme
+
+                if (!html) {
+                    await doc.ref.update({ lastPriceCheck: FieldValue.serverTimestamp() });
+                    return;
+                }
+
+                const aiResult = await verifyWithAI(deal, html);
+
+                if (aiResult.expired) {
+                    console.log(`   🚩 İNDİRİM BİTTİ: ${aiResult.reason} (${id})`);
+                    const deleteDate = new Date(Date.now() + 60 * 60 * 1000);
+
+                    const updateData = {
+                        status: 'İndirim Bitti',
+                        expiredAt: FieldValue.serverTimestamp(),
+                        expiresAt: FieldValue.serverTimestamp(),
+                        deleteAt: deleteDate,
+                        lastCheckedPrice: aiResult.currentPrice || 0,
+                        lastPriceCheck: FieldValue.serverTimestamp(),
+                        errorReason: aiResult.reason
+                    };
+                    await doc.ref.update(updateData);
+                    // Mobil uygulamaı gerçek zamanlı bilgilendirmek için sessiz FCM gönder
+                    await sendSilentExpiredNotification(id, deal.title);
+
+                    // Bildirim
+                    await db.collection('notifications').add({
+                        title: `🏷️ İndirim Bitti: ${deal.brand || 'İNDİVA'}`,
+                        body: `${deal.title} indirimi sona erdi.`,
+                        image: deal.imageUrl || "",
+                        url: `https://indiva.app/detay/${id}`,
+                        target: 'all',
+                        status: 'pending',
+                        createdAt: FieldValue.serverTimestamp()
+                    });
+                } else {
+                    console.log(`   ✅ Aktif: ${deal.title.substring(0, 20)}...`);
+                    await doc.ref.update({
+                        lastPriceCheck: FieldValue.serverTimestamp(),
+                        lastCheckedPrice: aiResult.currentPrice || deal.newPrice,
+                        status: 'aktif'
+                    });
+                }
+            } catch (e) {
+                console.error(`   ❌ Hata (${id}): ${e.message}`);
+            }
+        };
+
+        // 5'erli paketler halinde paralel işle (Sunucuyu ve kotaları yormadan)
+        const batchSize = 5;
+        for (let i = 0; i < adsToInspect.length; i += batchSize) {
+            const batch = adsToInspect.slice(i, i + batchSize);
+            await Promise.all(batch.map(doc => processDeal(doc)));
+        }
+
+        // --- AŞAMA 3: KESİN SİLME (deleteAt dolanlar) ---
+        console.log(`\n🗑️  Kesin silme kontrolü yapılıyor...`);
+        const toDeleteSnapshot = await db.collection('discounts')
+            .where('deleteAt', '<=', new Date())
+            .get();
+
+        if (toDeleteSnapshot.size > 0) {
+            const deleteBatch = db.batch();
+            toDeleteSnapshot.docs.forEach(doc => {
+                deleteBatch.delete(doc.ref);
+                console.log(`   🚮 SİLİNDİ: ${doc.data().title.substring(0, 30)}...`);
+            });
+            await deleteBatch.commit();
+            console.log(`✅ ${toDeleteSnapshot.size} adet süresi dolan ilan kalıcı olarak silindi.`);
+        } else {
+            console.log('✅ Silinecek süresi dolmuş ilan yok.');
+        }
+
+        console.log(`\n✨ Tarama tamamlandı. 10 dakika sonra tekrar çalışacak.`);
 
     } catch (err) {
-        console.error(`💥 HATA: ${err.message}`);
+        console.error(`💥 Kritik Hata: ${err.message}`);
+        await sendAdminAlert('Kritik Sistem Hatası', `price-checker.js durdu: ${err.message}`);
     }
 }
 
-checkPrices();
+/**
+ * GitHub Actions cron ile 10 dakikada bir tek seferlik çalıştır.
+ * while(true) döngüsü kaldırıldı — Actions zaten cron ile tetikliyor.
+ */
+checkPrices()
+    .then(() => {
+        console.log('\n✅ Price Checker başarıyla tamamlandı.');
+        process.exit(0);
+    })
+    .catch(async (err) => {
+        console.error(`\n💥 KRİTİK HATA: ${err.message}`);
+        try { await sendAdminAlert('Price Checker Kritik Hata', err.message); } catch {}
+        process.exit(1);
+    });

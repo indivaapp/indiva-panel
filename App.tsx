@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
+import { initializePushNotifications } from './services/pushNotificationService';
 import type { ViewType } from './types';
 import type { ScrapedDeal } from './services/dealFinder';
 
@@ -104,6 +105,22 @@ const App: React.FC = () => {
             }
         };
     }, []);
+
+    // Push Bildirimlerini izole bir şekilde başlat (Ana uygulama akışını bozmaması için)
+    useEffect(() => {
+        if (authReady) {
+            const initPush = async () => {
+                try {
+                    // Cihaz hazır olana kadar kısa bir gecikme ekle
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    await initializePushNotifications();
+                } catch (err) {
+                    console.error('Push bildirimleri başlatılamadı:', err);
+                }
+            };
+            initPush();
+        }
+    }, [authReady]);
 
     // Share Intent Handler - Diğer uygulamalardan gelen linkleri yakala
     useEffect(() => {

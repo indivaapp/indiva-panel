@@ -16,7 +16,6 @@ interface ScrapedDeal {
 interface DealDetails {
     productLink: string;
     imageUrl?: string;
-    description?: string;
     brand?: string;
 }
 
@@ -359,25 +358,11 @@ function parseDetailHtml(html: string): DealDetails {
         imageUrl = `https://onual.com${imageUrl}`;
     }
 
-    // Get description
-    const metaDesc = $('meta[name="description"]').attr('content') || '';
-    const ogDesc = $('meta[property="og:description"]').attr('content') || '';
+
     const pageTitle = $('h1').first().text().trim();
-
-    let description = ogDesc || metaDesc || '';
-    description = description
-        .replace(/En ucuz.*?OnuAl'da\./gi, '')
-        .replace(/fiyatları.*?başlayan/gi, '')
-        .replace(/kullanıcı yorumları okuyun.*$/gi, '')
-        .trim();
-
-    if (!description && pageTitle) {
-        description = `${pageTitle} - Uygun fiyata alışveriş fırsatı`;
-    }
-
     const brand = extractBrand(pageTitle);
 
-    return { productLink, imageUrl, description, brand };
+    return { productLink, imageUrl, brand };
 }
 
 /**

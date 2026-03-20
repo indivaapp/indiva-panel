@@ -9,7 +9,7 @@ export interface AnalyzedProduct {
     brand: string;
     store: string;
     category: string;
-    description: string;
+    description?: string;
     oldPrice: number;
     newPrice: number;
     imageUrl: string;
@@ -165,7 +165,7 @@ async function analyzeWithGemini(content: string, url: string, storeName: string
     title: string;
     brand: string;
     category: string;
-    description: string;
+    description?: string;
     oldPrice: number;
     newPrice: number;
     discountPercent: number;
@@ -203,10 +203,10 @@ async function analyzeWithGemini(content: string, url: string, storeName: string
     - oldPrice: Tespit edilen piyasa fiyatı (Sadece sayı)
     - newPrice: Güncel kampanya fiyatı (Sadece sayı)
     - discountPercent: Hesaplanan indirim (Sadece sayı)
-    - description: Yukarıdaki uzman kurallarına göre yazılmış 45-60 kelimelik analiz metni.
+    - category: Tespit edilen en uygun kategori.
     
     YALNIZCA JSON DÖNDÜR (Açıklama profesyonel ve teknik bir inceleme olmalıdır, pazarlama sloganlarından kaçın):
-    {"title":"","brand":"","category":"","oldPrice":0,"newPrice":0,"discountPercent":0,"imageUrl":"","description":"Örn: Bu ürün, 4mm döküm gövde yapısı ve PFOA içermeyen yapışmaz kaplamasıyla segmentindeki en dayanıklı mutfak gereçlerinden biridir. Isı iletkenliği konusundaki başarısı pişirme verimliliğini artırırken, ergonomik kulp tasarımı uzun süreli kullanım konforu sağlar. Teknik özellikleri ve güncel indirim oranıyla yüksek yatırım değeri sunan bir fırsattır."}`;
+    {"title":"","brand":"","category":"","oldPrice":0,"newPrice":0,"discountPercent":0,"imageUrl":""}`;
 
     let text = '';
 
@@ -226,7 +226,7 @@ async function analyzeWithGemini(content: string, url: string, storeName: string
         - oldPrice: Tespit edilen piyasa fiyatı (Sadece sayı)
         - newPrice: Güncel kampanya fiyatı (Sadece sayı)
         - discountPercent: Hesaplanan indirim (Sadece sayı)
-        - description: Uzman kurallarına göre yazılmış 45-60 kelimelik analiz metni.
+        - category: Tespit edilen en uygun kategori.
         
         Açıklama profesyonel ve teknik bir inceleme olmalıdır. Sadece JSON döndür.`;
 
@@ -272,7 +272,6 @@ async function analyzeWithGemini(content: string, url: string, storeName: string
         title: parsed.title || 'Ürün',
         brand: parsed.brand || '',
         category: parsed.category || 'Diğer',
-        description: parsed.description || `${storeName}'da harika fırsat!`,
         oldPrice: oldPrice,
         newPrice: newPrice,
         discountPercent: parseInt(String(parsed.discountPercent).replace(/[^\d]/g, '')) || 0,
@@ -365,7 +364,6 @@ export async function analyzeProductLink(link: string): Promise<AnalyzedProduct>
         title: title,
         brand: brand,
         category: aiResult.category,
-        description: aiResult.description,
         oldPrice: finalOldPrice,
         newPrice: finalNewPrice,
         store: storeName,

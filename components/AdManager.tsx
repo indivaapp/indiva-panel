@@ -26,7 +26,6 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
     // Form Fields matching DiscountManager
     const [title, setTitle] = useState(''); // productName/Title
     const [brand, setBrand] = useState(''); // sellerName/Brand
-    const [description, setDescription] = useState('');
     const [category, setCategory] = useState('');
     const [link, setLink] = useState('');
     const [oldPrice, setOldPrice] = useState('');
@@ -141,7 +140,6 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
     const resetForm = () => {
         setTitle('');
         setBrand('');
-        setDescription('');
         setCategory('');
         setLink('');
         setOldPrice('');
@@ -175,7 +173,6 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
         try {
             await addAdvertisement({
                 title,
-                description,
                 brand,
                 category,
                 link,
@@ -243,8 +240,6 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
                         <input type="text" placeholder="Marka / Satıcı" value={brand} onChange={e => setBrand(e.target.value)} className="w-full p-3 bg-gray-700 rounded-md border border-gray-600" required />
                     </div>
 
-                    {/* Row 2: Description */}
-                    <textarea placeholder="Reklam Açıklaması (Opsiyonel)" value={description} onChange={e => setDescription(e.target.value)} className="w-full p-3 bg-gray-700 rounded-md border border-gray-600" rows={3}></textarea>
 
                     {/* Row 3: Category & Ad Badge */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

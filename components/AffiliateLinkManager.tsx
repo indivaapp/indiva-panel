@@ -249,7 +249,6 @@ const AffiliateLinkManager: React.FC<AffiliateLinkManagerProps> = ({ isAdmin, sh
         try {
             await addDiscount({
                 title: product.title,
-                description: product.description,
                 brand: product.brand,
                 category: product.category,
                 link: product.link,
@@ -291,7 +290,6 @@ const AffiliateLinkManager: React.FC<AffiliateLinkManagerProps> = ({ isAdmin, sh
 
             await addDiscount({
                 title: result.title,
-                description: result.description,
                 brand: result.brand,
                 category: result.category,
                 link: result.link,
@@ -619,15 +617,6 @@ const AffiliateLinkManager: React.FC<AffiliateLinkManagerProps> = ({ isAdmin, sh
                                     </div>
                                 </div>
 
-                                <div>
-                                    <label className="block text-[10px] text-gray-500 font-bold mb-1 ml-1 uppercase">Açıklama</label>
-                                    <textarea
-                                        value={product.description}
-                                        onChange={(e) => updateProduct('description', e.target.value)}
-                                        className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white text-sm min-h-[100px]"
-                                        placeholder="Ürün Açıklaması"
-                                    />
-                                </div>
 
                                 <div className="flex gap-3 pt-2">
                                     <button

@@ -1,5 +1,5 @@
 // List available Gemini models
-const API_KEY = 'AIzaSyBb3aYRtZdH3ttCS19zu7XnFcu4fKSypyk';
+const API_KEY = process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
 
 async function listModels() {
     try {

@@ -126,7 +126,6 @@ const Dashboard: React.FC<DashboardProps> = ({ setActiveView, setSelectedDeal })
                 productLink: product.link,
                 imageUrl: product.imageUrl,
                 scrapedAt: new Date(),
-                // AnalyzedProduct'tan gelen ek verileri description'a ekle (çünkü EditDealPage oradan okuyor)
                 couponCode: '', 
             };
 
@@ -138,13 +137,8 @@ const Dashboard: React.FC<DashboardProps> = ({ setActiveView, setSelectedDeal })
             else if (storeLower.includes('n11')) deal.source = 'n11';
             else deal.source = 'other';
 
-            // EditDealPage'e description hazırlama (AI'nın ürettiği metni oraya aktar)
-            // EditDealPage deal.couponCode varsa onu description'a koyuyor, ama biz direkt description'ı da etkileyebiliriz
-            // Aslında EditDealPage'i biraz modifiye etmemiz gerekebilir ki bu description'ı direkt alsın.
-            // Ama şimdilik deal nesnesini setSelectedDeal ile gönderiyoruz.
             
             // @ts-ignore
-            deal.aiDescription = product.description;
             // @ts-ignore
             deal.brandName = product.brand;
             // @ts-ignore

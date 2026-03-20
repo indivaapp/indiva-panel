@@ -8,8 +8,14 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
+import { initializeApp, cert, getApps } from 'firebase-admin/app';
+import { getFirestore, FieldValue, FieldPath } from 'firebase-admin/firestore';
+import { getMessaging } from 'firebase-admin/messaging';
+import * as cheerio from 'cheerio';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fetchWithFallback, resolveUrl, parseDeals } from './scraperService.js';
+import { sendAdminAlert } from './alertService.js';
 
 
 
@@ -27,6 +33,7 @@ if (fs.existsSync(envPath)) {
         if (eqIdx < 0) continue;
         const key = trimmed.substring(0, eqIdx).trim();
         const val = trimmed.substring(eqIdx + 1).trim().replace(/^["']|["']$/g, '');
+        if (val.includes('YOUR_') || val.includes('indiva-panel-...')) continue;
         if (!process.env[key]) process.env[key] = val;
     }
 }
@@ -39,21 +46,21 @@ const MAX_NEW_PRODUCTS = 15; // Biraz artırılabilir, artık daha verimli
 const REQUEST_DELAY_MS = 1000; // İstekler arası bekleme (ms)
 
 // AI Config
-const MODEL = 'gemini-2.5-flash-lite';
+const MODEL = 'gemini-2.5-flash'; // Mart 2026 itibarıyla aktif, ücretsiz tier destekli model
 
 // Kategorileri tespit için anahtar kelimeler
 const CATEGORY_MAP = [
-    { keywords: ['klavye', 'mouse', 'fare', 'monitör', 'bilgisayar', 'laptop', 'notebook', 'tablet', 'telefon', 'kulaklık', 'hoparlör', 'kamera', 'projeksiyon', 'ssd', 'harddisk', 'şarj', 'powerbank', 'kablo', 'adaptör'], category: 'Teknoloji' },
-    { keywords: ['mont', 'ceket', 'kazak', 'gömlek', 'pantolon', 'şort', 'elbise', 'bluz', 'tişört', 'sweatshirt', 'polar', 'ayakkabı', 'sneaker', 'bot', 'sandalet', 'çanta', 'sırt çantası', 'bere', 'eldiven', 'çorap', 'yelek', 'kemer', 'cüzdan'], category: 'Giyim & Ayakkabı' },
-    { keywords: ['şampuan', 'krem', 'losyon', 'maske', 'serum', 'parfüm', 'deodorant', 'saç', 'cilt', 'diş', 'tıraş', 'makyaj', 'ruj', 'oje', 'ped', 'orkid', 'hijyen', 'sabun', 'duş jeli', 'vücut spreyi'], category: 'Kozmetik & Kişisel Bakım' },
-    { keywords: ['tencere', 'tava', 'çaydanlık', 'bıçak', 'kaşık', 'tabak', 'bardak', 'fincan', 'yemek takımı', 'çay takımı', 'mobilya', 'masa', 'sandalye', 'yatak', 'dolap', 'nevresim', 'perde', 'halı', 'kilim', 'aydınlatma', 'lamba'], category: 'Ev, Yaşam & Mutfak' },
-    { keywords: ['deterjan', 'sabun', 'temizlik', 'bez', 'süpürge', 'mop', 'fırça', 'çöp', 'bakliyat', 'yağ', 'şeker', 'çay', 'kahve', 'atıştırmalık', 'makarna', 'peynir', 'süt', 'yoğurt'], category: 'Süpermarket' },
-    { keywords: ['bebek', 'bez', 'emzik', 'biberon', 'oyuncak', 'lego', 'puzzle', 'bebek arabası'], category: 'Anne & Bebek' },
-    { keywords: ['vitamini', 'takviye', 'kapsül', 'şurup', 'macun', 'sağlık', 'maske', 'eldiven'], category: 'Sağlık & Medikal' },
-    { keywords: ['kalem', 'defter', 'boya', 'çizim', 'kağıt', 'resim', 'kitap', 'roman'], category: 'Kitap & Kırtasiye' },
-    { keywords: ['kamp', 'spor', 'fitness', 'outdoor', 'bisiklet', 'top', 'forma'], category: 'Spor & Outdoor' },
-    { keywords: ['kedi', 'köpek', 'mama', 'kum', 'tasma', 'kuş', 'balık'], category: 'Pet Shop' },
-    { keywords: ['araba', 'otomobil', 'tekerlek', 'lastik', 'yağ', 'aksesuar', 'motosiklet', 'kask'], category: 'Otomotiv & Motosiklet' },
+    { keywords: ['klavye', 'mouse', 'fare', 'monitör', 'bilgisayar', 'laptop', 'notebook', 'tablet', 'telefon', 'iphone', 'samsung', 'xiaomi', 'kulaklık', 'hoparlör', 'kamera', 'projeksiyon', 'ssd', 'harddisk', 'şarj', 'powerbank', 'kablo', 'adaptör', 'akıllı saat', 'scooter', 'drone'], category: 'Teknoloji' },
+    { keywords: ['mont', 'ceket', 'kazak', 'gömlek', 'pantolon', 'şort', 'elbise', 'bluz', 'tişört', 't-shirt', 'sweatshirt', 'polar', 'ayakkabı', 'sneaker', 'bot', 'sandalet', 'çanta', 'sırt çantası', 'bere', 'eldiven', 'çorap', 'yelek', 'kemer', 'cüzdan', 'pijama', 'iç giyim'], category: 'Giyim' },
+    { keywords: ['şampuan', 'krem', 'losyon', 'maske', 'serum', 'parfüm', 'deodorant', 'saç', 'cilt', 'diş', 'tıraş', 'makyaj', 'ruj', 'oje', 'ped', 'orkid', 'hijyen', 'sabun', 'duş jeli', 'vücut spreyi'], category: 'Kozmetik' },
+    { keywords: ['tencere', 'tava', 'çaydanlık', 'bıçak', 'kaşık', 'tabak', 'bardak', 'fincan', 'yemek takımı', 'çay takımı', 'mobilya', 'masa', 'sandalye', 'yatak', 'dolap', 'nevresim', 'perde', 'halı', 'kilim', 'aydınlatma', 'lamba', 'havlu', 'nevresim'], category: 'Ev' },
+    { keywords: ['deterjan', 'sabun', 'temizlik', 'bez', 'süpürge', 'mop', 'fırça', 'çöp', 'bakliyat', 'yağ', 'şeker', 'çay', 'kahve', 'atıştırmalık', 'makarna', 'peynir', 'süt', 'yoğurt', 'çikolata', 'gıda', 'bisküvi', 'nutella', 'kahvaltılık'], category: 'Market' },
+    { keywords: ['bebek', 'bez', 'emzik', 'biberon', 'oyuncak', 'lego', 'puzzle', 'bebek arabası', 'mama'], category: 'Bebek' },
+    { keywords: ['vitamini', 'takviye', 'kapsül', 'şurup', 'macun', 'sağlık', 'maske', 'eldiven'], category: 'Sağlık' },
+    { keywords: ['kalem', 'defter', 'boya', 'çizim', 'kağıt', 'resim', 'kitap', 'roman'], category: 'Kitap' },
+    { keywords: ['kamp', 'spor', 'fitness', 'outdoor', 'bisiklet', 'top', 'forma', 'pilates'], category: 'Spor' },
+    { keywords: ['kedi', 'köpek', 'mama', 'kum', 'tasma', 'kuş', 'balık'], category: 'Pet' },
+    { keywords: ['araba', 'otomobil', 'tekerlek', 'lastik', 'yağ', 'aksesuar', 'motosiklet', 'kask'], category: 'Oto' },
 ];
 
 // Mağaza tespiti
@@ -85,16 +92,21 @@ function initFirebase() {
     let serviceAccount;
     const envJson = process.env.FIREBASE_SERVICE_ACCOUNT;
 
-    if (envJson) {
+    if (envJson && !envJson.includes('indiva-panel-...')) {
         serviceAccount = JSON.parse(envJson);
     } else {
-        // Lokal geliştirme için service account dosyası
         const localPath = path.join(ROOT_DIR, 'firebase-service-account.json');
         if (fs.existsSync(localPath)) {
             serviceAccount = JSON.parse(fs.readFileSync(localPath, 'utf8'));
         } else {
-            throw new Error('Firebase service account bulunamadı. FIREBASE_SERVICE_ACCOUNT env değişkenini ayarlayın veya firebase-service-account.json dosyasını ekleyin.');
+            throw new Error('Firebase service account bulunamadı.');
         }
+    }
+
+    // PEM formatı için private_key'deki kaçış karakterlerini (\n) GERÇEK satır başlarına çevir
+    if (serviceAccount && serviceAccount.private_key) {
+        // Hem \n hem de \\n durumlarını kapsayacak şekilde temizlik yap
+        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n').replace(/\n\n/g, '\n');
     }
 
     initializeApp({ credential: cert(serviceAccount) });
@@ -104,9 +116,10 @@ function initFirebase() {
 // ─── OpenRouter AI ───────────────────────────────────────────────────────────
 
 function getGeminiKey() {
-    // OpenRouter Key'ini önceliklendir (Çünkü Gemini Lite paketimiz OpenRouter üzerinde)
-    const key = process.env.OPENROUTER_API_KEY || process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
-    if (!key) throw new Error('API Key (OPENROUTER_API_KEY veya GEMINI_API_KEY) env değişkeni eksik');
+    // @google/genai SDK Google endpoint kullanır — sadece GEMINI_API_KEY çalışır.
+    // OpenRouter ayrı bir endpoint gerektirir (fetch tabanlı) — SDK ile çalışmaz.
+    const key = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+    if (!key) throw new Error('GEMINI_API_KEY env değişkeni eksik. .env dosyasını kontrol et.');
     return key;
 }
 
@@ -149,27 +162,30 @@ function simulateOldPrice(newPrice) {
  * Gemini SDK kullanarak yapay zeka analizi yapar (Model: gemini-2.5-flash-lite)
  */
 async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, metaDescription = '') {
-    if (!apiKey) return { category: detectCategory(productTitle), description: generateFallbackDescription(productTitle, 0), aiFomoScore: 5 };
+    if (!apiKey) return { category: detectCategory(productTitle), aiFomoScore: 5 };
 
     const genAI = new GoogleGenAI({ apiKey });
 
     const systemInstruction = `Sen INDIVA uygulamasının kıdemli Teknik Ürün Analisti ve e-ticaret metin yazarı uzmanısın. 
-    Görevin, paylaşılan ürün başlığını ve detaylarını analiz ederek "profesyonel bir inceleme ve fırsat puanlaması" yapmaktır.
+    Görevin, paylaşılan ürün başlığını ve detaylarını analiz ederek "profesyonel bir inceleme ve kategori tespiti" yapmaktır.
 
     GÖREV KURALLARI:
-    1. TEKNİK ANALİZ: Sadece başlığı süsleme. Ürünün segmentindeki yerini, malzeme kalitesini veya kullanım amacını teknik bir ciddiyetle ele al.
-    2. BİLİRKİŞİ TONU: Bir pazarlamacı gibi değil, o alanda uzman bir bilirkişi gibi konuş. "Harika", "muhteşem" gibi boş kelimeler yerine "yüksek performanslı", "dayanıklı yapı", "profesyonel çözüm" gibi somut ifadeler kullan.
-    3. FOMO PUANI (aiFomoScore): Fırsatın gerçekçiliğini 1-10 arası puanla. (10: Kaçırılmayacak teknik fırsat).
-    4. KISITLAMA: Açıklama 45-60 kelime arası, tek paragraf ve akıcı olmalı. Emocileri (2-4 adet) stratejik kullan.
-    5. CEVAP: SADECE saf JSON formatında cevap ver.`;
+    1. SANİTİZE BAŞLIK (title): Paylaşılan başlıkta "Son 6 Ayın En Düşük Fiyatı", "Sepette %20 İndirim", "Fırsat Ürünü" gibi pazarlama sloganlarını TEMİZLE. Sadece gerçek ÜRÜN ADI ve MODELİNİ (varsa Marka ile) döndür. Örn: "Philips MG3710/15 Tıraş Makinesi".
+    2. KATEGORİ TESPİTİ: Ürünü analiz et ve şu kategorilerden EN UYGUN olanı seç: [Teknoloji, Giyim, Kozmetik, Ev, Market, Bebek, Sağlık, Kitap, Spor, Pet, Oto].
+    3. TEKNİK ANALİZ: Sadece başlığı süsleme. Ürünün segmentindeki yerini, malzeme kalitesini veya kullanım amacını teknik bir ciddiyetle ele al.
+    4. BİLİRKİŞİ TONU: Bir pazarlamacı gibi değil, o alanda uzman bir bilirkişi gibi konuş.
+    5. FOMO PUANI (aiFomoScore): Fırsatın gerçekçiliğini 1-10 arası puanla.
+    6. KISITLAMA: Açıklama 45-60 kelime arası, tek paragraf ve akıcı olmalı. Emocileri (2-4 adet) stratejik kullan.
+    7. CEVAP: SADECE saf JSON formatında cevap ver.`;
 
     const prompt = `Ürün: "${productTitle}" | Fiyat: ${oldPrice} TL -> ${newPrice} TL | Açıklama: ${metaDescription}
     
-    JSON FORMATI (Açıklama profesyonel ve teknik bir inceleme olmalıdır):
+    JSON FORMATI:
     {
-      "category": "Kategori",
-      "aiFomoScore": 9,
-      "description": "Örn: Thermoad Zest tava seti, 4mm kalınlığında döküm gövdesi ve yüksek ısılara dayanıklı iç kaplamasıyla profesyonel mutfak performansı sunuyor. Isı dağılımı konusundaki homojen yapısı sayesinde enerji tasarrufu sağlarken, siyah granit kaplaması yapışmazlık ömrünü uzatıyor. Bu fiyat bandındaki rakiplerine göre malzeme kalitesiyle öne çıkan, uzun ömürlü bir mutfak yatırımı."
+      "title": "Temizlenmiş Ürün Adı ve Model",
+      "category": "Seçilen Kategori",
+      "description": "Profesyonel teknik inceleme metni",
+      "aiFomoScore": 9
     }`;
 
     try {
@@ -193,14 +209,23 @@ async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, me
             "Elektronik": "Teknoloji",
             "Cep Telefonu": "Teknoloji",
             "Bilgisayar": "Teknoloji",
-            "Mutfak": "Ev, Yaşam & Mutfak",
-            "Ev Aletleri": "Ev, Yaşam & Mutfak"
+            "Mutfak": "Ev",
+            "Ev Aletleri": "Ev",
+            "Giyim & Ayakkabı": "Giyim",
+            "Süpermarket": "Market",
+            "Anne & Bebek": "Bebek",
+            "Otomotiv & Motosiklet": "Oto",
+            "Kitap & Kırtasiye": "Kitap",
+            "Kozmetik & Kişisel Bakım": "Kozmetik",
+            "Spor & Outdoor": "Spor",
+            "Pet Shop": "Pet"
         };
         const finalCategory = CATEGORY_MAPPING[aiData.category] || aiData.category || detectCategory(productTitle);
 
         return {
+            title: aiData.title || productTitle,
             category: finalCategory,
-            description: aiData.description || generateFallbackDescription(productTitle, 0),
+            description: aiData.description || '',
             aiFomoScore: parseInt(aiData.aiFomoScore) || 5
         };
 
@@ -208,7 +233,6 @@ async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, me
         console.warn(`      ❌ AI HATA RAPORU: ${err.message}`);
         return {
             category: detectCategory(productTitle),
-            description: generateFallbackDescription(productTitle, 0),
             aiFomoScore: 5
         };
     }
@@ -247,13 +271,6 @@ async function generatePushNotifications(apiKey, productTitle, discountPercent) 
  * AI başarısız olduğunda ürüne özel bir fallback açıklama oluştur
  */
 function generateFallbackDescription(productTitle, discountPercent) {
-    const templates = [
-        `Teknik İnceleme: ${productTitle}, malzeme kalitesi ve segmentindeki performansıyla dikkat çekiyor. ${discountPercent > 0 ? `%${discountPercent} indirim avantajı` : 'Fiyat/performans dengesi'} ile profesyonel bir tercih olan bu ürünü, dayanıklılık ve uzun ömür kriterleri açısından teknik olarak öneriyoruz. Detaylar için inceleyin. ✅`,
-        `Ürün Analizi: ${productTitle} için beklenen fiyat revizyonu gerçekleşti. Mühendislik detayları ve kullanım ergonomisi göz önüne alındığında, bu fiyat bandında nadir görülen bir fırsat sunuyor. Satın alma öncesi teknik detayları sayfadan kontrol edebilirsiniz. 🚀`,
-        `Kısa Özet: ${productTitle}, yüksek standartlarda üretilmiş olup, profesyonel kullanım ihtiyaçlarını karşılayacak donanıma sahiptir. Güncel fiyatı, piyasa ortalamasına göre ciddi bir avantaj sunmaktadır. Yatırım değeri yüksek olan bu fırsatı tükenmeden değerlendirin. ✨`,
-        `Uzman Görüşü: ${productTitle} fiyat/özellik grafiğinde en tepe noktada yer alıyor. Hem yapısal sağlamlığı hem de sunduğu fonksiyonel avantajlarla, bilinçli tüketiciler için kaçırılmayacak bir teknik fırsat. Stok durumunu kontrol etmeyi unutmayın. ⚡`
-    ];
-
     const hash = productTitle.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
     return templates[hash % templates.length];
 }
@@ -296,97 +313,32 @@ async function sendFomoPushNotification(title, body, docId, imageUrl = '') {
 
 // ─── HTTP Utilities ──────────────────────────────────────────────────────────
 
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
-
 /**
- * URL'ye GET isteği at, HTML döndür
+ * URL'ye GET isteği at, HTML döndür - REFACTORED to use scraperService
  */
 async function fetchHtml(url, timeoutMs = 15000, retries = 2) {
-    for (let i = 0; i <= retries; i++) {
-        try {
-            const res = await fetch(url, {
-                headers: {
-                    'User-Agent': USER_AGENT,
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.7',
-                    'Referer': 'https://onual.com/',
-                    'Cache-Control': 'no-cache'
-                },
-                signal: AbortSignal.timeout(timeoutMs),
-                redirect: 'follow',
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return await res.text();
-        } catch (err) {
-            if (i === retries) throw err;
-            console.log(`      ⚠️  İstek hatası, yeniden deneniyor (${i + 1}/${retries})...`);
-            await sleep(2000);
-        }
-    }
+    const { html } = await fetchWithFallback(url, { timeout: timeoutMs, retries });
+    return html;
 }
 
 /**
  * Redirect zincirini takip ederek gerçek mağaza URL'sini bul
- * Strateji 1: zxro.com/u/?url=ENCODED_URL → parametredeki URL'yi decode et (en hızlı yol)
- * Strateji 2: HTTP follow redirect → final URL mağaza ise kullan
- * Strateji 3: HTML içinde meta refresh veya JS redirect ara
+ * REFACTORED to use scraperService.resolveUrl
  */
 async function resolveStoreLink(intermediateUrl, timeoutMs = 12000) {
     try {
-        // ── Strateji 1: zxro.com ve benzeri aracılardaki url= parametresini oku ──
-        // Örnek: https://zxro.com/u/?redirect=1&url=https%3A%2F%2Fwww.amazon.com.tr%2F...
+        // ── Strateji 1: URL parametresi kontrolü (Hızlı) ──
         const urlObj = new URL(intermediateUrl);
         const encodedTarget = urlObj.searchParams.get('url');
         if (encodedTarget) {
             const decoded = decodeURIComponent(encodedTarget);
-            const isStore = STORE_MAP.some(s => decoded.includes(s.domain));
-            if (isStore) {
-                console.log(`   ✅ URL param'dan mağaza linki alındı: ${decoded.substring(0, 80)}...`);
+            if (STORE_MAP.some(s => decoded.includes(s.domain))) {
                 return decoded;
             }
         }
 
-        // ── Strateji 2: HTTP redirect follow ────────────────────────────────────
-        const response = await fetch(intermediateUrl, {
-            method: 'GET',
-            headers: {
-                'User-Agent': USER_AGENT,
-                'Accept': 'text/html,application/xhtml+xml,*/*',
-            },
-            signal: AbortSignal.timeout(timeoutMs),
-            redirect: 'follow',
-        });
-
-        const finalUrl = response.url;
-        const isStore = STORE_MAP.some(s => finalUrl.includes(s.domain));
-        if (isStore) {
-            console.log(`   ✅ HTTP redirect ile mağaza linki: ${finalUrl.substring(0, 80)}...`);
-            return finalUrl;
-        }
-
-        // ── Strateji 3: HTML içindeki meta/JS redirect ───────────────────────────
-        const html = await response.text();
-
-        const metaRefresh = html.match(/url=["']?(https?:\/\/[^"'\s>]+)/i);
-        if (metaRefresh) {
-            const targetUrl = metaRefresh[1];
-            if (STORE_MAP.some(s => targetUrl.includes(s.domain))) {
-                console.log(`   ✅ Meta refresh ile mağaza linki: ${targetUrl.substring(0, 80)}...`);
-                return targetUrl;
-            }
-        }
-
-        const jsRedirect = html.match(/(?:window\.location(?:\.href)?\s*=\s*|location\.replace\()\s*["']?(https?:\/\/[^"'\s)]+)/i);
-        if (jsRedirect) {
-            const targetUrl = jsRedirect[1];
-            if (STORE_MAP.some(s => targetUrl.includes(s.domain))) {
-                console.log(`   ✅ JS redirect ile mağaza linki: ${targetUrl.substring(0, 80)}...`);
-                return targetUrl;
-            }
-        }
-
-        console.warn(`   ⚠️  Mağaza linki çözülemedi: ${intermediateUrl} → ${finalUrl}`);
-        return null;
+        // ── Strateji 2: HTTP Redirect Follow (scraperService) ──
+        return await resolveUrl(intermediateUrl, timeoutMs);
     } catch (err) {
         console.warn(`   ⚠️  Link resolve hatası: ${err.message}`);
         return null;
@@ -404,56 +356,12 @@ function sleep(ms) {
 
 /**
  * onual.com/fiyat/ ana sayfasını parse et
- * Ürün adı, URL, yeni fiyat ver
+ * REFACTORED to use scraperService.parseDeals
  */
 async function fetchProductList() {
     console.log('📡 onual.com/fiyat/ çekiliyor...');
-    const html = await fetchHtml(ONUAL_URL);
-    const $ = cheerio.load(html);
-    const products = [];
-
-    const allLinks = $('a[href*="/fiyat/"]');
-    console.log(`🔍 Sayfada toplam ${allLinks.length} adet /fiyat/ linki bulundu.`);
-
-    allLinks.each((_, el) => {
-        const href = $(el).attr('href');
-        if (!href) return;
-
-        // Debug: Sadece ilk 5 linki logla (Pattern testi için)
-        // if (products.length < 5) console.log(`   🔗 Link adayı: ${href}`);
-
-        if (!href.match(/\/fiyat\/[^/]+-p-\d+\.html/i)) return;
-
-        const fullUrl = href.startsWith('http') ? href : `https://onual.com${href}`;
-        const priceMatch = href.match(/#fiyat=(\d+)/);
-        const price = priceMatch ? parseInt(priceMatch[1]) : 0;
-        const title = $(el).text().trim() || $(el).attr('title') || '';
-        const cleanTitle = title.replace(/\s+/g, ' ').trim();
-
-        if (!cleanTitle || cleanTitle.length < 3) return;
-
-        const idMatch = fullUrl.match(/-p-(\d+)\.html/);
-        const productId = idMatch ? idMatch[1] : null;
-        if (!productId) return;
-
-        products.push({
-            id: productId,
-            title: cleanTitle,
-            url: fullUrl.split('#')[0],
-            newPrice: price,
-            rawUrl: href,
-        });
-    });
-
-    const seen = new Set();
-    const unique = products.filter(p => {
-        if (seen.has(p.id)) return false;
-        seen.add(p.id);
-        return true;
-    });
-
-    console.log(`✅ ${unique.length} benzersiz ürün parse edildi.`);
-    return unique;
+    const { html } = await fetchWithFallback(ONUAL_URL);
+    return parseDeals(html);
 }
 
 /**
@@ -746,7 +654,7 @@ async function main() {
             }
 
             if (!storeLink) {
-                console.warn(`   ⚠️  Mağaza linki çözülemedi, atlanıyor`);
+                console.warn(`   ⚠️  Mağaza linki çözülemedi → Kaynak: ${details.intermediateLink?.substring(0, 100)}`);
                 failCount++;
                 continue;
             }
@@ -775,10 +683,10 @@ async function main() {
             // Firebase'e kaydet
             const cleanedTitle = cleanProductTitle(details.title || product.title);
             const discountData = {
-                title: cleanedTitle.substring(0, 200),
-                description: aiData.description || `${cleanedTitle} şimdi İNDİVA'da yayında! Hem kalitesi hem de bu muazzam fiyatıyla kaçırılmayacak bir fırsat. Hemen detayları incele, stoklar tükenmeden sen de bu karlı alışverişin tadını çıkar! 🔥`,
+                title: (aiData.title || cleanedTitle).substring(0, 200),
                 brand: store.name || 'Mağaza',
                 category: aiData.category || 'Ev, Yaşam & Mutfak',
+                description: aiData.description || '',
                 link: storeLink,
                 originalStoreLink: storeLink,
                 oldPrice: oldPrice || 0,
@@ -835,7 +743,11 @@ async function main() {
     console.log('═══════════════════════════════════════════\n');
 }
 
-main().catch(err => {
+main().catch(async (err) => {
     console.error('\n💥 KRİTİK HATA:', err.message);
+    try {
+        const { sendAdminAlert } = await import('./alertService.js');
+        await sendAdminAlert('Kritik Sistem Hatası', `auto-onual.js durdu: ${err.message}`);
+    } catch (e) {}
     process.exit(1);
 });
