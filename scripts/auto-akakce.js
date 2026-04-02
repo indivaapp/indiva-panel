@@ -197,9 +197,11 @@ Format: [{"title":"Samsung Galaxy S25","newPrice":35000,"oldPrice":42000,"discou
     // Strateji 2: Google Search — ürüne özel URL'lerle
     try {
         console.log('🔍 Strateji 2: Gemini Google Search Grounding...');
-        const searchPrompt = `Search Google for: site:akakce.com indirim fiyat düştü
+        const searchPrompt = `Search Google for: akakce.com indirimli ürünler fiyat düştü TL
 
-IMPORTANT: For each search result from akakce.com, use the EXACT FULL URL of that specific product page (e.g. https://www.akakce.com/monitor/msi-pro-mp275q,12345678.html). Do NOT use https://www.akakce.com/ as productUrl.
+Find product pages from akakce.com in the search results.
+
+CRITICAL: For productUrl, use the EXACT specific product page URL from each search result (e.g. https://www.akakce.com/monitor/msi-pro,12345678.html). Do NOT use https://www.akakce.com/ as productUrl. Each product must have its own unique URL.
 
 Extract from each result:
 - title: product name (clean)
@@ -207,7 +209,7 @@ Extract from each result:
 - oldPrice: previous price as number (TL), 0 if unknown
 - discountPercent: discount % as number, 0 if unknown
 - imageUrl: "" (leave empty)
-- productUrl: the EXACT specific product page URL from the search result (like https://www.akakce.com/kategori/urun-adi,12345678.html)
+- productUrl: EXACT specific akakce.com product URL from the search result
 
 Return ONLY a JSON array. No explanation. Max ${MAX_NEW_PRODUCTS} items.
 Format: [{"title":"MSI Monitor","newPrice":6364,"oldPrice":8000,"discountPercent":20,"imageUrl":"","productUrl":"https://www.akakce.com/monitor/msi-pro,12345678.html"}]`;
