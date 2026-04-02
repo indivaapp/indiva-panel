@@ -165,56 +165,59 @@ Format: [{"title":"Samsung Galaxy S25","newPrice":35000,"oldPrice":42000,"discou
         return parts.filter(p => p.text).map(p => p.text).join('');
     }
 
-    // Strateji 1: URL Context + JSON modu (Google sunucuları üzerinden fetch)
+    // Strateji 1: URL Context (Google sunucuları üzerinden fetch)
     try {
-        console.log('🤖 Strateji 1: Gemini URL Context (JSON modu)...');
+        console.log('🤖 Strateji 1: Gemini URL Context...');
         const response = await genAI.models.generateContent({
             model: MODEL_URL_CONTEXT,
             contents: [{
                 role: 'user',
-                parts: [{ text: `Visit this URL: ${AKAKCE_URL}\n\nFrom the page, find the "Fark Atan Fiyatlar" or "Son Yakalanan İndirimler" section and extract products.\n\n${productPrompt}` }]
+                parts: [{ text: `Visit this URL and read the page: ${AKAKCE_URL}\n\nFind the "Fark Atan Fiyatlar" or "Son Yakalanan İndirimler" section.\n\n${productPrompt}` }]
             }],
             config: {
                 tools: [{ urlContext: {} }],
                 temperature: 0.1,
-                responseMimeType: 'application/json',
             },
         });
         const text = extractText(response);
         console.log(`   📝 Yanıt (ilk 800): ${text.substring(0, 800)}`);
-        // JSON modu: response direkt JSON olmalı
-        const parsed = JSON.parse(text.trim());
-        const products = Array.isArray(parsed) ? parsed : (parsed.products || parsed.items || []);
-        if (products.length > 0) {
-            console.log(`   ✅ URL Context JSON: ${products.length} ürün`);
-            return products;
+        const match = text.match(/\[[\s\S]*?\]/);
+        if (match) {
+            const products = JSON.parse(match[0]);
+            if (products.length > 0) {
+                console.log(`   ✅ URL Context: ${products.length} ürün`);
+                return products;
+            }
         }
         console.warn('   ⚠️ URL Context boş döndü, Google Search deneniyor...');
     } catch (err) {
         console.warn(`   ⚠️ URL Context hatası: ${err.message}`);
     }
 
-    // Strateji 2: Google Search — akakce.com'daki güncel indirimli ürünleri ara
+    // Strateji 2: Google Search — imageUrl olmadan, sadece title+fiyat+url
     try {
         console.log('🔍 Strateji 2: Gemini Google Search Grounding...');
-        const searchPrompt = `Google'da şunu ara: akakce.com indirimli ürünler fiyat düştü TL 2024 2025
+        const searchPrompt = `Search Google for: akakce.com indirimli ürünler fiyat düştü
 
-Arama sonuçlarında akakce.com'a ait ürün sayfalarını bul.
-Her ürün için title, newPrice (TL sayı), oldPrice (TL sayı), discountPercent (sayı), imageUrl (url), productUrl (akakce.com url) çıkart.
-SADECE JSON array döndür.
-Format: [{"title":"...","newPrice":0,"oldPrice":0,"discountPercent":0,"imageUrl":"","productUrl":"https://www.akakce.com/..."}]`;
+From the search results, find akakce.com product pages and extract:
+- title: product name
+- newPrice: current price as number (TL)
+- oldPrice: old price as number (TL), 0 if unknown
+- discountPercent: discount % as number, 0 if unknown
+- imageUrl: "" (leave empty)
+- productUrl: the akakce.com URL from search results (must start with https://www.akakce.com/)
+
+Return ONLY a JSON array. No explanation. Max ${MAX_NEW_PRODUCTS} products.
+Example: [{"title":"Samsung TV","newPrice":15000,"oldPrice":20000,"discountPercent":25,"imageUrl":"","productUrl":"https://www.akakce.com/..."}]`;
 
         const response = await genAI.models.generateContent({
             model: MODEL_URL_CONTEXT,
             contents: [{ role: 'user', parts: [{ text: searchPrompt }] }],
-            config: {
-                tools: [{ googleSearch: {} }],
-                temperature: 0.1,
-            },
+            config: { tools: [{ googleSearch: {} }], temperature: 0.1 },
         });
         const text = extractText(response);
-        console.log(`   📝 Yanıt (ilk 500): ${text.substring(0, 500)}`);
-        const match = text.match(/\[[\s\S]*\]/);
+        console.log(`   📝 Yanıt (ilk 800): ${text.substring(0, 800)}`);
+        const match = text.match(/\[[\s\S]*?\]/);
         if (match) {
             const products = JSON.parse(match[0]);
             if (products.length > 0) {
@@ -232,15 +235,12 @@ Format: [{"title":"...","newPrice":0,"oldPrice":0,"discountPercent":0,"imageUrl"
         console.log('🔗 Strateji 3: URL Context + Google Search kombinasyonu...');
         const response = await genAI.models.generateContent({
             model: MODEL_URL_CONTEXT,
-            contents: [{ role: 'user', parts: [{ text: `${AKAKCE_URL} adresine git ve sayfadaki indirimli ürünleri listele. ${productPrompt}` }] }],
-            config: {
-                tools: [{ urlContext: {} }, { googleSearch: {} }],
-                temperature: 0.1,
-            },
+            contents: [{ role: 'user', parts: [{ text: `Go to ${AKAKCE_URL} and list discounted products as JSON array. Fields: title, newPrice, oldPrice, discountPercent, imageUrl, productUrl. Return ONLY JSON array, no explanation.` }] }],
+            config: { tools: [{ urlContext: {} }, { googleSearch: {} }], temperature: 0.1 },
         });
         const text = extractText(response);
-        console.log(`   📝 Yanıt (ilk 500): ${text.substring(0, 500)}`);
-        const match = text.match(/\[[\s\S]*\]/);
+        console.log(`   📝 Yanıt (ilk 800): ${text.substring(0, 800)}`);
+        const match = text.match(/\[[\s\S]*?\]/);
         if (match) {
             const products = JSON.parse(match[0]);
             if (products.length > 0) {
