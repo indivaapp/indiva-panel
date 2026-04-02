@@ -165,25 +165,31 @@ Format: [{"title":"Samsung Galaxy S25","newPrice":35000,"oldPrice":42000,"discou
         return parts.filter(p => p.text).map(p => p.text).join('');
     }
 
-    // Strateji 1: URL Context (Google sunucuları üzerinden fetch)
+    // Strateji 1: URL Context + JSON modu (Google sunucuları üzerinden fetch)
     try {
-        console.log('🤖 Strateji 1: Gemini URL Context...');
+        console.log('🤖 Strateji 1: Gemini URL Context (JSON modu)...');
         const response = await genAI.models.generateContent({
             model: MODEL_URL_CONTEXT,
-            contents: [{ role: 'user', parts: [{ text: `Şu sayfayı ziyaret et ve içeriğini oku: ${AKAKCE_URL}\n\n${productPrompt}` }] }],
-            config: { tools: [{ urlContext: {} }], temperature: 0.1 },
+            contents: [{
+                role: 'user',
+                parts: [{ text: `Visit this URL: ${AKAKCE_URL}\n\nFrom the page, find the "Fark Atan Fiyatlar" or "Son Yakalanan İndirimler" section and extract products.\n\n${productPrompt}` }]
+            }],
+            config: {
+                tools: [{ urlContext: {} }],
+                temperature: 0.1,
+                responseMimeType: 'application/json',
+            },
         });
         const text = extractText(response);
-        console.log(`   📝 Yanıt (ilk 500): ${text.substring(0, 500)}`);
-        const match = text.match(/\[[\s\S]*\]/);
-        if (match) {
-            const products = JSON.parse(match[0]);
-            if (products.length > 0) {
-                console.log(`   ✅ URL Context: ${products.length} ürün`);
-                return products;
-            }
+        console.log(`   📝 Yanıt (ilk 800): ${text.substring(0, 800)}`);
+        // JSON modu: response direkt JSON olmalı
+        const parsed = JSON.parse(text.trim());
+        const products = Array.isArray(parsed) ? parsed : (parsed.products || parsed.items || []);
+        if (products.length > 0) {
+            console.log(`   ✅ URL Context JSON: ${products.length} ürün`);
+            return products;
         }
-        console.warn('   ⚠️ URL Context boş yanıt, Google Search deneniyor...');
+        console.warn('   ⚠️ URL Context boş döndü, Google Search deneniyor...');
     } catch (err) {
         console.warn(`   ⚠️ URL Context hatası: ${err.message}`);
     }
