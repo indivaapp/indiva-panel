@@ -233,6 +233,20 @@ async function fetchAkakceProducts(page) {
         console.warn('   ⚠️  Sayfa yüklenme selector timeout, devam ediliyor...');
     }
 
+    // DEBUG: Sayfa başlığını ve ilk linkleri logla — selector tespiti için
+    const debugInfo = await page.evaluate(() => {
+        const allLinks = Array.from(document.querySelectorAll('a[href]'));
+        const hrefs = allLinks
+            .map(a => a.getAttribute('href') || '')
+            .filter(h => h && h.length > 3 && !h.startsWith('#') && !h.startsWith('javascript'))
+            .slice(0, 30);
+        const bodySnippet = document.body?.innerHTML?.substring(0, 800) || '';
+        return { title: document.title, hrefs, bodySnippet };
+    });
+    console.log(`   📄 Sayfa başlığı: ${debugInfo.title}`);
+    console.log(`   🔗 İlk 30 link:\n${debugInfo.hrefs.map((h, i) => `      ${i + 1}. ${h}`).join('\n')}`);
+    console.log(`   🧩 Body snippet:\n${debugInfo.bodySnippet.substring(0, 400)}`);
+
     // Sayfa içinde ürünleri çıkar
     const products = await page.evaluate(() => {
         const results = [];
@@ -252,9 +266,14 @@ async function fetchAkakceProducts(page) {
             return '';
         }
 
-        // Akakce ürün URL'si formatı: /kategori/urun-adi,12345.html veya /urun,12345.html
+        // Akakce ürün URL'si — birden fazla pattern dene
         const allLinks = Array.from(document.querySelectorAll('a[href]'));
-        const productLinks = allLinks.filter(a => /,\d{5,}\.html/.test(a.getAttribute('href') || ''));
+        const productLinks = allLinks.filter(a => {
+            const h = a.getAttribute('href') || '';
+            return /,\d{5,}\.html/.test(h) ||   // /urun,12345.html
+                   /\/[^/]+-p-\d+/.test(h) ||    // /urun-p-12345
+                   /\/\d{5,}($|\/)/.test(h);      // /12345 veya /12345/
+        });
 
         for (const link of productLinks) {
             const href = link.getAttribute('href') || '';
