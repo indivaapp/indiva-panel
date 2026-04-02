@@ -194,21 +194,23 @@ Format: [{"title":"Samsung Galaxy S25","newPrice":35000,"oldPrice":42000,"discou
         console.warn(`   ⚠️ URL Context hatası: ${err.message}`);
     }
 
-    // Strateji 2: Google Search — imageUrl olmadan, sadece title+fiyat+url
+    // Strateji 2: Google Search — ürüne özel URL'lerle
     try {
         console.log('🔍 Strateji 2: Gemini Google Search Grounding...');
-        const searchPrompt = `Search Google for: akakce.com indirimli ürünler fiyat düştü
+        const searchPrompt = `Search Google for: site:akakce.com indirim fiyat düştü
 
-From the search results, find akakce.com product pages and extract:
-- title: product name
-- newPrice: current price as number (TL)
-- oldPrice: old price as number (TL), 0 if unknown
+IMPORTANT: For each search result from akakce.com, use the EXACT FULL URL of that specific product page (e.g. https://www.akakce.com/monitor/msi-pro-mp275q,12345678.html). Do NOT use https://www.akakce.com/ as productUrl.
+
+Extract from each result:
+- title: product name (clean)
+- newPrice: current price as number (TL), 0 if unknown
+- oldPrice: previous price as number (TL), 0 if unknown
 - discountPercent: discount % as number, 0 if unknown
 - imageUrl: "" (leave empty)
-- productUrl: the akakce.com URL from search results (must start with https://www.akakce.com/)
+- productUrl: the EXACT specific product page URL from the search result (like https://www.akakce.com/kategori/urun-adi,12345678.html)
 
-Return ONLY a JSON array. No explanation. Max ${MAX_NEW_PRODUCTS} products.
-Example: [{"title":"Samsung TV","newPrice":15000,"oldPrice":20000,"discountPercent":25,"imageUrl":"","productUrl":"https://www.akakce.com/..."}]`;
+Return ONLY a JSON array. No explanation. Max ${MAX_NEW_PRODUCTS} items.
+Format: [{"title":"MSI Monitor","newPrice":6364,"oldPrice":8000,"discountPercent":20,"imageUrl":"","productUrl":"https://www.akakce.com/monitor/msi-pro,12345678.html"}]`;
 
         const response = await genAI.models.generateContent({
             model: MODEL_URL_CONTEXT,
@@ -230,30 +232,50 @@ Example: [{"title":"Samsung TV","newPrice":15000,"oldPrice":20000,"discountPerce
         console.warn(`   ⚠️ Google Search hatası: ${err.message}`);
     }
 
-    // Strateji 3: URL Context + Google Search birlikte
-    try {
-        console.log('🔗 Strateji 3: URL Context + Google Search kombinasyonu...');
-        const response = await genAI.models.generateContent({
-            model: MODEL_URL_CONTEXT,
-            contents: [{ role: 'user', parts: [{ text: `Go to ${AKAKCE_URL} and list discounted products as JSON array. Fields: title, newPrice, oldPrice, discountPercent, imageUrl, productUrl. Return ONLY JSON array, no explanation.` }] }],
-            config: { tools: [{ urlContext: {} }, { googleSearch: {} }], temperature: 0.1 },
-        });
-        const text = extractText(response);
-        console.log(`   📝 Yanıt (ilk 800): ${text.substring(0, 800)}`);
-        const match = text.match(/\[[\s\S]*?\]/);
-        if (match) {
-            const products = JSON.parse(match[0]);
-            if (products.length > 0) {
-                console.log(`   ✅ Kombinasyon: ${products.length} ürün`);
-                return products;
-            }
-        }
-        console.warn('   ⚠️ Kombinasyon da boş döndü.');
-    } catch (err) {
-        console.warn(`   ⚠️ Kombinasyon hatası: ${err.message}`);
+    throw new Error('Her iki Gemini stratejisi de başarısız oldu.');
+}
+
+// ─── Ürün Detayı Zenginleştirme: Görsel + Gerçek Mağaza Linki ────────────────
+async function enrichProductDetails(apiKey, akakceProductUrl) {
+    // Sadece ürüne özel URL varsa çalış (anasayfa linki gelirse atla)
+    if (!akakceProductUrl || akakceProductUrl === AKAKCE_URL || akakceProductUrl === 'https://www.akakce.com/') {
+        return { imageUrl: '', storeUrl: akakceProductUrl };
     }
 
-    throw new Error('Her iki Gemini stratejisi de başarısız oldu.');
+    try {
+        const genAI = new GoogleGenAI({ apiKey });
+        const prompt = `Visit this URL: ${akakceProductUrl}
+
+From the page extract:
+1. The og:image meta tag value (product image URL)
+2. The cheapest store's buy button link. The link may go through akakce redirect like https://www.akakce.com/git/?u=ENCODED_URL - decode the "u" parameter to get the real store URL (trendyol.com, hepsiburada.com, amazon.com.tr, etc.)
+
+Return ONLY this JSON (no explanation):
+{"imageUrl":"https://...","storeUrl":"https://..."}
+
+If you cannot find storeUrl, use the akakce product URL itself.
+If you cannot find imageUrl, use "".`;
+
+        const response = await genAI.models.generateContent({
+            model: MODEL_URL_CONTEXT,
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            config: { tools: [{ urlContext: {} }], temperature: 0 },
+        });
+
+        const text = response.text || '';
+        const match = text.match(/\{[\s\S]*?\}/);
+        if (match) {
+            const data = JSON.parse(match[0]);
+            return {
+                imageUrl: data.imageUrl || '',
+                storeUrl: data.storeUrl || akakceProductUrl,
+            };
+        }
+    } catch (err) {
+        console.warn(`   ⚠️ Detay zenginleştirme hatası: ${err.message}`);
+    }
+
+    return { imageUrl: '', storeUrl: akakceProductUrl };
 }
 
 // ─── Gemini Açıklama Üretimi (AI_ENABLED=true ise) ───────────────────────────
@@ -387,13 +409,20 @@ async function main() {
         console.log(`\n[${i + 1}/${finalList.length}] 📦 ${product.title.substring(0, 60)}...`);
 
         try {
-            await sleep(500);
+            await sleep(800);
 
             const newPrice = Number(product.newPrice) || 0;
             const oldPrice = Number(product.oldPrice) || (newPrice > 0 ? simulateOldPrice(newPrice) : 0);
-            const store = detectStore(product.productUrl);
 
+            // Görsel + gerçek mağaza linki çek (URL Context ile ürün sayfasından)
+            console.log(`   🔍 Ürün detayı zenginleştiriliyor...`);
+            const details = await enrichProductDetails(apiKey, product.productUrl);
+            const storeUrl = details.storeUrl || product.productUrl;
+            const imageUrl = details.imageUrl || product.imageUrl || '';
+
+            const store = detectStore(storeUrl);
             console.log(`   💰 ${oldPrice} TL → ${newPrice} TL | Mağaza: ${store.name}`);
+            console.log(`   🖼️  Görsel: ${imageUrl ? '✅' : '❌ Yok'} | Link: ${storeUrl.substring(0, 60)}...`);
 
             // Opsiyonel: AI açıklama üretimi
             const aiData = await generateDescription(apiKey, product.title, newPrice, oldPrice);
@@ -403,11 +432,11 @@ async function main() {
                 brand: store.name,
                 category: aiData.category || detectCategory(product.title),
                 description: aiData.description || '',
-                link: product.productUrl,
-                originalStoreLink: product.productUrl,
+                link: storeUrl,
+                originalStoreLink: storeUrl,
                 oldPrice: oldPrice,
                 newPrice: newPrice,
-                imageUrl: product.imageUrl || '',
+                imageUrl: imageUrl,
                 deleteUrl: '',
                 submittedBy: 'auto-akakce-bot',
                 isAd: false,
