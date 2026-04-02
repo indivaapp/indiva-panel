@@ -197,22 +197,18 @@ Format: [{"title":"Samsung Galaxy S25","newPrice":35000,"oldPrice":42000,"discou
     // Strateji 2: Google Search — ürüne özel URL'lerle
     try {
         console.log('🔍 Strateji 2: Gemini Google Search Grounding...');
-        const searchPrompt = `Search Google for: akakce.com indirimli ürünler fiyat düştü TL
+        const searchPrompt = `Search Google for: akakce.com indirimli ürünler fiyat düştü TL 2024 2025
 
-Find product pages from akakce.com in the search results.
-
-CRITICAL: For productUrl, use the EXACT specific product page URL from each search result (e.g. https://www.akakce.com/monitor/msi-pro,12345678.html). Do NOT use https://www.akakce.com/ as productUrl. Each product must have its own unique URL.
-
-Extract from each result:
+From the search results, find akakce.com product pages and extract:
 - title: product name (clean)
 - newPrice: current price as number (TL), 0 if unknown
 - oldPrice: previous price as number (TL), 0 if unknown
 - discountPercent: discount % as number, 0 if unknown
 - imageUrl: "" (leave empty)
-- productUrl: EXACT specific akakce.com product URL from the search result
+- productUrl: the akakce.com URL from search results (must start with https://www.akakce.com/)
 
-Return ONLY a JSON array. No explanation. Max ${MAX_NEW_PRODUCTS} items.
-Format: [{"title":"MSI Monitor","newPrice":6364,"oldPrice":8000,"discountPercent":20,"imageUrl":"","productUrl":"https://www.akakce.com/monitor/msi-pro,12345678.html"}]`;
+Return ONLY a JSON array. No explanation. Max ${MAX_NEW_PRODUCTS} products.
+Format: [{"title":"Samsung TV","newPrice":15000,"oldPrice":20000,"discountPercent":25,"imageUrl":"","productUrl":"https://www.akakce.com/..."}]`;
 
         const response = await genAI.models.generateContent({
             model: MODEL_URL_CONTEXT,
@@ -238,46 +234,57 @@ Format: [{"title":"MSI Monitor","newPrice":6364,"oldPrice":8000,"discountPercent
 }
 
 // ─── Ürün Detayı Zenginleştirme: Görsel + Gerçek Mağaza Linki ────────────────
-async function enrichProductDetails(apiKey, akakceProductUrl) {
-    // Sadece ürüne özel URL varsa çalış (anasayfa linki gelirse atla)
-    if (!akakceProductUrl || akakceProductUrl === AKAKCE_URL || akakceProductUrl === 'https://www.akakce.com/') {
-        return { imageUrl: '', storeUrl: akakceProductUrl };
-    }
+async function enrichProductDetails(apiKey, productTitle, akakceProductUrl) {
+    const genAI = new GoogleGenAI({ apiKey });
+    const isGenericUrl = !akakceProductUrl ||
+        akakceProductUrl === AKAKCE_URL ||
+        akakceProductUrl === 'https://www.akakce.com/' ||
+        !akakceProductUrl.includes('.html');
 
-    try {
-        const genAI = new GoogleGenAI({ apiKey });
-        const prompt = `Visit this URL: ${akakceProductUrl}
+    let specificUrl = akakceProductUrl;
 
-From the page extract:
-1. The og:image meta tag value (product image URL)
-2. The cheapest store's buy button link. The link may go through akakce redirect like https://www.akakce.com/git/?u=ENCODED_URL - decode the "u" parameter to get the real store URL (trendyol.com, hepsiburada.com, amazon.com.tr, etc.)
-
-Return ONLY this JSON (no explanation):
-{"imageUrl":"https://...","storeUrl":"https://..."}
-
-If you cannot find storeUrl, use the akakce product URL itself.
-If you cannot find imageUrl, use "".`;
-
-        const response = await genAI.models.generateContent({
-            model: MODEL_URL_CONTEXT,
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            config: { tools: [{ urlContext: {} }], temperature: 0 },
-        });
-
-        const text = response.text || '';
-        const match = text.match(/\{[\s\S]*?\}/);
-        if (match) {
-            const data = JSON.parse(match[0]);
-            return {
-                imageUrl: data.imageUrl || '',
-                storeUrl: data.storeUrl || akakceProductUrl,
-            };
+    // Adım 1: Generic URL ise Google Search ile ürüne özel URL bul
+    if (isGenericUrl) {
+        try {
+            const searchResp = await genAI.models.generateContent({
+                model: MODEL_URL_CONTEXT,
+                contents: [{ role: 'user', parts: [{ text: `Search Google for: akakce.com "${productTitle}"\n\nFind the specific akakce.com product page URL. Return ONLY the URL (e.g. https://www.akakce.com/kategori/urun,12345678.html), nothing else.` }] }],
+                config: { tools: [{ googleSearch: {} }], temperature: 0 },
+            });
+            const searchText = searchResp.text || '';
+            const urlMatch = searchText.match(/https:\/\/www\.akakce\.com\/[^\s"'<>\n]+\.html/);
+            if (urlMatch) {
+                specificUrl = urlMatch[0];
+                console.log(`   🔗 Ürüne özel URL: ${specificUrl}`);
+            }
+        } catch (err) {
+            console.warn(`   ⚠️ URL arama hatası: ${err.message}`);
         }
-    } catch (err) {
-        console.warn(`   ⚠️ Detay zenginleştirme hatası: ${err.message}`);
     }
 
-    return { imageUrl: '', storeUrl: akakceProductUrl };
+    // Adım 2: Ürün sayfasından görsel ve mağaza linki al (URL Context)
+    if (specificUrl && specificUrl.includes('.html')) {
+        try {
+            const detailResp = await genAI.models.generateContent({
+                model: MODEL_URL_CONTEXT,
+                contents: [{ role: 'user', parts: [{ text: `Visit this URL: ${specificUrl}\n\nExtract:\n1. og:image meta tag content (product image URL)\n2. The cheapest store's buy link. If it contains "/git/?u=" decode the "u" param to get real store URL (trendyol.com, hepsiburada.com, amazon.com.tr etc.)\n\nReturn ONLY JSON: {"imageUrl":"https://...","storeUrl":"https://..."}\nIf storeUrl not found, use: "${specificUrl}"\nIf imageUrl not found, use: ""` }] }],
+                config: { tools: [{ urlContext: {} }], temperature: 0 },
+            });
+            const text = detailResp.text || '';
+            const match = text.match(/\{[\s\S]*?\}/);
+            if (match) {
+                const data = JSON.parse(match[0]);
+                return {
+                    imageUrl: data.imageUrl || '',
+                    storeUrl: data.storeUrl || specificUrl,
+                };
+            }
+        } catch (err) {
+            console.warn(`   ⚠️ Detay zenginleştirme hatası: ${err.message}`);
+        }
+    }
+
+    return { imageUrl: '', storeUrl: specificUrl || akakceProductUrl };
 }
 
 // ─── Gemini Açıklama Üretimi (AI_ENABLED=true ise) ───────────────────────────
@@ -416,9 +423,9 @@ async function main() {
             const newPrice = Number(product.newPrice) || 0;
             const oldPrice = Number(product.oldPrice) || (newPrice > 0 ? simulateOldPrice(newPrice) : 0);
 
-            // Görsel + gerçek mağaza linki çek (URL Context ile ürün sayfasından)
+            // Görsel + gerçek mağaza linki çek
             console.log(`   🔍 Ürün detayı zenginleştiriliyor...`);
-            const details = await enrichProductDetails(apiKey, product.productUrl);
+            const details = await enrichProductDetails(apiKey, product.title, product.productUrl);
             const storeUrl = details.storeUrl || product.productUrl;
             const imageUrl = details.imageUrl || product.imageUrl || '';
 
