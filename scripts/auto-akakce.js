@@ -265,19 +265,51 @@ async function enrichProductDetails(apiKey, productTitle, akakceProductUrl) {
     // Adım 2: Ürün sayfasından görsel ve mağaza linki al (URL Context)
     if (specificUrl && specificUrl.includes('.html')) {
         try {
+            const detailPrompt = `Visit this akakce.com product page: ${specificUrl}
+
+TASK 1 - Product Image:
+Find the <meta property="og:image" content="..."> tag and extract its content value as imageUrl.
+
+TASK 2 - Real Store URL:
+On akakce.com product pages, there is a price comparison table with multiple stores.
+Each row has a buy button. The button href looks like one of these formats:
+  - https://www.akakce.com/git/?v=4&k=123&u=https%3A%2F%2Fwww.trendyol.com%2F...
+  - https://www.akakce.com/git/?u=https%3A%2F%2Fwww.hepsiburada.com%2F...
+
+Find the FIRST (cheapest) store's buy button URL.
+Then URL-decode the "u" query parameter value:
+  %3A → :
+  %2F → /
+  %3F → ?
+  %3D → =
+  %26 → &
+The decoded URL will be something like https://www.trendyol.com/... or https://www.hepsiburada.com/...
+Use that decoded URL as storeUrl.
+
+Return ONLY this JSON, no explanation:
+{"imageUrl":"https://...","storeUrl":"https://www.trendyol.com/..."}
+
+Rules:
+- storeUrl must NOT be an akakce.com URL
+- storeUrl must be a real store URL (trendyol.com, hepsiburada.com, amazon.com.tr, n11.com etc.)
+- If you cannot decode a real store URL, use: "${specificUrl}"
+- imageUrl must start with https://`;
+
             const detailResp = await genAI.models.generateContent({
                 model: MODEL_URL_CONTEXT,
-                contents: [{ role: 'user', parts: [{ text: `Visit this URL: ${specificUrl}\n\nExtract:\n1. og:image meta tag content (product image URL)\n2. The cheapest store's buy link. If it contains "/git/?u=" decode the "u" param to get real store URL (trendyol.com, hepsiburada.com, amazon.com.tr etc.)\n\nReturn ONLY JSON: {"imageUrl":"https://...","storeUrl":"https://..."}\nIf storeUrl not found, use: "${specificUrl}"\nIf imageUrl not found, use: ""` }] }],
+                contents: [{ role: 'user', parts: [{ text: detailPrompt }] }],
                 config: { tools: [{ urlContext: {} }], temperature: 0 },
             });
             const text = detailResp.text || '';
+            console.log(`   🔎 Detay yanıtı: ${text.substring(0, 200)}`);
             const match = text.match(/\{[\s\S]*?\}/);
             if (match) {
                 const data = JSON.parse(match[0]);
-                return {
-                    imageUrl: data.imageUrl || '',
-                    storeUrl: data.storeUrl || specificUrl,
-                };
+                const storeUrl = data.storeUrl || specificUrl;
+                const imageUrl = data.imageUrl || '';
+                // storeUrl hâlâ akakce ise specificUrl'i döndür
+                const finalStoreUrl = storeUrl.includes('akakce.com') ? specificUrl : storeUrl;
+                return { imageUrl, storeUrl: finalStoreUrl };
             }
         } catch (err) {
             console.warn(`   ⚠️ Detay zenginleştirme hatası: ${err.message}`);
