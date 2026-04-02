@@ -38,8 +38,8 @@ if (fs.existsSync(envPath)) {
 const AKAKCE_URL = 'https://www.akakce.com/';
 const MAX_NEW_PRODUCTS = 12;
 
-// Gemini: URL Context için 2.0-flash, açıklama üretimi için 2.5-flash-lite
-const MODEL_URL_CONTEXT = 'gemini-2.0-flash';
+// Gemini: URL Context + açıklama üretimi
+const MODEL_URL_CONTEXT = 'gemini-2.5-flash';
 const MODEL_DESCRIPTION = 'gemini-2.5-flash-lite';
 
 // ─── Kategori & Mağaza Haritaları ────────────────────────────────────────────
