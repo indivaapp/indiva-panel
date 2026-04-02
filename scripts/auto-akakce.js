@@ -1,27 +1,21 @@
 /**
- * auto-akakce.js — INDIVA Akakce Pipeline
+ * auto-akakce.js — INDIVA Akakce Pipeline (Gemini URL Context)
  *
- * akakce.com "Son Yakalanan İndirimler" bölümünü Puppeteer + Stealth ile tarar,
- * en ucuz mağaza linkini resolve ederek Firebase'e kaydeder.
+ * akakce.com "Son Yakalanan İndirimler" sayfasını Gemini URL Context ile çeker.
+ * Google'ın sunucuları üzerinden fetch yapılır — Cloudflare engeli aşılır.
  *
  * Çalıştırma: node scripts/auto-akakce.js
+ * Gereksinim: GEMINI_API_KEY (zorunlu)
  *
- * NOT: Mevcut auto-onual.js pipeline'ından tamamen bağımsızdır. Dokunmayın.
+ * NOT: auto-onual.js pipeline'ından tamamen bağımsızdır.
  */
 
-import { addExtra } from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import puppeteerCore from 'puppeteer-core';
 import { GoogleGenAI } from '@google/genai';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore, FieldValue, FieldPath } from 'firebase-admin/firestore';
 import * as fs from 'fs';
 import * as path from 'path';
 import { sendAdminAlert } from './alertService.js';
-
-// ─── Puppeteer + Stealth kurulumu ─────────────────────────────────────────────
-const puppeteer = addExtra(puppeteerCore);
-puppeteer.use(StealthPlugin());
 
 // ─── .env Yükle (lokal geliştirme) ──────────────────────────────────────────
 const ROOT_DIR = process.cwd();
@@ -43,24 +37,23 @@ if (fs.existsSync(envPath)) {
 // ─── Config ──────────────────────────────────────────────────────────────────
 const AKAKCE_URL = 'https://www.akakce.com/';
 const MAX_NEW_PRODUCTS = 12;
-const PAGE_TIMEOUT_MS = 20000;
-const STEP_DELAY_MS = 1500;
 
-// AI Config (aynı auto-onual.js mekanizması)
-const MODEL = 'gemini-2.5-flash-lite';
+// Gemini: URL Context için 2.0-flash, açıklama üretimi için 2.5-flash-lite
+const MODEL_URL_CONTEXT = 'gemini-2.0-flash';
+const MODEL_DESCRIPTION = 'gemini-2.5-flash-lite';
 
-// ─── Kategori & Mağaza Haritaları (auto-onual.js ile aynı) ───────────────────
+// ─── Kategori & Mağaza Haritaları ────────────────────────────────────────────
 const CATEGORY_MAP = [
-    { keywords: ['klavye', 'mouse', 'fare', 'monitör', 'bilgisayar', 'laptop', 'notebook', 'tablet', 'telefon', 'iphone', 'samsung', 'xiaomi', 'kulaklık', 'hoparlör', 'kamera', 'ssd', 'harddisk', 'şarj', 'powerbank', 'kablo', 'adaptör', 'akıllı saat', 'scooter', 'drone', 'playstation', 'xbox', 'nintendo', 'router', 'modem', 'yazıcı'], category: 'Teknoloji' },
-    { keywords: ['mont', 'ceket', 'kazak', 'gömlek', 'pantolon', 'şort', 'elbise', 'bluz', 'tişört', 't-shirt', 'sweatshirt', 'polar', 'ayakkabı', 'sneaker', 'bot', 'sandalet', 'çanta', 'sırt çantası', 'bere', 'eldiven', 'çorap', 'yelek', 'kemer', 'cüzdan', 'pijama', 'iç giyim'], category: 'Giyim' },
+    { keywords: ['klavye', 'mouse', 'fare', 'monitör', 'bilgisayar', 'laptop', 'notebook', 'tablet', 'telefon', 'iphone', 'samsung', 'xiaomi', 'kulaklık', 'hoparlör', 'kamera', 'ssd', 'harddisk', 'şarj', 'powerbank', 'kablo', 'adaptör', 'akıllı saat', 'scooter', 'drone', 'playstation', 'xbox', 'nintendo', 'router', 'modem', 'yazıcı', 'tv ', 'televizyon'], category: 'Teknoloji' },
+    { keywords: ['mont', 'ceket', 'kazak', 'gömlek', 'pantolon', 'şort', 'elbise', 'bluz', 'tişört', 't-shirt', 'sweatshirt', 'polar', 'ayakkabı', 'sneaker', 'bot', 'sandalet', 'çanta', 'sırt çantası', 'bere', 'eldiven', 'çorap', 'yelek', 'kemer', 'cüzdan', 'pijama'], category: 'Giyim' },
     { keywords: ['şampuan', 'krem', 'losyon', 'maske', 'serum', 'parfüm', 'deodorant', 'saç', 'cilt', 'diş', 'tıraş', 'makyaj', 'ruj', 'oje', 'hijyen', 'sabun', 'duş jeli'], category: 'Kozmetik' },
-    { keywords: ['tencere', 'tava', 'çaydanlık', 'bıçak', 'tabak', 'bardak', 'fincan', 'yemek takımı', 'mobilya', 'masa', 'sandalye', 'yatak', 'dolap', 'nevresim', 'perde', 'halı', 'aydınlatma', 'lamba', 'havlu'], category: 'Ev' },
+    { keywords: ['tencere', 'tava', 'çaydanlık', 'bıçak', 'tabak', 'bardak', 'fincan', 'mobilya', 'masa', 'sandalye', 'yatak', 'dolap', 'nevresim', 'perde', 'halı', 'aydınlatma', 'lamba', 'havlu'], category: 'Ev' },
     { keywords: ['deterjan', 'temizlik', 'bakliyat', 'yağ', 'şeker', 'çay', 'kahve', 'atıştırmalık', 'makarna', 'peynir', 'süt', 'yoğurt', 'çikolata', 'gıda', 'bisküvi'], category: 'Market' },
     { keywords: ['bebek', 'bez', 'emzik', 'biberon', 'oyuncak', 'lego', 'puzzle', 'bebek arabası', 'mama'], category: 'Bebek' },
     { keywords: ['vitamin', 'takviye', 'kapsül', 'şurup', 'sağlık', 'medikal'], category: 'Sağlık' },
-    { keywords: ['kalem', 'defter', 'boya', 'çizim', 'kağıt', 'kitap', 'roman'], category: 'Kitap' },
+    { keywords: ['kalem', 'defter', 'boya', 'kitap', 'roman'], category: 'Kitap' },
     { keywords: ['kamp', 'spor', 'fitness', 'outdoor', 'bisiklet', 'top', 'forma', 'pilates', 'koşu'], category: 'Spor' },
-    { keywords: ['kedi', 'köpek', 'kuş', 'balık', 'evcil', 'pet', 'mama kedi', 'mama köpek'], category: 'Pet' },
+    { keywords: ['kedi', 'köpek', 'evcil', 'pet', 'mama kedi', 'mama köpek'], category: 'Pet' },
     { keywords: ['araba', 'otomobil', 'lastik', 'motosiklet', 'kask', 'oto aksesuar'], category: 'Oto' },
 ];
 
@@ -79,7 +72,6 @@ const STORE_MAP = [
     { domain: 'lcwaikiki.com', name: 'LC Waikiki' },
     { domain: 'defacto.com.tr', name: 'DeFacto' },
     { domain: 'koton.com', name: 'Koton' },
-    { domain: 'zara.com', name: 'Zara' },
     { domain: 'itopya.com', name: 'İtopya' },
     { domain: 'akakce.com', name: 'Akakçe' },
 ];
@@ -110,21 +102,8 @@ function initFirebase() {
     return getFirestore();
 }
 
-// ─── AI Config (auto-onual.js ile aynı mekanizma) ───────────────────────────
-function getGeminiKey() {
-    if (process.env.AI_ENABLED !== 'true') return null;
-    const key = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
-    if (!key) {
-        console.warn('⚠️  AI_ENABLED=true ama GEMINI_API_KEY eksik — AI devre dışı.');
-        return null;
-    }
-    return key;
-}
-
 // ─── Yardımcı Fonksiyonlar ───────────────────────────────────────────────────
-function sleep(ms) {
-    return new Promise(r => setTimeout(r, ms));
-}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function detectCategory(title) {
     const lower = title.toLowerCase();
@@ -134,337 +113,105 @@ function detectCategory(title) {
     return 'Teknoloji';
 }
 
-function detectStore(storeUrl) {
-    if (!storeUrl) return { name: 'Online Mağaza', domain: '' };
+function detectStore(url) {
+    if (!url) return { name: 'Akakçe', domain: 'akakce.com' };
     for (const store of STORE_MAP) {
-        if (storeUrl.includes(store.domain)) return store;
+        if (url.includes(store.domain)) return store;
     }
     return { name: 'Online Mağaza', domain: '' };
 }
 
 function simulateOldPrice(newPrice) {
-    const discountRatio = 0.20 + Math.random() * 0.40;
-    const oldPrice = Math.round(newPrice / (1 - discountRatio));
-    return Math.round(oldPrice / 5) * 5;
+    const ratio = 0.20 + Math.random() * 0.40;
+    return Math.round(Math.round(newPrice / (1 - ratio)) / 5) * 5;
 }
 
 function cleanTitle(title) {
-    return title
-        .replace(/[\u{1F300}-\u{1F9FF}]/gu, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .substring(0, 200);
+    return title.replace(/\s+/g, ' ').trim().substring(0, 200);
 }
 
-// ─── Chromium Path Tespiti ────────────────────────────────────────────────────
-function getChromiumPath() {
-    // GitHub Actions'da CHROMIUM_PATH env var set edilir
-    if (process.env.CHROMIUM_PATH && fs.existsSync(process.env.CHROMIUM_PATH)) {
-        return process.env.CHROMIUM_PATH;
-    }
-    // Yaygın Linux yolları
-    const candidates = [
-        '/usr/bin/chromium',
-        '/usr/bin/chromium-browser',
-        '/snap/bin/chromium',
-        '/usr/bin/google-chrome',
-        '/usr/bin/google-chrome-stable',
-    ];
-    for (const p of candidates) {
-        if (fs.existsSync(p)) return p;
-    }
-    throw new Error('Chromium bulunamadı. CHROMIUM_PATH env var set edin veya chromium yükleyin.');
+function extractProductId(url) {
+    // Akakce URL formatları: /urun,12345.html veya /kategori/urun,12345.html
+    const match = url?.match(/,(\d{4,})\.html/) || url?.match(/\/(\d{6,})\/?$/);
+    return match ? match[1] : null;
 }
 
-// ─── Puppeteer Browser Başlatma ───────────────────────────────────────────────
-async function launchBrowser() {
-    const executablePath = getChromiumPath();
-    console.log(`🌐 Chromium: ${executablePath}`);
+// ─── Gemini URL Context: Akakce Ürün Listesi ─────────────────────────────────
+async function fetchAkakceViaGemini(apiKey) {
+    console.log('🤖 Gemini URL Context ile akakce.com çekiliyor...');
+    const genAI = new GoogleGenAI({ apiKey });
 
-    return puppeteer.launch({
-        executablePath,
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--disable-gpu',
-            '--no-first-run',
-            '--no-zygote',
-            '--window-size=1366,768',
-            '--disable-blink-features=AutomationControlled',
-        ],
-        defaultViewport: { width: 1366, height: 768 },
-    });
-}
+    const prompt = `Şu sayfayı ziyaret et ve analiz et: ${AKAKCE_URL}
 
-// ─── Cloudflare Bypass Bekleme ────────────────────────────────────────────────
-async function waitForCloudflare(page, timeoutMs = 15000) {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-        const title = await page.title();
-        if (!title.includes('Just a moment') && !title.includes('Checking your browser')) {
-            return true;
-        }
-        console.log('   ⏳ Cloudflare challenge bekleniyor...');
-        await sleep(2000);
-    }
-    console.warn('   ⚠️  Cloudflare bypass zaman aşımı');
-    return false;
-}
+"Son Yakalanan İndirimler" veya "Fark Atan Fiyatlar" veya benzeri indirim bölümündeki ürünleri bul.
+Bulamazsan sayfadaki tüm indirimli ürünleri al.
 
-// ─── Akakce Ana Sayfa Ürün Listesi ───────────────────────────────────────────
-async function fetchAkakceProducts(page) {
-    console.log(`📡 ${AKAKCE_URL} yükleniyor...`);
+Her ürün için şu bilgileri çıkart:
+- title: Ürün adı (temiz, pazarlama sloganı olmadan)
+- newPrice: Güncel fiyat (sayı, TL, yoksa 0)
+- oldPrice: Eski/üstü çizili fiyat (sayı, TL, yoksa 0)
+- discountPercent: İndirim yüzdesi (sayı, yoksa 0)
+- imageUrl: Ürün görseli tam URL (https:// ile başlamalı, yoksa "")
+- productUrl: Akakce ürün sayfası tam URL (https://www.akakce.com/... ile başlamalı)
 
-    await page.goto(AKAKCE_URL, {
-        waitUntil: 'domcontentloaded',
-        timeout: PAGE_TIMEOUT_MS,
+Kurallar:
+- SADECE JSON array döndür, açıklama yazma
+- Maksimum ${MAX_NEW_PRODUCTS} ürün
+- productUrl mutlaka akakce.com linki olmalı
+- Fiyatlar mutlaka sayı olmalı (string değil)
+
+Format: [{"title":"Samsung Galaxy S25","newPrice":35000,"oldPrice":42000,"discountPercent":17,"imageUrl":"https://...","productUrl":"https://www.akakce.com/..."}]`;
+
+    const response = await genAI.models.generateContent({
+        model: MODEL_URL_CONTEXT,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: {
+            tools: [{ urlContext: {} }],
+            temperature: 0.1,
+        },
     });
 
-    await waitForCloudflare(page);
-    await sleep(STEP_DELAY_MS);
+    const text = response.text || '';
+    console.log(`   📝 Gemini yanıtı (ilk 300 karakter): ${text.substring(0, 300)}`);
 
-    // Sayfanın tam yüklenmesini bekle
-    try {
-        await page.waitForSelector('a[href]', { timeout: 8000 });
-    } catch {
-        console.warn('   ⚠️  Sayfa yüklenme selector timeout, devam ediliyor...');
+    // JSON array'i parse et
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+        throw new Error(`Gemini geçerli JSON döndürmedi. Yanıt: ${text.substring(0, 200)}`);
     }
 
-    // DEBUG: Sayfa başlığını ve ilk linkleri logla — selector tespiti için
-    const debugInfo = await page.evaluate(() => {
-        const allLinks = Array.from(document.querySelectorAll('a[href]'));
-        const hrefs = allLinks
-            .map(a => a.getAttribute('href') || '')
-            .filter(h => h && h.length > 3 && !h.startsWith('#') && !h.startsWith('javascript'))
-            .slice(0, 30);
-        const bodySnippet = document.body?.innerHTML?.substring(0, 800) || '';
-        return { title: document.title, hrefs, bodySnippet };
-    });
-    console.log(`   📄 Sayfa başlığı: ${debugInfo.title}`);
-    console.log(`   🔗 İlk 30 link:\n${debugInfo.hrefs.map((h, i) => `      ${i + 1}. ${h}`).join('\n')}`);
-    console.log(`   🧩 Body snippet:\n${debugInfo.bodySnippet.substring(0, 400)}`);
-
-    // Sayfa içinde ürünleri çıkar
-    const products = await page.evaluate(() => {
-        const results = [];
-        const seen = new Set();
-
-        function parsePrice(text) {
-            if (!text) return 0;
-            // "1.234,56 TL" veya "1234 TL" gibi formatları parse et
-            const clean = text.replace(/[^\d.,]/g, '').replace(/\./g, '').replace(',', '.');
-            return parseFloat(clean) || 0;
-        }
-
-        function fixImageUrl(url) {
-            if (!url) return '';
-            if (url.startsWith('//')) return 'https:' + url;
-            if (url.startsWith('http')) return url;
-            return '';
-        }
-
-        // Akakce ürün URL'si — birden fazla pattern dene
-        const allLinks = Array.from(document.querySelectorAll('a[href]'));
-        const productLinks = allLinks.filter(a => {
-            const h = a.getAttribute('href') || '';
-            return /,\d{5,}\.html/.test(h) ||   // /urun,12345.html
-                   /\/[^/]+-p-\d+/.test(h) ||    // /urun-p-12345
-                   /\/\d{5,}($|\/)/.test(h);      // /12345 veya /12345/
-        });
-
-        for (const link of productLinks) {
-            const href = link.getAttribute('href') || '';
-            const idMatch = href.match(/,(\d{5,})\.html/);
-            if (!idMatch) continue;
-
-            const productId = idMatch[1];
-            if (seen.has(productId)) continue;
-
-            // Container: genellikle li veya product card div
-            const container = link.closest('li') ||
-                link.closest('[class*="item"]') ||
-                link.closest('[class*="card"]') ||
-                link.closest('[class*="product"]') ||
-                link.parentElement;
-            if (!container) continue;
-
-            // Başlık: önce link title attr, sonra img alt, sonra yakın text
-            let title = link.getAttribute('title') || '';
-            if (!title) {
-                const img = link.querySelector('img');
-                title = img?.getAttribute('alt') || '';
-            }
-            if (!title || title.length < 5) {
-                const textEl = container.querySelector(
-                    '[class*="pu"], [class*="name"], [class*="title"], h3, h4, p a, p'
-                );
-                title = textEl?.textContent?.trim() || link.textContent?.trim() || '';
-            }
-            if (!title || title.length < 5) continue;
-
-            // Görsel
-            const img = link.querySelector('img') || container.querySelector('img');
-            const rawImg = img?.getAttribute('src') ||
-                img?.getAttribute('data-src') ||
-                img?.getAttribute('data-lazy-src') || '';
-            const imageUrl = fixImageUrl(rawImg);
-
-            // Fiyatlar — Akakce CSS class isimleri versiyonlu: p1_v8, p3_v8, pr_v8
-            // Birden fazla pattern dene
-            const newPriceEl =
-                container.querySelector('[class*="p1_"]') ||
-                container.querySelector('[class*="newprice"]') ||
-                container.querySelector('[class*="current-price"]');
-
-            const oldPriceEl =
-                container.querySelector('[class*="p3_"]') ||
-                container.querySelector('[class*="oldprice"]') ||
-                container.querySelector('del') ||
-                container.querySelector('s');
-
-            const discountEl =
-                container.querySelector('[class*="pr_"]') ||
-                container.querySelector('[class*="discount"]') ||
-                container.querySelector('[class*="indirim"]');
-
-            const newPrice = parsePrice(newPriceEl?.textContent || '');
-            const oldPrice = parsePrice(oldPriceEl?.textContent || '');
-            const discountText = discountEl?.textContent?.trim() || '';
-
-            const fullUrl = href.startsWith('http') ? href : 'https://www.akakce.com' + href;
-
-            seen.add(productId);
-            results.push({
-                id: productId,
-                title: title.replace(/\s+/g, ' ').trim(),
-                url: fullUrl,
-                newPrice,
-                oldPrice,
-                discountText,
-                imageUrl,
-            });
-
-            if (results.length >= 30) break;
-        }
-
-        return results;
-    });
-
-    console.log(`   📦 Sayfa taraması: ${products.length} ürün kartı bulundu`);
+    const products = JSON.parse(jsonMatch[0]);
+    console.log(`   ✅ ${products.length} ürün çekildi`);
     return products;
 }
 
-// ─── Akakce Ürün Detay Sayfası → Mağaza Linki ────────────────────────────────
-async function extractStoreLink(page, productUrl) {
-    try {
-        await page.goto(productUrl, {
-            waitUntil: 'domcontentloaded',
-            timeout: PAGE_TIMEOUT_MS,
-        });
-        await waitForCloudflare(page, 10000);
-        await sleep(1000);
-
-        const result = await page.evaluate(() => {
-            // Strateji 1: /git/ linki içeren ilk buton (en ucuz mağaza)
-            const gitLink = document.querySelector('a[href*="/git/"]');
-            if (gitLink) return { type: 'git', href: gitLink.href };
-
-            // Strateji 2: Fiyat tablosundaki ilk mağaza linki
-            const priceRow = document.querySelector(
-                'table tr a[href*="http"], .price-table a[href*="http"], [class*="liste"] a[href^="http"]'
-            );
-            if (priceRow) return { type: 'direct', href: priceRow.href };
-
-            // Strateji 3: OG URL (ürün sayfasının kendisi)
-            const ogUrl = document.querySelector('meta[property="og:url"]')?.getAttribute('content');
-            return { type: 'og', href: ogUrl || '' };
-        });
-
-        if (!result?.href) return null;
-
-        // /git/ linki için: URL parametresinden mağaza URL'sini çözümle
-        if (result.type === 'git') {
-            try {
-                const url = new URL(result.href);
-                const encodedStore = url.searchParams.get('u') || url.searchParams.get('url');
-                if (encodedStore) {
-                    const storeUrl = decodeURIComponent(encodedStore);
-                    if (storeUrl.startsWith('http')) return storeUrl;
-                }
-            } catch { /* devam */ }
-
-            // Parametreden çıkartılamazsa redirect'i takip et
-            try {
-                const response = await page.goto(result.href, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 12000,
-                });
-                const finalUrl = page.url();
-                if (finalUrl && !finalUrl.includes('akakce.com/git')) {
-                    return finalUrl;
-                }
-            } catch { /* devam */ }
-        }
-
-        // Direct veya OG link döndür
-        if (result.href.startsWith('http')) return result.href;
-        return null;
-
-    } catch (err) {
-        console.warn(`   ⚠️  Detay sayfası hatası: ${err.message}`);
-        return null;
+// ─── Gemini Açıklama Üretimi (AI_ENABLED=true ise) ───────────────────────────
+async function generateDescription(apiKey, title, newPrice, oldPrice) {
+    if (!apiKey || process.env.AI_ENABLED !== 'true') {
+        return { category: detectCategory(title), description: '', aiFomoScore: 5 };
     }
-}
-
-// ─── AI Analiz (auto-onual.js ile aynı mantık) ───────────────────────────────
-async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice) {
-    if (!apiKey) return { category: detectCategory(productTitle), aiFomoScore: 5 };
 
     const genAI = new GoogleGenAI({ apiKey });
-
-    const systemInstruction = `Sen INDIVA uygulamasının kıdemli Teknik Ürün Analisti ve e-ticaret metin yazarı uzmanısın.
-    Görevin, paylaşılan ürün başlığını ve detaylarını analiz ederek "profesyonel bir inceleme ve kategori tespiti" yapmaktır.
-
-    GÖREV KURALLARI:
-    1. SANİTİZE BAŞLIK (title): Sadece gerçek ÜRÜN ADI ve MODELİNİ döndür.
-    2. KATEGORİ TESPİTİ: [Teknoloji, Giyim, Kozmetik, Ev, Market, Bebek, Sağlık, Kitap, Spor, Pet, Oto] listesinden en uygununu seç.
-    3. TEKNİK ANALİZ: 45-60 kelime, tek paragraf, bilirkişi tonu.
-    4. FOMO PUANI (aiFomoScore): 1-10 arası.
-    5. CEVAP: SADECE saf JSON formatında.`;
-
-    const prompt = `Ürün: "${productTitle}" | Fiyat: ${oldPrice} TL -> ${newPrice} TL
-    JSON: {"title":"...","category":"...","description":"...","aiFomoScore":8}`;
+    const prompt = `Ürün: "${title}" | ${oldPrice} TL → ${newPrice} TL
+Şu JSON'u döndür: {"category":"Teknoloji","description":"45-60 kelime teknik analiz","aiFomoScore":8}
+Kategori seçenekleri: Teknoloji, Giyim, Kozmetik, Ev, Market, Bebek, Sağlık, Kitap, Spor, Pet, Oto`;
 
     try {
         const response = await genAI.models.generateContent({
-            model: MODEL,
-            contents: [{ role: 'user', parts: [{ text: `${systemInstruction}\n\n${prompt}` }] }],
+            model: MODEL_DESCRIPTION,
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
             config: { temperature: 0.2 },
         });
-
         const text = response.text || '';
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        const aiData = JSON.parse((jsonMatch ? jsonMatch[0] : text).trim());
-
-        const CATEGORY_MAPPING = {
-            'Elektronik': 'Teknoloji', 'Cep Telefonu': 'Teknoloji', 'Bilgisayar': 'Teknoloji',
-            'Mutfak': 'Ev', 'Ev Aletleri': 'Ev', 'Giyim & Ayakkabı': 'Giyim',
-            'Süpermarket': 'Market', 'Anne & Bebek': 'Bebek', 'Otomotiv & Motosiklet': 'Oto',
-        };
-        const finalCategory = CATEGORY_MAPPING[aiData.category] || aiData.category || detectCategory(productTitle);
-
+        const match = text.match(/\{[\s\S]*\}/);
+        const data = JSON.parse((match ? match[0] : text).trim());
         return {
-            title: aiData.title || productTitle,
-            category: finalCategory,
-            description: aiData.description || '',
-            aiFomoScore: parseInt(aiData.aiFomoScore) || 5,
+            category: data.category || detectCategory(title),
+            description: data.description || '',
+            aiFomoScore: parseInt(data.aiFomoScore) || 5,
         };
-    } catch (err) {
-        console.warn(`   ❌ AI Hatası: ${err.message}`);
-        return { category: detectCategory(productTitle), aiFomoScore: 5 };
+    } catch {
+        return { category: detectCategory(title), description: '', aiFomoScore: 5 };
     }
 }
 
@@ -472,15 +219,13 @@ async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice) {
 async function filterExistingIds(db, docIds) {
     if (docIds.length === 0) return new Set();
     const existing = new Set();
-
     for (let i = 0; i < docIds.length; i += 30) {
         const chunk = docIds.slice(i, i + 30);
         try {
-            const snapshot = await db.collection('discounts')
+            const snap = await db.collection('discounts')
                 .where(FieldPath.documentId(), 'in', chunk)
-                .select()
-                .get();
-            snapshot.docs.forEach(doc => existing.add(doc.id));
+                .select().get();
+            snap.docs.forEach(d => existing.add(d.id));
         } catch (e) {
             console.warn(`   ⚠️ Batch check hatası: ${e.message}`);
         }
@@ -490,13 +235,18 @@ async function filterExistingIds(db, docIds) {
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 async function main() {
-    console.log('\n🚀 INDIVA Auto-Akakce Pipeline Başlatıldı');
+    console.log('\n🚀 INDIVA Auto-Akakce Pipeline Başlatıldı (Gemini URL Context)');
     console.log('═══════════════════════════════════════════');
     console.log(`⏰ ${new Date().toLocaleString('tr-TR')}\n`);
 
+    // Gemini API key zorunlu
+    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+    if (!apiKey) {
+        throw new Error('GEMINI_API_KEY zorunlu! GitHub Secrets\'a ekleyin.');
+    }
+
     const db = initFirebase();
-    const aiKey = getGeminiKey();
-    console.log(`✅ Firebase hazır. AI: ${aiKey ? 'AÇIK' : 'KAPALI'}`);
+    console.log(`✅ Firebase hazır. AI açıklaması: ${process.env.AI_ENABLED === 'true' ? 'AÇIK' : 'KAPALI'}`);
 
     // ── Cache ──────────────────────────────────────────────────────────────────
     const CACHE_DIR = path.join(ROOT_DIR, 'data');
@@ -512,167 +262,123 @@ async function main() {
         } catch { /* ignore */ }
     }
 
-    // ── Browser başlat ────────────────────────────────────────────────────────
-    let browser;
+    // ── 1. Akakce'den ürün listesini çek ────────────────────────────────────
+    let rawProducts;
     try {
-        browser = await launchBrowser();
+        rawProducts = await fetchAkakceViaGemini(apiKey);
     } catch (err) {
-        console.error(`❌ Browser başlatılamadı: ${err.message}`);
-        await sendAdminAlert('Akakce Pipeline Hatası', `Browser başlatılamadı: ${err.message}`);
+        console.error(`❌ Akakce fetch hatası: ${err.message}`);
+        await sendAdminAlert('Akakce Pipeline Hatası', `Gemini URL fetch başarısız: ${err.message}`);
         process.exit(1);
     }
 
-    const page = await browser.newPage();
+    if (!rawProducts || rawProducts.length === 0) {
+        console.log('❌ Hiç ürün bulunamadı.');
+        await sendAdminAlert('Akakce Pipeline', 'Gemini 0 ürün döndürdü.');
+        return;
+    }
 
-    // Gereksiz resource'ları engelle (daha hızlı yükleme)
-    await page.setRequestInterception(true);
-    page.on('request', req => {
-        const type = req.resourceType();
-        if (['font', 'media'].includes(type)) {
-            req.abort();
-        } else {
-            req.continue();
-        }
+    // Geçersiz ürünleri filtrele (title veya productUrl eksik)
+    const validProducts = rawProducts.filter(p =>
+        p.title && p.title.length > 3 && p.productUrl && p.productUrl.includes('akakce.com')
+    );
+    console.log(`\n📊 Toplam: ${rawProducts.length} ürün, geçerli: ${validProducts.length}`);
+
+    // ── 2. Cache & DB filtreleme ──────────────────────────────────────────────
+    // ID: akakce URL'den çıkart, yoksa title hash kullan
+    const withIds = validProducts.map(p => {
+        const urlId = extractProductId(p.productUrl);
+        const id = urlId || Buffer.from(p.title).toString('base64').replace(/[^a-zA-Z0-9]/g, '').substring(0, 16);
+        return { ...p, _docId: `akakce_${id}` };
     });
 
-    try {
-        // ── 1. Ürün listesini çek ─────────────────────────────────────────────
-        const allProducts = await fetchAkakceProducts(page);
+    const uncached = withIds.filter(p => !idCache.ids[p._docId]);
+    console.log(`   ⏭️  ${withIds.length - uncached.length} ürün cache'den elendi`);
 
-        if (allProducts.length === 0) {
-            console.log('❌ Hiç ürün bulunamadı. Sayfa yapısı değişmiş olabilir.');
-            await sendAdminAlert('Akakce Pipeline', 'Ürün bulunamadı — CSS selectors güncellemesi gerekebilir.');
-            return;
-        }
+    const existingInDb = await filterExistingIds(db, uncached.map(p => p._docId));
+    existingInDb.forEach(id => { idCache.ids[id] = true; });
+    if (existingInDb.size > 0) console.log(`   ⏭️  ${existingInDb.size} ürün Firebase'de zaten var`);
 
-        const toProcess = allProducts.slice(0, MAX_NEW_PRODUCTS);
-        console.log(`\n📊 Toplam: ${allProducts.length} ürün, işlenecek: ${toProcess.length}`);
+    const finalList = uncached.filter(p => !existingInDb.has(p._docId));
+    console.log(`   🆕 İşlenecek net yeni ürün: ${finalList.length}\n`);
 
-        // ── 2. Cache & DB filtreleme ──────────────────────────────────────────
-        const uncached = toProcess.filter(p => !idCache.ids[`akakce_${p.id}`]);
-        console.log(`   ⏭️  ${toProcess.length - uncached.length} ürün cache'den elendi`);
-
-        const uncachedIds = uncached.map(p => `akakce_${p.id}`);
-        const existingInDb = await filterExistingIds(db, uncachedIds);
-        if (existingInDb.size > 0) {
-            existingInDb.forEach(id => { idCache.ids[id] = true; });
-            console.log(`   ⏭️  ${existingInDb.size} ürün Firebase'de zaten var`);
-        }
-
-        const finalList = uncached.filter(p => !existingInDb.has(`akakce_${p.id}`));
-        console.log(`   🆕 İşlenecek net yeni ürün: ${finalList.length}\n`);
-
-        if (finalList.length === 0) {
-            console.log('✅ Yeni ürün yok. Pipeline tamamlandı.');
-            return;
-        }
-
-        // ── 3. Her ürünü işle ─────────────────────────────────────────────────
-        let successCount = 0;
-        let failCount = 0;
-
-        for (let i = 0; i < finalList.length; i++) {
-            const product = finalList[i];
-            const docId = `akakce_${product.id}`;
-
-            console.log(`\n[${i + 1}/${finalList.length}] 📦 ${product.title.substring(0, 60)}...`);
-
-            try {
-                await sleep(STEP_DELAY_MS);
-
-                // Detay sayfasından mağaza linkini çıkar
-                console.log(`   🔍 Detay sayfası: ${product.url.substring(0, 70)}...`);
-                let storeLink = await extractStoreLink(page, product.url);
-
-                if (!storeLink) {
-                    // Fallback: akakce ürün sayfasını link olarak kullan
-                    storeLink = product.url;
-                    console.log(`   ⚠️  Mağaza linki çözülemedi, akakce URL kullanılıyor`);
-                }
-
-                const store = detectStore(storeLink);
-
-                // OG image kontrolü — detay sayfasından daha iyi görsel alma
-                let imageUrl = product.imageUrl;
-                try {
-                    const ogImage = await page.evaluate(() =>
-                        document.querySelector('meta[property="og:image"]')?.getAttribute('content') || ''
-                    );
-                    if (ogImage?.startsWith('http')) imageUrl = ogImage;
-                } catch { /* ignore */ }
-
-                if (!imageUrl) {
-                    console.warn(`   ⚠️  Görsel bulunamadı, atlanıyor`);
-                    failCount++;
-                    continue;
-                }
-
-                // Fiyat hesaplama
-                const newPrice = product.newPrice || 0;
-                const oldPrice = product.oldPrice || (newPrice > 0 ? simulateOldPrice(newPrice) : 0);
-
-                console.log(`   💰 ${oldPrice} TL → ${newPrice} TL | Mağaza: ${store.name}`);
-
-                // AI analiz
-                const aiData = await generateAISentiments(aiKey, product.title, newPrice, oldPrice);
-
-                // Firebase'e kaydet
-                const discountData = {
-                    title: cleanTitle(aiData.title || product.title),
-                    brand: store.name || 'Online Mağaza',
-                    category: aiData.category || detectCategory(product.title),
-                    description: aiData.description || '',
-                    link: storeLink,
-                    originalStoreLink: storeLink,
-                    oldPrice: oldPrice || 0,
-                    newPrice: newPrice || 0,
-                    imageUrl,
-                    deleteUrl: '',
-                    submittedBy: 'auto-akakce-bot',
-                    isAd: false,
-                    affiliateLinkUpdated: false,
-                    originalSource: 'akakce.com',
-                    storeName: store.name,
-                    status: 'aktif',
-                    telegramMessageId: docId,
-                    pushNotifications: [],
-                    lastPriceCheck: FieldValue.serverTimestamp(),
-                    autoPublishedAt: FieldValue.serverTimestamp(),
-                    createdAt: FieldValue.serverTimestamp(),
-                    aiFomoScore: aiData.aiFomoScore || 5,
-                };
-
-                await db.collection('discounts').doc(docId).set(discountData);
-                console.log(`   🔥 Firebase'e kaydedildi ✅ (ID: ${docId})`);
-
-                idCache.ids[docId] = true;
-                successCount++;
-
-            } catch (err) {
-                console.error(`   ❌ Ürün işleme hatası: ${err.message}`);
-                failCount++;
-            }
-        }
-
-        // Cache kaydet
-        try {
-            idCache.lastUpdate = new Date().toISOString();
-            fs.writeFileSync(CACHE_FILE, JSON.stringify(idCache, null, 2));
-            console.log(`\n💾 Cache güncellendi (${Object.keys(idCache.ids).length} ürün)`);
-        } catch (e) {
-            console.error('Cache kaydetme hatası:', e.message);
-        }
-
-        console.log('\n═══════════════════════════════════════════');
-        console.log('📊 AKAKCE PIPELINE TAMAMLANDI');
-        console.log(`   ✅ Başarılı: ${successCount}`);
-        console.log(`   ❌ Başarısız: ${failCount}`);
-        console.log(`   ⏰ ${new Date().toLocaleString('tr-TR')}`);
-        console.log('═══════════════════════════════════════════\n');
-
-    } finally {
-        await browser.close();
+    if (finalList.length === 0) {
+        console.log('✅ Yeni ürün yok. Pipeline tamamlandı.');
+        return;
     }
+
+    // ── 3. Her ürünü Firebase'e kaydet ───────────────────────────────────────
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < finalList.length; i++) {
+        const product = finalList[i];
+        console.log(`\n[${i + 1}/${finalList.length}] 📦 ${product.title.substring(0, 60)}...`);
+
+        try {
+            await sleep(500);
+
+            const newPrice = Number(product.newPrice) || 0;
+            const oldPrice = Number(product.oldPrice) || (newPrice > 0 ? simulateOldPrice(newPrice) : 0);
+            const store = detectStore(product.productUrl);
+
+            console.log(`   💰 ${oldPrice} TL → ${newPrice} TL | Mağaza: ${store.name}`);
+
+            // Opsiyonel: AI açıklama üretimi
+            const aiData = await generateDescription(apiKey, product.title, newPrice, oldPrice);
+
+            const discountData = {
+                title: cleanTitle(product.title),
+                brand: store.name,
+                category: aiData.category || detectCategory(product.title),
+                description: aiData.description || '',
+                link: product.productUrl,
+                originalStoreLink: product.productUrl,
+                oldPrice: oldPrice,
+                newPrice: newPrice,
+                imageUrl: product.imageUrl || '',
+                deleteUrl: '',
+                submittedBy: 'auto-akakce-bot',
+                isAd: false,
+                affiliateLinkUpdated: false,
+                originalSource: 'akakce.com',
+                storeName: store.name,
+                status: 'aktif',
+                telegramMessageId: product._docId,
+                pushNotifications: [],
+                lastPriceCheck: FieldValue.serverTimestamp(),
+                autoPublishedAt: FieldValue.serverTimestamp(),
+                createdAt: FieldValue.serverTimestamp(),
+                aiFomoScore: aiData.aiFomoScore || 5,
+            };
+
+            await db.collection('discounts').doc(product._docId).set(discountData);
+            console.log(`   🔥 Firebase'e kaydedildi ✅ (ID: ${product._docId})`);
+
+            idCache.ids[product._docId] = true;
+            successCount++;
+
+        } catch (err) {
+            console.error(`   ❌ Ürün işleme hatası: ${err.message}`);
+            failCount++;
+        }
+    }
+
+    // Cache kaydet
+    try {
+        idCache.lastUpdate = new Date().toISOString();
+        fs.writeFileSync(CACHE_FILE, JSON.stringify(idCache, null, 2));
+        console.log(`\n💾 Cache güncellendi (${Object.keys(idCache.ids).length} ürün)`);
+    } catch (e) {
+        console.error('Cache kaydetme hatası:', e.message);
+    }
+
+    console.log('\n═══════════════════════════════════════════');
+    console.log('📊 AKAKCE PIPELINE TAMAMLANDI');
+    console.log(`   ✅ Başarılı: ${successCount}`);
+    console.log(`   ❌ Başarısız: ${failCount}`);
+    console.log(`   ⏰ ${new Date().toLocaleString('tr-TR')}`);
+    console.log('═══════════════════════════════════════════\n');
 }
 
 main().catch(async (err) => {

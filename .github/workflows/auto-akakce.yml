@@ -2,13 +2,13 @@ name: Auto Akakce Deal Fetcher
 
 on:
   schedule:
-    - cron: '*/10 * * * *'  # Her 10 dakikada bir (onual pipeline'ından bağımsız)
-  workflow_dispatch:         # Manuel tetikleme
+    - cron: '*/10 * * * *'  # Her 10 dakikada bir
+  workflow_dispatch:
 
 jobs:
   fetch-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 8
 
     steps:
       - name: Checkout
@@ -20,39 +20,22 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install project dependencies
+      - name: Install dependencies
         run: npm ci --include=dev
-
-      - name: Install Chromium
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y chromium || sudo apt-get install -y chromium-browser
-          CHROMIUM_BIN=$(which chromium 2>/dev/null || which chromium-browser 2>/dev/null)
-          echo "CHROMIUM_PATH=$CHROMIUM_BIN" >> $GITHUB_ENV
-          echo "✅ Chromium: $CHROMIUM_BIN"
-
-      - name: Install Puppeteer dependencies
-        # package.json'a eklemiyoruz — sadece bu workflow için yüklenir
-        run: |
-          npm install --no-save \
-            puppeteer-core \
-            puppeteer-extra \
-            puppeteer-extra-plugin-stealth
 
       - name: Cache Processed IDs
         uses: actions/cache@v4
         with:
           path: data/processed_akakce_ids.json
-          key: akakce-ids-v1-${{ github.run_number }}
+          key: akakce-ids-v2-${{ github.run_number }}
           restore-keys: |
-            akakce-ids-v1-
+            akakce-ids-v2-
 
       - name: Run Auto-Akakce Pipeline
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          # AI_ENABLED: Gemini ile başlık/açıklama/kategori üretimini açar/kapatır.
-          # Açmak için GitHub repo → Settings → Secrets → Actions → AI_ENABLED=true ekleyin.
-          # Kapalıyken keyword tabanlı kategori kullanılır (ücretsiz).
+          # AI_ENABLED: Açıklama üretimini açar (opsiyonel, ekstra maliyet)
+          # Kapalıyken sadece URL Context fetch yapılır (zorunlu maliyet)
           AI_ENABLED: ${{ secrets.AI_ENABLED || 'false' }}
         run: node scripts/auto-akakce.js
