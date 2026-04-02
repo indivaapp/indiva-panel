@@ -170,11 +170,11 @@ Format: [{"title":"Samsung Galaxy S25","newPrice":35000,"oldPrice":42000,"discou
         console.log('🤖 Strateji 1: Gemini URL Context...');
         const response = await genAI.models.generateContent({
             model: MODEL_URL_CONTEXT,
-            contents: [{ role: 'user', parts: [{ text: `Şu sayfayı ziyaret et: ${AKAKCE_URL}\n\n${productPrompt}` }] }],
+            contents: [{ role: 'user', parts: [{ text: `Şu sayfayı ziyaret et ve içeriğini oku: ${AKAKCE_URL}\n\n${productPrompt}` }] }],
             config: { tools: [{ urlContext: {} }], temperature: 0.1 },
         });
         const text = extractText(response);
-        console.log(`   📝 Yanıt (ilk 300): ${text.substring(0, 300)}`);
+        console.log(`   📝 Yanıt (ilk 500): ${text.substring(0, 500)}`);
         const match = text.match(/\[[\s\S]*\]/);
         if (match) {
             const products = JSON.parse(match[0]);
@@ -188,16 +188,26 @@ Format: [{"title":"Samsung Galaxy S25","newPrice":35000,"oldPrice":42000,"discou
         console.warn(`   ⚠️ URL Context hatası: ${err.message}`);
     }
 
-    // Strateji 2: Google Search Grounding (Google index'inden güncel veriler)
+    // Strateji 2: Google Search — akakce.com'daki güncel indirimli ürünleri ara
     try {
         console.log('🔍 Strateji 2: Gemini Google Search Grounding...');
+        const searchPrompt = `Google'da şunu ara: akakce.com indirimli ürünler fiyat düştü TL 2024 2025
+
+Arama sonuçlarında akakce.com'a ait ürün sayfalarını bul.
+Her ürün için title, newPrice (TL sayı), oldPrice (TL sayı), discountPercent (sayı), imageUrl (url), productUrl (akakce.com url) çıkart.
+SADECE JSON array döndür.
+Format: [{"title":"...","newPrice":0,"oldPrice":0,"discountPercent":0,"imageUrl":"","productUrl":"https://www.akakce.com/..."}]`;
+
         const response = await genAI.models.generateContent({
             model: MODEL_URL_CONTEXT,
-            contents: [{ role: 'user', parts: [{ text: `site:akakce.com güncel indirimli ürünler "Son Yakalanan İndirimler"\n\n${productPrompt}` }] }],
-            config: { tools: [{ googleSearch: {} }], temperature: 0.1 },
+            contents: [{ role: 'user', parts: [{ text: searchPrompt }] }],
+            config: {
+                tools: [{ googleSearch: {} }],
+                temperature: 0.1,
+            },
         });
         const text = extractText(response);
-        console.log(`   📝 Yanıt (ilk 300): ${text.substring(0, 300)}`);
+        console.log(`   📝 Yanıt (ilk 500): ${text.substring(0, 500)}`);
         const match = text.match(/\[[\s\S]*\]/);
         if (match) {
             const products = JSON.parse(match[0]);
@@ -206,9 +216,35 @@ Format: [{"title":"Samsung Galaxy S25","newPrice":35000,"oldPrice":42000,"discou
                 return products;
             }
         }
-        console.warn('   ⚠️ Google Search da boş döndü.');
+        console.warn('   ⚠️ Google Search boş döndü.');
     } catch (err) {
         console.warn(`   ⚠️ Google Search hatası: ${err.message}`);
+    }
+
+    // Strateji 3: URL Context + Google Search birlikte
+    try {
+        console.log('🔗 Strateji 3: URL Context + Google Search kombinasyonu...');
+        const response = await genAI.models.generateContent({
+            model: MODEL_URL_CONTEXT,
+            contents: [{ role: 'user', parts: [{ text: `${AKAKCE_URL} adresine git ve sayfadaki indirimli ürünleri listele. ${productPrompt}` }] }],
+            config: {
+                tools: [{ urlContext: {} }, { googleSearch: {} }],
+                temperature: 0.1,
+            },
+        });
+        const text = extractText(response);
+        console.log(`   📝 Yanıt (ilk 500): ${text.substring(0, 500)}`);
+        const match = text.match(/\[[\s\S]*\]/);
+        if (match) {
+            const products = JSON.parse(match[0]);
+            if (products.length > 0) {
+                console.log(`   ✅ Kombinasyon: ${products.length} ürün`);
+                return products;
+            }
+        }
+        console.warn('   ⚠️ Kombinasyon da boş döndü.');
+    } catch (err) {
+        console.warn(`   ⚠️ Kombinasyon hatası: ${err.message}`);
     }
 
     throw new Error('Her iki Gemini stratejisi de başarısız oldu.');
