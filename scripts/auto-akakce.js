@@ -136,15 +136,11 @@ function extractProductId(url) {
     return match ? match[1] : null;
 }
 
-// ─── Gemini URL Context: Akakce Ürün Listesi ─────────────────────────────────
+// ─── Gemini ile Akakce Ürün Listesi (URL Context + Google Search fallback) ─────
 async function fetchAkakceViaGemini(apiKey) {
-    console.log('🤖 Gemini URL Context ile akakce.com çekiliyor...');
     const genAI = new GoogleGenAI({ apiKey });
 
-    const prompt = `Şu sayfayı ziyaret et ve analiz et: ${AKAKCE_URL}
-
-"Son Yakalanan İndirimler" veya "Fark Atan Fiyatlar" veya benzeri indirim bölümündeki ürünleri bul.
-Bulamazsan sayfadaki tüm indirimli ürünleri al.
+    const productPrompt = `akakce.com sitesinin "Son Yakalanan İndirimler" veya "Fark Atan Fiyatlar" bölümündeki güncel indirimli ürünleri listele.
 
 Her ürün için şu bilgileri çıkart:
 - title: Ürün adı (temiz, pazarlama sloganı olmadan)
@@ -162,27 +158,60 @@ Kurallar:
 
 Format: [{"title":"Samsung Galaxy S25","newPrice":35000,"oldPrice":42000,"discountPercent":17,"imageUrl":"https://...","productUrl":"https://www.akakce.com/..."}]`;
 
-    const response = await genAI.models.generateContent({
-        model: MODEL_URL_CONTEXT,
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        config: {
-            tools: [{ urlContext: {} }],
-            temperature: 0.1,
-        },
-    });
-
-    const text = response.text || '';
-    console.log(`   📝 Gemini yanıtı (ilk 300 karakter): ${text.substring(0, 300)}`);
-
-    // JSON array'i parse et
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-        throw new Error(`Gemini geçerli JSON döndürmedi. Yanıt: ${text.substring(0, 200)}`);
+    // Yardımcı: yanıttan text çıkar (farklı response formatlarını destekle)
+    function extractText(response) {
+        if (response.text) return response.text;
+        const parts = response.candidates?.[0]?.content?.parts || [];
+        return parts.filter(p => p.text).map(p => p.text).join('');
     }
 
-    const products = JSON.parse(jsonMatch[0]);
-    console.log(`   ✅ ${products.length} ürün çekildi`);
-    return products;
+    // Strateji 1: URL Context (Google sunucuları üzerinden fetch)
+    try {
+        console.log('🤖 Strateji 1: Gemini URL Context...');
+        const response = await genAI.models.generateContent({
+            model: MODEL_URL_CONTEXT,
+            contents: [{ role: 'user', parts: [{ text: `Şu sayfayı ziyaret et: ${AKAKCE_URL}\n\n${productPrompt}` }] }],
+            config: { tools: [{ urlContext: {} }], temperature: 0.1 },
+        });
+        const text = extractText(response);
+        console.log(`   📝 Yanıt (ilk 300): ${text.substring(0, 300)}`);
+        const match = text.match(/\[[\s\S]*\]/);
+        if (match) {
+            const products = JSON.parse(match[0]);
+            if (products.length > 0) {
+                console.log(`   ✅ URL Context: ${products.length} ürün`);
+                return products;
+            }
+        }
+        console.warn('   ⚠️ URL Context boş yanıt, Google Search deneniyor...');
+    } catch (err) {
+        console.warn(`   ⚠️ URL Context hatası: ${err.message}`);
+    }
+
+    // Strateji 2: Google Search Grounding (Google index'inden güncel veriler)
+    try {
+        console.log('🔍 Strateji 2: Gemini Google Search Grounding...');
+        const response = await genAI.models.generateContent({
+            model: MODEL_URL_CONTEXT,
+            contents: [{ role: 'user', parts: [{ text: `site:akakce.com güncel indirimli ürünler "Son Yakalanan İndirimler"\n\n${productPrompt}` }] }],
+            config: { tools: [{ googleSearch: {} }], temperature: 0.1 },
+        });
+        const text = extractText(response);
+        console.log(`   📝 Yanıt (ilk 300): ${text.substring(0, 300)}`);
+        const match = text.match(/\[[\s\S]*\]/);
+        if (match) {
+            const products = JSON.parse(match[0]);
+            if (products.length > 0) {
+                console.log(`   ✅ Google Search: ${products.length} ürün`);
+                return products;
+            }
+        }
+        console.warn('   ⚠️ Google Search da boş döndü.');
+    } catch (err) {
+        console.warn(`   ⚠️ Google Search hatası: ${err.message}`);
+    }
+
+    throw new Error('Her iki Gemini stratejisi de başarısız oldu.');
 }
 
 // ─── Gemini Açıklama Üretimi (AI_ENABLED=true ise) ───────────────────────────
