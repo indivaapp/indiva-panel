@@ -147,7 +147,7 @@ function cleanTitle(title: string): string {
  * Resolve short links to final URL
  */
 async function resolveUrl(url: string): Promise<string> {
-    if (!url.includes('ty.gl') && !url.includes('amzn.to') && !url.includes('hb.biz') && !url.includes('onu.al')) {
+    if (!url.includes('ty.gl') && !url.includes('amzn.to') && !url.includes('hb.biz') && !url.includes('onu.al') && !url.includes('n11.gl') && !url.includes('pzrm.gl')) {
         return url;
     }
 
@@ -188,11 +188,11 @@ async function fetchWithTimeout(url: string, timeout = 25000, retryCount = 0): P
         });
 
         if (!response.ok) {
-            // If 403, wait longer and retry
-            if (response.status === 403 && retryCount < maxRetries) {
-                console.log(`Got 403, waiting and retrying (attempt ${retryCount + 1}/${maxRetries})...`);
+            // 403 için kısa bir retry (IP block ise retry faydası yok, hızlı fallback'e geç)
+            if (response.status === 403 && retryCount < 1) {
+                console.log(`Got 403, quick retry (${retryCount + 1}/1)...`);
                 clearTimeout(timeoutId);
-                await randomDelay(3000, 8000);
+                await randomDelay(800, 1500);
                 return fetchWithTimeout(url, timeout, retryCount + 1);
             }
             throw new Error(`HTTP ${response.status}`);
@@ -439,6 +439,288 @@ const AKAKCE_MARKETS: Record<string, string> = {
 };
 
 /**
+ * Fiyat metnini parse eder: "447,36 TL", "1.299,00 ₺", 447 vb.
+ */
+function parsePriceText(val: any): number {
+    if (!val && val !== 0) return 0;
+    const str = String(val)
+        .replace(/[TL₺\s]/gi, '')
+        .replace(/\./g, '')
+        .replace(',', '.');
+    return parseFloat(str) || 0;
+}
+
+function parseAIPriceResponse(text: string): { newPrice: number; oldPrice: number } {
+    try {
+        const jsonMatch = text.match(/\{[^{}]*"newPrice"[^{}]*\}/s);
+        if (!jsonMatch) return { newPrice: 0, oldPrice: 0 };
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+            newPrice: parsePriceText(parsed.newPrice),
+            oldPrice: parsePriceText(parsed.oldPrice),
+        };
+    } catch {
+        return { newPrice: 0, oldPrice: 0 };
+    }
+}
+
+/**
+ * OpenRouter minimax-m2.7 ile HTML içinden fiyat çıkarır.
+ * Trendyol gibi sitelerde HTML'de fiyat yoksa 0 döner → fiyat modalı açılır.
+ */
+async function openrouterPriceFallback(html: string): Promise<{ newPrice: number; oldPrice: number }> {
+    const apiKey = process.env.OPENROUTER_API_KEY || '';
+    if (!apiKey || !html) return { newPrice: 0, oldPrice: 0 };
+
+    // HTML'den fiyat içerebilecek bağlamı çıkar
+    const $ = cheerio.load(html);
+    $('style, script, nav, header, footer, aside, iframe, noscript').remove();
+
+    // Önce JSON-LD içinde fiyat ara
+    const jsonLdText = $('script[type="application/ld+json"]').map((_, el) => $(el).html()).get().join('\n');
+
+    // Body metni — fiyat içeren kısmı bul
+    const bodyText = $('body').text().replace(/\s+/g, ' ').trim();
+    const priceIdx = bodyText.search(/[\d.,]+\s*(?:TL|₺)/i);
+    const bodyContext = priceIdx >= 0
+        ? bodyText.substring(Math.max(0, priceIdx - 150), priceIdx + 500)
+        : bodyText.substring(0, 400);
+
+    const context = (jsonLdText.substring(0, 800) + '\n' + bodyContext).trim();
+    if (context.length < 20) return { newPrice: 0, oldPrice: 0 };
+
+    try {
+        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: 'minimax/minimax-m2.7',
+                messages: [{
+                    role: 'user',
+                    content: `Aşağıdaki içerikten ürünün güncel satış fiyatını (newPrice) ve üzeri çizili eski fiyatını (oldPrice) çıkar. Fiyat yoksa 0 yaz. SADECE JSON yaz, başka hiçbir şey yazma:\n{"newPrice":X,"oldPrice":Y}\n\n${context}`,
+                }],
+                max_tokens: 60,
+                temperature: 0,
+                include_reasoning: false,
+            }),
+        });
+
+        if (!res.ok) return { newPrice: 0, oldPrice: 0 };
+
+        const data = await res.json();
+        const text = data.choices?.[0]?.message?.content || '';
+        const result = parseAIPriceResponse(text);
+        if (result.newPrice > 0) {
+            console.log(`OpenRouter fiyat başarılı: newPrice=${result.newPrice}, oldPrice=${result.oldPrice}`);
+        }
+        return result;
+    } catch (err) {
+        console.warn('OpenRouter fiyat hatası:', err);
+        return { newPrice: 0, oldPrice: 0 };
+    }
+}
+
+/**
+ * URL'den ürün adını çıkar (HB/N11/Amazon slug → temiz ürün adı)
+ */
+function extractProductNameFromUrl(productUrl: string): string {
+    try {
+        const pathParts = new URL(productUrl).pathname.split('/').filter(Boolean);
+        const lastPart = pathParts[pathParts.length - 1] || '';
+        let rawName = '';
+
+        if (productUrl.includes('hepsiburada')) {
+            rawName = lastPart.replace(/-pm-HB[A-Z0-9]+$/i, '');
+        } else if (productUrl.includes('n11.com')) {
+            rawName = lastPart.replace(/-p-\d+(\.\w+)?$/, '').replace(/W\d+\.html$/, '').replace(/\.html$/, '');
+        } else if (productUrl.includes('amazon.com.tr')) {
+            const dpIdx = pathParts.indexOf('dp');
+            rawName = dpIdx > 0 ? pathParts[dpIdx - 1] : lastPart;
+        }
+        return rawName.replace(/-/g, ' ').trim();
+    } catch { return ''; }
+}
+
+/**
+ * Fiyat içeren HTML metninden TL fiyatlarını çıkarır
+ */
+function extractPricesFromHtml(html: string): number[] {
+    const priceRegex = /([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*(?:TL|₺)/g;
+    const prices: number[] = [];
+    let m;
+    while ((m = priceRegex.exec(html)) !== null) {
+        const p = parsePriceText(m[1]);
+        if (p > 50) prices.push(p);
+    }
+    return prices;
+}
+
+/**
+ * Perplexity online model ile ürün fiyatı bul.
+ * Perplexity kendi arama altyapısından HB/N11/Amazon sayfalarına erişir.
+ */
+async function searchPriceViaPerplexity(productUrl: string): Promise<{
+    newPrice: number; title: string; brand: string;
+}> {
+    const empty = { newPrice: 0, title: '', brand: '' };
+    const apiKey = process.env.OPENROUTER_API_KEY || '';
+    if (!apiKey) return empty;
+
+    try {
+        console.log(`Perplexity online search: ${productUrl}`);
+        // Ürün adını URL'den çıkar
+        const productName = extractProductNameFromUrl(productUrl);
+        const storeName = productUrl.includes('hepsiburada') ? 'Hepsiburada' :
+                          productUrl.includes('n11') ? 'N11' : 'Amazon Türkiye';
+
+        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: 'perplexity/sonar',
+                messages: [{
+                    role: 'user',
+                    content: `${storeName} sitesindeki "${productName}" ürününün güncel Türk lirası (TL) satış fiyatı nedir? Fiyatı bulduktan sonra YALNIZCA şu JSON formatında yaz, başka hiçbir şey ekleme:\n{"newPrice": FIYAT_RAKAM, "title": "URUN_ADI_METIN"}`,
+                }],
+                max_tokens: 150,
+                temperature: 0,
+            }),
+            signal: AbortSignal.timeout(25000),
+        });
+
+        if (!res.ok) {
+            console.warn(`Perplexity HTTP ${res.status}`);
+            return empty;
+        }
+
+        const data = await res.json();
+        const text = data.choices?.[0]?.message?.content || '';
+        console.log(`Perplexity yanıtı: ${text.substring(0, 300)}`);
+
+        // JSON parse dene
+        const jsonMatch = text.match(/\{[^{}]*"newPrice"[^{}]*\}/s);
+        if (jsonMatch) {
+            try {
+                const parsed = JSON.parse(jsonMatch[0]);
+                const newPrice = parsePriceText(parsed.newPrice);
+                if (newPrice > 0) {
+                    const title = parsed.title || productName;
+                    return { newPrice, title, brand: extractBrand(title) };
+                }
+            } catch { }
+        }
+
+        // JSON parse başarısız → metinden fiyat çıkar
+        const priceRegex = /([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*(?:TL|₺)/g;
+        const prices: number[] = [];
+        let m;
+        while ((m = priceRegex.exec(text)) !== null) {
+            const p = parsePriceText(m[1]);
+            if (p > 50) prices.push(p);
+        }
+        if (prices.length > 0) {
+            prices.sort((a, b) => a - b);
+            const newPrice = prices[Math.floor(prices.length / 2)] || prices[0];
+            return { newPrice, title: productName, brand: extractBrand(productName) };
+        }
+        console.warn('Perplexity: JSON parse ve regex her ikisi de başarısız');
+        return empty;
+    } catch (e) {
+        console.warn('Perplexity hatası:', e);
+        return empty;
+    }
+}
+
+/**
+ * Engellenen mağazalar için Bing arama ile fiyat bul.
+ * Bing, cloud/AI altyapısından erişilebilir (Copilot/ChatGPT da kullanır).
+ * Arama sonuçlarında ürün fiyatı rich snippet olarak yer alır.
+ */
+async function searchPriceViaDDG(productUrl: string): Promise<{
+    newPrice: number; title: string; imageUrl: string; brand: string;
+}> {
+    const empty = { newPrice: 0, title: '', imageUrl: '', brand: '' };
+    try {
+        const productName = extractProductNameFromUrl(productUrl);
+        if (productName.length < 3) return empty;
+
+        const storeName = productUrl.includes('hepsiburada') ? 'hepsiburada' :
+                          productUrl.includes('n11') ? 'n11' : 'amazon';
+        // İlk 4-5 kelimeyi al (URL slug'daki renk/özellik gibi gürültü sözcüklerini at)
+        const shortName = productName.split(/\s+/).slice(0, 5).join(' ');
+        const query = `${shortName} ${storeName} fiyat`;
+        console.log(`Bing fiyat araması: "${query}"`);
+
+        // Basit Bing URL - setlang/cc eklentileri bazen redirect'e yol açıyor
+        const bingUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&mkt=tr-TR`;
+        let bingHtml = '';
+        try {
+            const controller = new AbortController();
+            const tid = setTimeout(() => controller.abort(), 18000);
+            const resp = await fetch(bingUrl, {
+                signal: controller.signal,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8',
+                },
+            });
+            clearTimeout(tid);
+            if (resp.ok) bingHtml = await resp.text();
+            else console.warn(`Bing HTTP ${resp.status}`);
+        } catch (fetchE) {
+            console.warn('Bing fetch hatası:', fetchE);
+        }
+
+        if (bingHtml.length < 1000) {
+            console.warn(`Bing HTML çok kısa: ${bingHtml.length} bytes, Perplexity deneniyor...`);
+            const ppResult = await searchPriceViaPerplexity(productUrl);
+            if (ppResult && ppResult.newPrice > 0) {
+                return { newPrice: ppResult.newPrice, title: ppResult.title, imageUrl: '', brand: ppResult.brand };
+            }
+            return empty;
+        }
+
+        const prices = extractPricesFromHtml(bingHtml);
+        if (prices.length === 0) {
+            // Bing US sunucularından TL fiyatı gelmiyor; Perplexity ile dene
+            console.log('Bing\'de TL fiyatı yok, Perplexity online arama deneniyor...');
+            const ppResult = await searchPriceViaPerplexity(productUrl);
+            if (ppResult.newPrice > 0) {
+                console.log(`Perplexity fiyat: ${ppResult.newPrice}, başlık: ${ppResult.title.substring(0, 50)}`);
+                return { newPrice: ppResult.newPrice, title: ppResult.title, imageUrl: '', brand: ppResult.brand };
+            }
+            return empty;
+        }
+
+        // Medyan fiyat (outlier'ları temizle)
+        prices.sort((a, b) => a - b);
+        const newPrice = prices[Math.floor(prices.length / 2)] || prices[0];
+
+        // Başlık: mağazaya ait result başlığını bul
+        const titleRe = new RegExp(`<h2[^>]*>\\s*<a[^>]*href="[^"]*${storeName}[^"]*"[^>]*>([^<]+)<`, 'i');
+        let title = (bingHtml.match(titleRe)?.[1] || '').trim();
+        if (!title) {
+            title = (bingHtml.match(/<h2[^>]*>\s*<a[^>]*>([^<]+)</)?.[1] || productName).trim();
+        }
+        title = title.replace(/\s*[\|–-]\s*(?:hepsiburada|n11|amazon).*$/i, '').trim();
+        const brand = extractBrand(title);
+
+        console.log(`Bing fiyat: ${newPrice} TL, başlık: ${title.substring(0, 50)}`);
+        return { newPrice, title, imageUrl: '', brand };
+    } catch (e) {
+        console.warn('Bing arama hatası:', e);
+        return empty;
+    }
+}
+
+/**
  * Main API Handler
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -451,7 +733,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { action, url, market } = req.query;
 
     try {
-        if (action === 'list' || !action) {
+        } else if (action === 'list' || !action) {
             // Fetch main deals list
             const html = await fetchWithTimeout('https://onual.com/fiyat/');
             const deals = parseOnualHtml(html);
@@ -529,6 +811,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 brochureLinks,
                 images: uniqueImages,
             });
+        } else if ((action === 'product' || action === 'analyze') && url) {
             // Analyze product URL - extract price and image
             let targetUrl = Array.isArray(url) ? url[0] : url;
             console.log(`Analyzing product URL: ${targetUrl}`);
@@ -536,13 +819,52 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             // 1. Resolve short links
             targetUrl = await resolveUrl(targetUrl);
 
-            const html = await fetchWithTimeout(targetUrl);
+            // 2. Sayfayı çek
+            let html = '';
+            const isBlockedStore = targetUrl.includes('hepsiburada') || targetUrl.includes('n11.com') || targetUrl.includes('amazon.com.tr');
 
-            // 2. Content validity check - prevent hallucination
-            if (html.length < 500 || html.includes('captcha') || html.includes('robot') || html.includes('forbidden')) {
-                res.status(400).json({
-                    success: false,
-                    error: 'Sayfa içeriğine erişilemedi veya site bot tespit etti.'
+            try {
+                html = await fetchWithTimeout(targetUrl);
+            } catch (fetchErr: any) {
+                console.warn(`Ana sayfa çekilemedi (${fetchErr.message})`);
+                // Mobil site yedek
+                const altUrl = targetUrl
+                    .replace('www.hepsiburada.com', 'm.hepsiburada.com')
+                    .replace('www.n11.com', 'm.n11.com')
+                    .replace('urun.n11.com', 'm.n11.com');
+                if (altUrl !== targetUrl) {
+                    try {
+                        html = await fetchWithTimeout(altUrl, 15000, 0);
+                        console.log(`Mobil site HTML: ${html.length} bytes`);
+                    } catch { }
+                }
+            }
+
+            if (html.length < 500) {
+                // Engellenen mağazalar için Akakce fallback
+                if (isBlockedStore) {
+                    console.log('HTML çekilemedi, Akakce fallback deneniyor...');
+                    const akResult = await searchPriceViaDDG(targetUrl);
+                    if (akResult.newPrice > 0) {
+                        res.status(200).json({
+                            success: true,
+                            product: {
+                                title: cleanTitle(akResult.title),
+                                brand: akResult.brand,
+                                newPrice: akResult.newPrice,
+                                oldPrice: Math.round(akResult.newPrice * 1.25),
+                                imageUrl: akResult.imageUrl,
+                                resolvedUrl: targetUrl,
+                                aiPriceFallback: true,
+                            }
+                        });
+                        return;
+                    }
+                }
+                console.warn(`HTML çok kısa (${html.length} byte), priceNotFound`);
+                res.status(200).json({
+                    success: true,
+                    product: { title: '', brand: '', newPrice: 0, oldPrice: 0, imageUrl: '', resolvedUrl: targetUrl, priceNotFound: true }
                 });
                 return;
             }
@@ -557,161 +879,157 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
             // Trendyol
             if (targetUrl.includes('trendyol')) {
-                // Title
-                title = $('h1.pr-new-br span').text().trim() ||
-                    $('h1.product-name').text().trim() ||
-                    $('h1').first().text().trim() ||
-                    $('meta[property="og:title"]').attr('content') || '';
-
-                // Prices - from JSON-LD script
-                const scriptTags = $('script[type="application/ld+json"]').toArray();
-                for (const script of scriptTags) {
+                // ── Öncelikli: __PRODUCT_DETAIL__DATALAYER GTM değişkeni ─────────
+                // Trendyol bu veriyi server-side render ediyor, cloud IP'lerden erişilebilir
+                const dataLayerMatch = html.match(/__PRODUCT_DETAIL__DATALAYER[^,]*,\s*(\{[^)]+\})\)/);
+                if (dataLayerMatch) {
                     try {
-                        const json = JSON.parse($(script).html() || '{}');
-                        if (json['@type'] === 'Product' && json.offers) {
-                            const offers = Array.isArray(json.offers) ? json.offers[0] : json.offers;
-                            newPrice = parseFloat(offers.price) || 0;
-                            if (offers.priceSpecification?.price) {
-                                oldPrice = parseFloat(offers.priceSpecification.price) || 0;
+                        const dlData = JSON.parse(dataLayerMatch[1]);
+                        newPrice = parseFloat(dlData.product_discounted_price) || parseFloat(dlData.product_price) || 0;
+                        oldPrice = parseFloat(dlData.product_original_price) || parseFloat(dlData.product_price) || 0;
+                        title = dlData.product_pname || '';
+                        brand = dlData.product_brand || dlData.product_merchant || '';
+                        console.log(`Trendyol dataLayer: price=${newPrice}, old=${oldPrice}, title=${title}`);
+                    } catch (e) { console.warn('dataLayer parse hatası:', e); }
+                }
+
+                // ── Fallback: JSON-LD ──────────────────────────────────────────
+                if (!newPrice) {
+                    const scriptTags = $('script[type="application/ld+json"]').toArray();
+                    for (const script of scriptTags) {
+                        try {
+                            const json = JSON.parse($(script).html() || '{}');
+                            if (json['@type'] === 'Product' && json.offers) {
+                                const offers = Array.isArray(json.offers) ? json.offers[0] : json.offers;
+                                newPrice = parseFloat(offers.price) || 0;
+                                if (offers.priceSpecification?.price) oldPrice = parseFloat(offers.priceSpecification.price) || 0;
                             }
-                        }
-                    } catch (e) { }
+                        } catch (e) { }
+                    }
                 }
 
-                // Fallback prices from HTML
+                // ── Fallback: regex ────────────────────────────────────────────
                 if (!newPrice) {
-                    const priceMatch = html.match(/"price":\s*([\d.]+)/);
-                    if (priceMatch) newPrice = parseFloat(priceMatch[1]);
+                    const m = html.match(/"product_discounted_price":([\d.]+)/);
+                    if (m) newPrice = parseFloat(m[1]);
+                }
+                if (!newPrice) {
+                    const m = html.match(/"price":([\d.]+)/);
+                    if (m) newPrice = parseFloat(m[1]);
                 }
                 if (!oldPrice) {
-                    const origMatch = html.match(/"originalPrice":\s*([\d.]+)/);
-                    if (origMatch) oldPrice = parseFloat(origMatch[1]);
+                    const m = html.match(/"product_original_price":([\d.]+)/);
+                    if (m) oldPrice = parseFloat(m[1]);
                 }
 
-                // Fallback: text content
-                if (!newPrice) {
-                    const priceEl = $('.prc-dsc, .product-price-container .discounted-price').first();
-                    const priceText = priceEl.text().replace(/[^\d,]/g, '').replace(',', '.');
-                    newPrice = parseFloat(priceText) || 0;
+                // ── Title / Image / Brand fallback ─────────────────────────────
+                if (!title) {
+                    title = $('meta[property="og:title"]').attr('content') ||
+                        $('h1').first().text().trim() || '';
                 }
-                if (!oldPrice) {
-                    const oldEl = $('.prc-org, .product-price-container .original-price').first();
-                    const oldText = oldEl.text().replace(/[^\d,]/g, '').replace(',', '.');
-                    oldPrice = parseFloat(oldText) || 0;
-                }
-
-                // Image
                 imageUrl = $('meta[property="og:image"]').attr('content') ||
-                    $('img.detail-section-img').attr('src') ||
                     $('img[src*="cdn.dsmcdn"]').first().attr('src') || '';
 
-                // Brand
-                brand = $('h1.pr-new-br a').first().text().trim() ||
-                    $('.pr-new-br a').first().text().trim() || '';
+                if (!brand) {
+                    brand = $('h1.pr-new-br a').first().text().trim() || '';
+                }
             }
 
-            // Hepsiburada - Gelişmiş scraping (Browser analizi sonucunda güncellendi)
+            // Hepsiburada - API + HTML scraping (ana site 403 olabilir)
             else if (targetUrl.includes('hepsiburada')) {
-                // Title
-                title = $('h1#product-name').text().trim() ||
-                    $('h1[data-test-id="product-name"]').text().trim() ||
-                    $('span[data-test-id="product-name"]').text().trim() ||
-                    $('h1.product-name').text().trim() ||
-                    $('meta[property="og:title"]').attr('content') || '';
-
-                // JSON-LD Schema.org - @graph dizisi içinden Product bul (EN GÜVENİLİR)
-                const scriptTags = $('script[type="application/ld+json"]').toArray();
-                for (const script of scriptTags) {
+                // Strategy 1: Ürün API (main site 403 olsa da product.hepsiburada.com açık olabilir)
+                const hbSkuMatch = targetUrl.match(/pm-(HB[A-Z0-9]+)/i);
+                if (hbSkuMatch) {
+                    const sku = hbSkuMatch[1];
                     try {
-                        const json = JSON.parse($(script).html() || '{}');
-
-                        // @graph dizisi varsa içinden Product bul
-                        const graph = json['@graph'] || [json];
-                        for (const item of graph) {
-                            if (item['@type'] === 'Product') {
-                                // Görsel
-                                if (item.image && !imageUrl) {
-                                    imageUrl = Array.isArray(item.image) ? item.image[0] : item.image;
-                                }
-                                // Fiyat
-                                if (item.offers && !newPrice) {
-                                    const offers = Array.isArray(item.offers) ? item.offers[0] : item.offers;
-                                    if (offers.price) newPrice = parseFloat(offers.price) || 0;
-                                    if (offers.highPrice) oldPrice = parseFloat(offers.highPrice) || 0;
-                                }
-                                // Marka
-                                if (item.brand && !brand) {
-                                    brand = item.brand.name || item.brand || '';
-                                }
+                        const apiRes = await fetch(
+                            `https://product.hepsiburada.com/api/product-summary?listing=${sku}`,
+                            {
+                                headers: {
+                                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                                    'Accept': 'application/json, text/plain, */*',
+                                    'Accept-Language': 'tr-TR,tr;q=0.9',
+                                    'Referer': 'https://www.hepsiburada.com/',
+                                    'Origin': 'https://www.hepsiburada.com',
+                                },
+                                signal: AbortSignal.timeout(10000),
                             }
+                        );
+                        if (apiRes.ok) {
+                            const apiData = await apiRes.json();
+                            title = apiData.name || apiData.displayName || apiData.title || '';
+                            newPrice = parsePriceText(apiData.finalPrice ?? apiData.price ?? apiData.salePrice);
+                            oldPrice = parsePriceText(apiData.originalPrice ?? apiData.priceBeforeDiscount ?? apiData.listPrice);
+                            const imgArr = apiData.images || apiData.imageList;
+                            imageUrl = (Array.isArray(imgArr) ? imgArr[0] : imgArr) || apiData.image || '';
+                            brand = apiData.brand?.name || (typeof apiData.brand === 'string' ? apiData.brand : '') || '';
+                            console.log(`HB API başarılı: price=${newPrice}, sku=${sku}`);
+                        } else {
+                            console.warn(`HB API ${apiRes.status}: ${sku}`);
                         }
-
-                        // Eski format kontrolü (düz @type: Product)
-                        if (json['@type'] === 'Product' && json.offers && !newPrice) {
-                            const offers = Array.isArray(json.offers) ? json.offers[0] : json.offers;
-                            if (offers.price) newPrice = parseFloat(offers.price) || 0;
-                            if (offers.highPrice) oldPrice = parseFloat(offers.highPrice) || 0;
-                            if (json.image && !imageUrl) {
-                                imageUrl = Array.isArray(json.image) ? json.image[0] : json.image;
-                            }
-                        }
-                    } catch (e) { }
-                }
-
-                // Fallback - Regex patterns for price
-                if (!newPrice) {
-                    const patterns = [
-                        /"price":\s*([\d.]+)/,
-                        /"discountedPrice":\s*([\d.]+)/,
-                        /data-price="([\d.]+)"/,
-                        /"currentPrice":\s*([\d.]+)/
-                    ];
-                    for (const pattern of patterns) {
-                        const match = html.match(pattern);
-                        if (match) {
-                            newPrice = parseFloat(match[1]);
-                            break;
-                        }
-                    }
-                }
-                if (!oldPrice) {
-                    const patterns = [
-                        /"originalPrice":\s*([\d.]+)/,
-                        /"listPrice":\s*([\d.]+)/,
-                        /data-original-price="([\d.]+)"/
-                    ];
-                    for (const pattern of patterns) {
-                        const match = html.match(pattern);
-                        if (match) {
-                            oldPrice = parseFloat(match[1]);
-                            break;
-                        }
+                    } catch (e) {
+                        console.warn('HB API hatası:', e);
                     }
                 }
 
-                // Price from visible elements
+                // Strategy 2: HTML scraping (HTML başarıyla çekilebildiyse)
                 if (!newPrice) {
-                    const priceEl = $('[data-test-id="price-current-price"]').first();
-                    const priceText = priceEl.text().replace(/[^\d,]/g, '').replace(',', '.');
-                    newPrice = parseFloat(priceText) || 0;
+                    // Title
+                    if (!title) {
+                        title = $('h1#product-name').text().trim() ||
+                            $('h1[data-test-id="product-name"]').text().trim() ||
+                            $('span[data-test-id="product-name"]').text().trim() ||
+                            $('h1.product-name').text().trim() ||
+                            $('meta[property="og:title"]').attr('content') || '';
+                    }
+
+                    // JSON-LD Schema.org - @graph dizisi içinden Product bul (EN GÜVENİLİR)
+                    const scriptTags = $('script[type="application/ld+json"]').toArray();
+                    for (const script of scriptTags) {
+                        try {
+                            const json = JSON.parse($(script).html() || '{}');
+                            const graph = json['@graph'] || [json];
+                            for (const item of graph) {
+                                if (item['@type'] === 'Product') {
+                                    if (item.image && !imageUrl) imageUrl = Array.isArray(item.image) ? item.image[0] : item.image;
+                                    if (item.offers && !newPrice) {
+                                        const offers = Array.isArray(item.offers) ? item.offers[0] : item.offers;
+                                        if (offers.price) newPrice = parsePriceText(offers.price);
+                                        if (offers.highPrice) oldPrice = parsePriceText(offers.highPrice);
+                                    }
+                                    if (item.brand && !brand) brand = item.brand.name || item.brand || '';
+                                }
+                            }
+                        } catch (e) { }
+                    }
+
+                    // Regex fallback
+                    if (!newPrice) {
+                        const patterns = [/"discountedPrice":\s*([\d.]+)/, /"price":\s*([\d.]+)/, /data-price="([\d.]+)"/, /"currentPrice":\s*([\d.]+)/];
+                        for (const p of patterns) { const m = html.match(p); if (m) { newPrice = parseFloat(m[1]); break; } }
+                    }
+                    if (!oldPrice) {
+                        const patterns = [/"originalPrice":\s*([\d.]+)/, /"listPrice":\s*([\d.]+)/, /data-original-price="([\d.]+)"/];
+                        for (const p of patterns) { const m = html.match(p); if (m) { oldPrice = parseFloat(m[1]); break; } }
+                    }
+                    if (!newPrice) {
+                        const priceEl = $('[data-test-id="price-current-price"]').first();
+                        newPrice = parsePriceText(priceEl.text());
+                    }
                 }
 
-                // Image fallback - .hb-HbImage-view__image (browser analizinden)
+                // Image fallback
                 if (!imageUrl) {
-                    imageUrl = $('.hb-HbImage-view__image').first().attr('src') ||
-                        $('picture img').first().attr('src') ||
-                        $('meta[property="og:image"]').attr('content') ||
-                        $('img[data-test-id="product-image"]').attr('src') ||
-                        $('img.product-image').first().attr('src') ||
-                        $('img[src*="productimages.hepsiburada.net"]').first().attr('src') || '';
+                    imageUrl = $('meta[property="og:image"]').attr('content') ||
+                        $('img[src*="productimages.hepsiburada.net"]').first().attr('src') ||
+                        $('.hb-HbImage-view__image').first().attr('src') ||
+                        $('img[data-test-id="product-image"]').attr('src') || '';
                 }
-
-                // Brand fallback
                 if (!brand) {
                     brand = $('a[data-test-id="brand-link"]').text().trim() ||
-                        $('span[data-test-id="brand"]').text().trim() ||
-                        $('a.brand').text().trim() || '';
+                        $('span[data-test-id="brand"]').text().trim() || '';
                 }
+                if (!title) title = $('meta[property="og:title"]').attr('content') || '';
             }
 
             // Amazon TR - Gelişmiş scraping (Browser analizi sonucunda güncellendi)
@@ -825,15 +1143,134 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     $('a#bylineInfo').text().trim() || '';
             }
 
-            // N11
-            else if (targetUrl.includes('n11')) {
-                title = $('h1.proName').text().trim() ||
+            // N11 - Gelişmiş scraping (www.n11.com veya m.n11.com veya urun.n11.com)
+            else if (targetUrl.includes('n11.com')) {
+                title = $('h1.proName, h1.product-title, h1[itemprop="name"]').first().text().trim() ||
                     $('meta[property="og:title"]').attr('content') || '';
 
-                const priceMatch = html.match(/"price":\s*"?([\d.]+)"?/);
-                if (priceMatch) newPrice = parseFloat(priceMatch[1]);
+                // JSON-LD (en güvenilir)
+                const n11Scripts = $('script[type="application/ld+json"]').toArray();
+                for (const script of n11Scripts) {
+                    try {
+                        const json = JSON.parse($(script).html() || '{}');
+                        const items = json['@graph'] ? json['@graph'] : [json];
+                        for (const item of items) {
+                            if (item['@type'] === 'Product') {
+                                if (!title && item.name) title = item.name;
+                                if (!imageUrl && item.image) imageUrl = Array.isArray(item.image) ? item.image[0] : item.image;
+                                if (!brand && item.brand) brand = item.brand.name || item.brand || '';
+                                if (item.offers && !newPrice) {
+                                    const offers = Array.isArray(item.offers) ? item.offers[0] : item.offers;
+                                    newPrice = parsePriceText(offers.price);
+                                    oldPrice = parsePriceText(offers.highPrice || offers.priceSpecification?.price);
+                                }
+                            }
+                        }
+                    } catch { }
+                }
 
-                imageUrl = $('meta[property="og:image"]').attr('content') || '';
+                // window.dataLayer / pageDataLayer regex
+                if (!newPrice) {
+                    const m = html.match(/"discountedPrice"[:\s]+"?([\d.,]+)"?/) ||
+                        html.match(/"salePrice"[:\s]+"?([\d.,]+)"?/) ||
+                        html.match(/"finalPrice"[:\s]+"?([\d.,]+)"?/) ||
+                        html.match(/"price"[:\s]+"?([\d.,]+)"?/);
+                    if (m) newPrice = parsePriceText(m[1]);
+                }
+                if (!oldPrice) {
+                    const m = html.match(/"originalPrice"[:\s]+"?([\d.,]+)"?/) ||
+                        html.match(/"listPrice"[:\s]+"?([\d.,]+)"?/);
+                    if (m) oldPrice = parsePriceText(m[1]);
+                }
+
+                // CSS selectors fallback
+                if (!newPrice) {
+                    const priceEl = $('.price-display, .js-price-value, #priceNew, .priceCurrent, .price.newPrice, .priceValue').first();
+                    newPrice = parsePriceText(priceEl.text().trim());
+                }
+                if (!oldPrice) {
+                    const oldEl = $('.oldPrice, .price-old, .price.oldPrice').first();
+                    oldPrice = parsePriceText(oldEl.text().trim());
+                }
+
+                if (!imageUrl) imageUrl = $('meta[property="og:image"]').attr('content') || '';
+            }
+
+            // Pazarama - Nuxt.js tabanlı (window.__NUXT__ + JSON-LD)
+            else if (targetUrl.includes('pazarama')) {
+                // Title: h1 önce dene, og:title'dan site adını temizle
+                title = $('h1.product-title, h1.name, h1[class*="product"], h1[class*="title"]').first().text().trim() ||
+                    $('h1').first().text().trim() || '';
+                if (!title) {
+                    const ogTitle = $('meta[property="og:title"]').attr('content') || '';
+                    // "Ürün Adı | Pazarama" → "Ürün Adı"
+                    title = ogTitle.replace(/\s*[\|–-]\s*pazarama.*$/i, '').trim() || ogTitle;
+                }
+
+                // JSON-LD (Pazarama Product schema içeriyor)
+                const pzScripts = $('script[type="application/ld+json"]').toArray();
+                for (const script of pzScripts) {
+                    try {
+                        const json = JSON.parse($(script).html() || '{}');
+                        const items = json['@graph'] ? json['@graph'] : [json];
+                        for (const item of items) {
+                            if (item['@type'] === 'Product') {
+                                if (!title && item.name) title = item.name;
+                                if (!imageUrl && item.image) imageUrl = Array.isArray(item.image) ? item.image[0] : item.image;
+                                if (!brand && item.brand) brand = item.brand.name || item.brand || '';
+                                if (item.offers && !newPrice) {
+                                    const offers = Array.isArray(item.offers) ? item.offers[0] : item.offers;
+                                    newPrice = parsePriceText(offers.price);
+                                    oldPrice = parsePriceText(offers.highPrice);
+                                }
+                            }
+                        }
+                    } catch { }
+                }
+
+                // window.__NUXT__ parse (JSON-LD yoksa veya eksikse)
+                if (!newPrice) {
+                    const nuxtMatch = html.match(/window\.__NUXT__\s*=\s*(\{[\s\S]+?\})\s*<\/script>/);
+                    if (nuxtMatch) {
+                        try {
+                            const nuxt = JSON.parse(nuxtMatch[1]);
+                            const findPriceInObj = (obj: any, depth = 0): number => {
+                                if (depth > 8 || !obj || typeof obj !== 'object') return 0;
+                                for (const key of ['salePrice', 'price', 'listPrice', 'discountedPrice', 'currentPrice', 'sellPrice', 'finalPrice']) {
+                                    if (obj[key] != null && !isNaN(parseFloat(obj[key]))) return parsePriceText(obj[key]);
+                                }
+                                for (const val of Object.values(obj)) {
+                                    const found = findPriceInObj(val, depth + 1);
+                                    if (found > 0) return found;
+                                }
+                                return 0;
+                            };
+                            newPrice = findPriceInObj(nuxt);
+                        } catch (e) { console.warn('Pazarama __NUXT__ parse hatası:', e); }
+                    }
+                }
+
+                // Regex fallback
+                if (!newPrice) {
+                    const m = html.match(/"salePrice"[:\s]+"?([\d.,]+)"?/) ||
+                        html.match(/"price"[:\s]+"?([\d.,]+)"?/);
+                    if (m) newPrice = parsePriceText(m[1]);
+                }
+                if (!oldPrice) {
+                    const m = html.match(/"listPrice"[:\s]+"?([\d.,]+)"?/) ||
+                        html.match(/"originalPrice"[:\s]+"?([\d.,]+)"?/);
+                    if (m) oldPrice = parsePriceText(m[1]);
+                }
+
+                // CSS selectors
+                if (!newPrice) {
+                    const priceEl = $('.price-new, .product-price, .sale-price, .current-price, [class*="price"]').first();
+                    newPrice = parsePriceText(priceEl.text().trim());
+                }
+                if (!imageUrl) {
+                    imageUrl = $('meta[property="og:image"]').attr('content') ||
+                        $('img.product-image, img[src*="pazarama"], img[src*="cdn"]').first().attr('src') || '';
+                }
             }
 
             // Generic fallback
@@ -843,6 +1280,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             }
             if (!imageUrl) {
                 imageUrl = $('meta[property="og:image"]').attr('content') || '';
+            }
+
+            // Fiyat bulunamadıysa: önce Akakce (HB/N11/Amazon için), sonra OpenRouter
+            let aiPriceFallback = false;
+            if (!newPrice) {
+                // Engellenen mağazalar → Akakce üzerinden fiyat ara
+                if (isBlockedStore) {
+                    console.log('HTML alındı ama fiyat yok, Akakce fallback deneniyor...');
+                    const akResult = await searchPriceViaDDG(targetUrl);
+                    if (akResult.newPrice > 0) {
+                        newPrice = akResult.newPrice;
+                        if (!title) title = akResult.title;
+                        if (!imageUrl) imageUrl = akResult.imageUrl;
+                        if (!brand) brand = akResult.brand;
+                        aiPriceFallback = true;
+                        console.log(`Akakce fallback başarılı: price=${newPrice}`);
+                    }
+                }
+
+                // Hâlâ fiyat yoksa OpenRouter ile HTML'den çıkar
+                if (!newPrice) {
+                    console.log('Fiyat bulunamadı, OpenRouter fallback deneniyor...');
+                    const aiPrices = await openrouterPriceFallback(html);
+                    if (aiPrices.newPrice > 0) {
+                        newPrice = aiPrices.newPrice;
+                        if (!oldPrice && aiPrices.oldPrice > 0) oldPrice = aiPrices.oldPrice;
+                        aiPriceFallback = true;
+                        console.log(`OpenRouter fallback başarılı: newPrice=${newPrice}`);
+                    }
+                }
             }
 
             // If no old price, use 30% markup
@@ -855,17 +1322,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 brand = extractBrand(title);
             }
 
-            console.log(`Analyzed: title="${title.substring(0, 50)}...", price=${newPrice}, oldPrice=${oldPrice}`);
+            console.log(`Analyzed: title="${title.substring(0, 50)}...", price=${newPrice}, oldPrice=${oldPrice}, aiPriceFallback=${aiPriceFallback}`);
 
             res.status(200).json({
                 success: true,
-                data: {
+                product: {
                     title: cleanTitle(title),
                     brand,
                     newPrice,
                     oldPrice,
                     imageUrl,
-                    url: targetUrl
+                    resolvedUrl: targetUrl,
+                    aiPriceFallback,
                 }
             });
         } else if (action === 'proxy' && url) {
@@ -889,7 +1357,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         } else {
             res.status(400).json({
                 success: false,
-                error: 'Invalid action. Use ?action=list, ?action=detail&url=..., ?action=brochures&market=bim, ?action=analyze&url=..., or ?action=proxy&url=...',
+                error: 'Invalid action. Use ?action=list, ?action=detail&url=..., ?action=brochures&market=bim, ?action=product&url=..., or ?action=proxy&url=...',
             });
         }
     } catch (error: any) {
