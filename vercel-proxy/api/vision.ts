@@ -46,9 +46,10 @@ Lütfen şu bilgileri çıkar:
 6. category: En uygun kategori → Teknoloji / Giyim & Moda / Ev & Yaşam / Kozmetik & Bakım / Spor & Outdoor / Süpermarket / Anne & Bebek / Oyun & Oyuncak / Diğer
 7. discountPercent: İndirim yüzdesi
 8. confidence: Güven skoru 0-100
+9. productImageBox: Sayfadaki ANA ürün fotoğrafının bounding box koordinatları [y1,x1,y2,x2] (0-1000 normalize). Ürün fotoğrafı yoksa null.
 
 SADECE JSON yaz, başka hiçbir şey ekleme:
-{"title":"...","newPrice":0,"oldPrice":0,"storeName":"...","brand":"...","category":"...","discountPercent":0,"confidence":0}`;
+{"title":"...","newPrice":0,"oldPrice":0,"storeName":"...","brand":"...","category":"...","discountPercent":0,"confidence":0,"productImageBox":[y1,x1,y2,x2]}`;
 
     try {
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -121,6 +122,15 @@ SADECE JSON yaz, başka hiçbir şey ekleme:
             discountPercent = Math.round(((oldPrice - newPrice) / oldPrice) * 100);
         }
 
+        // productImageBox doğrula: [y1,x1,y2,x2] her biri 0-1000 arası
+        let productImageBox: [number,number,number,number] | null = null;
+        if (Array.isArray(parsed.productImageBox) && parsed.productImageBox.length === 4) {
+            const box = parsed.productImageBox.map(Number);
+            if (box.every(v => !isNaN(v) && v >= 0 && v <= 1000)) {
+                productImageBox = box as [number,number,number,number];
+            }
+        }
+
         res.status(200).json({
             success: true,
             product: {
@@ -132,6 +142,7 @@ SADECE JSON yaz, başka hiçbir şey ekleme:
                 category:        String(parsed.category || 'Diğer').trim(),
                 discountPercent,
                 confidence:      Math.min(100, Math.max(0, Number(parsed.confidence) || 50)),
+                productImageBox,
             }
         });
 
@@ -192,6 +203,14 @@ async function fallbackModel(
     const newPrice = parseFloat(String(parsed.newPrice).replace(',', '.')) || 0;
     const oldPrice = parseFloat(String(parsed.oldPrice).replace(',', '.')) || 0;
 
+    let productImageBox2: [number,number,number,number] | null = null;
+    if (Array.isArray(parsed.productImageBox) && parsed.productImageBox.length === 4) {
+        const box = parsed.productImageBox.map(Number);
+        if (box.every((v: number) => !isNaN(v) && v >= 0 && v <= 1000)) {
+            productImageBox2 = box as [number,number,number,number];
+        }
+    }
+
     res.status(200).json({
         success: true,
         product: {
@@ -202,6 +221,7 @@ async function fallbackModel(
             category: String(parsed.category || 'Diğer').trim(),
             discountPercent: Math.round(oldPrice > newPrice ? ((oldPrice - newPrice) / oldPrice) * 100 : 0),
             confidence: Number(parsed.confidence) || 50,
+            productImageBox: productImageBox2,
         }
     });
 }
