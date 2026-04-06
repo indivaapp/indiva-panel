@@ -4,6 +4,8 @@
 <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <!-- PWA Manifest — Share Target ve yüklenebilirlik için -->
+    <link rel="manifest" href="/manifest.json" />
     <!-- APK / Mobile Optimization Meta Tags -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#111827" />
@@ -28,10 +30,11 @@
     /* Scrollbar özelleştirmesi ve Safe Area tanımlamaları */
     body {
         -webkit-tap-highlight-color: transparent;
+        padding-top: env(safe-area-inset-top);
         padding-bottom: env(safe-area-inset-bottom);
         padding-left: env(safe-area-inset-left);
         padding-right: env(safe-area-inset-right);
-        background-color: #0f172a; /* slate-950 matches new App theme */
+        background-color: #111827;
     }
     
     /* Custom Scrollbar for WebKit (Chrome, Safari) */

@@ -1,11 +1,10 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
-import { initializePushNotifications } from './services/pushNotificationService';
+
 import type { ViewType } from './types';
 import type { ScrapedDeal } from './services/dealFinder';
 
-// Android native bridge için tip tanımı
 declare global {
     interface Window {
         AndroidShareHandler?: {
@@ -27,31 +26,44 @@ import EditDealPage from './components/EditDealPage';
 import AffiliateLinkManager from './components/AffiliateLinkManager';
 import AutoDiscoveryPanel from './components/AutoDiscoveryPanel';
 import Dashboard from './components/Dashboard';
+import ShareTarget from './components/ShareTarget';
 import { ensureAnonymousAuth, onAuthReady } from './services/auth';
 import { getPendingAffiliateCount } from './services/firebase';
-import Logo from './components/Logo';
+
+const SYSTEM_KEY = 'indiva_system_active';
 
 const App: React.FC = () => {
     const [activeView, setActiveView] = useState<ViewType>('dashboard');
     const [authReady, setAuthReady] = useState(false);
     const [authError, setAuthError] = useState<string | null>(null);
-    // Authentication is removed. Every user is considered an admin.
     const isAdmin = true;
 
-    // Sayfa geçişi için seçilen veriler
+    // Sistem toggle — tek kaynak, localStorage tabanlı
+    const [systemEnabled, setSystemEnabledState] = useState<boolean>(() => {
+        try { return localStorage.getItem(SYSTEM_KEY) !== 'false'; }
+        catch { return true; }
+    });
+
+    const handleToggleSystem = useCallback(() => {
+        const newVal = !systemEnabled;
+        try { localStorage.setItem(SYSTEM_KEY, newVal ? 'true' : 'false'); } catch {}
+        setSystemEnabledState(newVal);
+    }, [systemEnabled]);
+
     const [selectedDeal, setSelectedDeal] = useState<ScrapedDeal | null>(null);
-
-    // Bekleyen affiliate link sayısı
     const [pendingAffiliateCount, setPendingAffiliateCount] = useState(0);
-
-    // Sıralı düzenleme kuyruğu
     const [dealQueue, setDealQueue] = useState<ScrapedDeal[]>([]);
     const [currentQueueIndex, setCurrentQueueIndex] = useState(0);
-
-    // Paylaşılan link (diğer uygulamalardan)
     const [sharedLink, setSharedLink] = useState<string | null>(null);
 
-    // Kuyruğu başlat
+    // ── PWA Share Target overlay ───────────────────────────────────────────────
+    // ?share=1 parametresi Service Worker'dan yönlendirme sonucu gelir
+    const [showShareTarget, setShowShareTarget] = useState<boolean>(() => {
+        try {
+            return new URLSearchParams(window.location.search).get('share') === '1';
+        } catch { return false; }
+    });
+
     const startDealQueue = useCallback((deals: ScrapedDeal[]) => {
         if (deals.length === 0) return;
         setDealQueue(deals);
@@ -60,14 +72,12 @@ const App: React.FC = () => {
         setActiveView('editDeal');
     }, []);
 
-    // Sonraki deal'e geç
     const handleNextDeal = useCallback(() => {
         const nextIndex = currentQueueIndex + 1;
         if (nextIndex < dealQueue.length) {
             setCurrentQueueIndex(nextIndex);
             setSelectedDeal(dealQueue[nextIndex]);
         } else {
-            // Kuyruk bitti
             setDealQueue([]);
             setCurrentQueueIndex(0);
             setSelectedDeal(null);
@@ -75,7 +85,6 @@ const App: React.FC = () => {
         }
     }, [currentQueueIndex, dealQueue]);
 
-    // Kuyruğu iptal et
     const handleCancelQueue = useCallback(() => {
         setDealQueue([]);
         setCurrentQueueIndex(0);
@@ -85,140 +94,107 @@ const App: React.FC = () => {
 
     useEffect(() => {
         let authUnsubscribe: (() => void) | undefined;
-
         const initializeAuth = async () => {
             try {
                 await ensureAnonymousAuth();
-                authUnsubscribe = onAuthReady(() => {
-                    setAuthReady(true);
-                });
+                authUnsubscribe = onAuthReady(() => setAuthReady(true));
             } catch (err: any) {
-                setAuthError(err.message || 'Bilinmeyen bir kimlik doğrulama hatası oluştu.');
+                setAuthError(err.message || 'Kimlik doğrulama hatası');
             }
         };
-
         initializeAuth();
-
-        return () => {
-            if (authUnsubscribe) {
-                authUnsubscribe();
-            }
-        };
+        return () => { if (authUnsubscribe) authUnsubscribe(); };
     }, []);
 
-    // Push Bildirimlerini izole bir şekilde başlat (Ana uygulama akışını bozmaması için)
+    // ── Service Worker kaydı + Share Target mesaj dinleyicisi ─────────────────
     useEffect(() => {
-        if (authReady) {
-            const initPush = async () => {
-                try {
-                    // Cihaz hazır olana kadar kısa bir gecikme ekle
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                    await initializePushNotifications();
-                } catch (err) {
-                    console.error('Push bildirimleri başlatılamadı:', err);
+        // SW Kaydet
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker
+                .register('/sw.js', { scope: '/' })
+                .then(reg => console.log('[App] SW kayıt:', reg.scope))
+                .catch(err => console.warn('[App] SW kayıt hatası:', err));
+
+            // SW'dan gelen "SHARE_RECEIVED" mesajını dinle
+            const handleSwMessage = (event: MessageEvent) => {
+                if (event.data?.type === 'SHARE_RECEIVED') {
+                    setShowShareTarget(true);
                 }
             };
-            initPush();
+            navigator.serviceWorker.addEventListener('message', handleSwMessage);
+            return () => {
+                navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+            };
         }
-    }, [authReady]);
+    }, []);
 
-    // Share Intent Handler - Diğer uygulamalardan gelen linkleri yakala
+    // ── Share overlay kapandığında URL'den ?share=1 parametresini temizle ─────
+    const handleShareTargetClose = useCallback(() => {
+        setShowShareTarget(false);
+        // URL'yi temizle (history.replaceState ile sayfa yenilenmeden)
+        try {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('share');
+            window.history.replaceState({}, '', url.toString());
+        } catch {}
+    }, []);
+
     useEffect(() => {
-        const handleAppUrlOpen = async () => {
-            try {
-                // Uygulama açıldığında intent kontrolü
-                const launchUrl = await CapacitorApp.getLaunchUrl();
-                if (launchUrl?.url) {
-                    processSharedUrl(launchUrl.url);
-                }
-            } catch (err) {
-                console.log('Launch URL bulunamadı');
-            }
-        };
-
-        // URL'den link çıkar
         const processSharedUrl = (url: string) => {
-            // Intent format: indiva://share?url=ENCODED_URL veya direkt URL
             if (url.includes('://')) {
                 const urlMatch = url.match(/https?:\/\/[^\s]+/);
-                if (urlMatch) {
-                    setSharedLink(urlMatch[0]);
-                    setActiveView('affiliateLinks');
-                }
+                if (urlMatch) { setSharedLink(urlMatch[0]); setActiveView('affiliateLinks'); }
             }
         };
-
-        // Listener for app URL open
+        const handleAppUrlOpen = async () => {
+            try {
+                const launchUrl = await CapacitorApp.getLaunchUrl();
+                if (launchUrl?.url) processSharedUrl(launchUrl.url);
+            } catch {}
+        };
         const urlListener = CapacitorApp.addListener('appUrlOpen', (event) => {
-            if (event.url) {
-                processSharedUrl(event.url);
-            }
+            if (event.url) processSharedUrl(event.url);
         });
-
-        // Check for shared text from Android intent
         const checkAndroidIntent = async () => {
             try {
-                // @ts-ignore - Android specific
                 if (window.AndroidShareHandler?.getSharedText) {
                     const sharedText = await window.AndroidShareHandler.getSharedText();
                     if (sharedText) {
                         const urlMatch = sharedText.match(/https?:\/\/[^\s]+/);
-                        if (urlMatch) {
-                            setSharedLink(urlMatch[0]);
-                            setActiveView('affiliateLinks');
-                        }
+                        if (urlMatch) { setSharedLink(urlMatch[0]); setActiveView('affiliateLinks'); }
                     }
                 }
-            } catch (err) {
-                console.log('Android intent kontrol edilemedi');
-            }
+            } catch {}
         };
-
         handleAppUrlOpen();
         checkAndroidIntent();
-
-        // Listen for shared URLs from Android native code
         const handleSharedUrl = (event: CustomEvent<string>) => {
-            if (event.detail) {
-                setSharedLink(event.detail);
-                setActiveView('affiliateLinks');
-            }
+            if (event.detail) { setSharedLink(event.detail); setActiveView('affiliateLinks'); }
         };
-
         window.addEventListener('sharedUrl', handleSharedUrl as EventListener);
-
         return () => {
             urlListener.then(listener => listener.remove());
             window.removeEventListener('sharedUrl', handleSharedUrl as EventListener);
         };
     }, []);
 
-    // Bekleyen affiliate link sayısını yükle
     useEffect(() => {
+        if (!authReady) return;
         const loadPendingCount = async () => {
-            try {
-                const count = await getPendingAffiliateCount();
-                setPendingAffiliateCount(count);
-            } catch (err) {
-                console.warn('Affiliate sayısı yüklenemedi:', err);
-            }
+            try { setPendingAffiliateCount(await getPendingAffiliateCount()); } catch {}
         };
-
-        if (authReady) {
-            loadPendingCount();
-            // Her 30 saniyede bir güncelle
-            const interval = setInterval(loadPendingCount, 30000);
-            return () => clearInterval(interval);
-        }
+        loadPendingCount();
+        const interval = setInterval(loadPendingCount, 30000);
+        return () => clearInterval(interval);
     }, [authReady]);
 
     if (authError) {
         return (
-            <div className="flex items-center justify-center min-h-screen bg-red-900 text-white p-6 pt-[env(safe-area-inset-top)]">
-                <div className="text-center max-w-xl bg-red-800 p-8 rounded-lg shadow-lg border border-red-600">
-                    <h1 className="text-2xl font-bold mb-4">Kimlik Doğrulama Hatası</h1>
-                    <p className="text-left whitespace-pre-wrap opacity-80">{authError}</p>
-                    <button onClick={() => window.location.reload()} className="mt-6 px-6 py-2 bg-white text-red-900 font-bold rounded hover:bg-gray-100">
+            <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white p-6">
+                <div className="max-w-md w-full bg-gray-800 p-6 rounded-lg border border-red-700">
+                    <p className="text-red-400 font-semibold mb-2">Bağlantı Hatası</p>
+                    <p className="text-gray-300 text-sm mb-4">{authError}</p>
+                    <button onClick={() => window.location.reload()} className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-500">
                         Tekrar Dene
                     </button>
                 </div>
@@ -228,24 +204,16 @@ const App: React.FC = () => {
 
     if (!authReady) {
         return (
-            <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white">
-                <Logo className="h-20 md:h-28" showText={false} />
-                <h1 className="mt-6 text-3xl md:text-4xl font-bold tracking-wider text-white">
-                    İNDİVA
-                </h1>
-                <p className="mt-1 text-xs font-semibold tracking-[0.2em] text-blue-400 uppercase">
-                    Yönetim Paneli
-                </p>
-                <div className="mt-8 w-8 h-8 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin"></div>
+            <div className="flex items-center justify-center min-h-screen bg-gray-900">
+                <div className="w-6 h-6 border-2 border-gray-600 border-t-blue-500 rounded-full animate-spin" />
             </div>
         );
     }
 
-
     const renderContent = () => {
         switch (activeView) {
             case 'dashboard':
-                return <Dashboard setActiveView={setActiveView} setSelectedDeal={setSelectedDeal} isAdmin={isAdmin} />;
+                return <Dashboard setActiveView={setActiveView} isAdmin={isAdmin} />;
             case 'discounts':
                 return <DiscountManager setActiveView={setActiveView} isAdmin={isAdmin} />;
             case 'manageDiscounts':
@@ -280,31 +248,59 @@ const App: React.FC = () => {
         }
     };
 
+    const viewLabels: Record<string, string> = {
+        dashboard: 'Ana Sayfa', dealFinder: 'Fırsat Bul', discounts: 'Ekle',
+        manageDiscounts: 'Yönet', brochures: 'Aktüel', submissions: 'Onay',
+        ads: 'Reklam', notifications: 'Bildirim', editDeal: 'Düzenle',
+        affiliateLinks: 'Affiliate', autoDiscovery: 'Keşif',
+    };
+
     return (
-        <div className="flex flex-col min-h-screen bg-gray-900 text-gray-100">
-            <div className="flex flex-1">
-                <Sidebar activeView={activeView} setActiveView={setActiveView} pendingAffiliateCount={pendingAffiliateCount} />
-                {/* Status bar için safe-area-inset-top eklendi */}
-                <main className="flex-1 p-6 md:p-10 pb-24 md:pb-10 pt-[calc(1.5rem+env(safe-area-inset-top))] md:pt-10 overflow-x-hidden">
-                    {/* Mobile Header - Logo solda, sayfa başlığı sağda */}
-                    <div className="md:hidden flex justify-between items-center mb-4 border-b border-gray-800 pb-3">
-                        <Logo className="h-7" showText={true} />
-                        <span className="text-white font-semibold text-lg">
-                            {activeView === 'dashboard' && '🏠 Ana Sayfa'}
-                            {activeView === 'dealFinder' && '🔍 Fırsat Bul'}
-                            {activeView === 'discounts' && '➕ Ekle'}
-                            {activeView === 'manageDiscounts' && '📋 Yönet'}
-                            {activeView === 'brochures' && '📰 Aktüel'}
-                            {activeView === 'submissions' && '✅ Onay'}
-                            {activeView === 'ads' && '📢 Reklam'}
-                            {activeView === 'notifications' && '🔔 Bildirim'}
-                            {activeView === 'editDeal' && '✏️ Düzenle'}
-                            {activeView === 'affiliateLinks' && '💰 Affiliate'}
-                            {activeView === 'autoDiscovery' && '🤖 Keşif'}
-                        </span>
+        <div className="flex flex-col bg-gray-900 text-gray-100 overflow-hidden" style={{ height: '100dvh' }}>
+
+            {/* ── PWA Share Target Overlay ─────────────────────────────────────
+                Kullanıcı bir ekran görüntüsünü paylaştığında otomatik açılır,
+                işlemi tamamlayınca kapanır. Tüm UI'ın üzerinde görünür.      */}
+            {showShareTarget && authReady && (
+                <ShareTarget onClose={handleShareTargetClose} />
+            )}
+
+            <div className="flex flex-1 overflow-hidden">
+                <Sidebar
+                    activeView={activeView}
+                    setActiveView={setActiveView}
+                    pendingAffiliateCount={pendingAffiliateCount}
+                    systemEnabled={systemEnabled}
+                    onToggleSystem={handleToggleSystem}
+                />
+
+                <div className="flex-1 flex flex-col overflow-hidden">
+                    {/* Mobil Header — sabit kalır, scroll olmaz */}
+                    <div className="md:hidden flex justify-between items-center px-4 py-3 border-b border-gray-800 shrink-0">
+                        <span className="text-white font-semibold">{viewLabels[activeView] ?? activeView}</span>
+                        <button
+                            onClick={handleToggleSystem}
+                            title={systemEnabled ? 'Sistemi Kapat' : 'Sistemi Aç'}
+                            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full focus:outline-none ${systemEnabled ? 'bg-green-500' : 'bg-gray-600'}`}
+                        >
+                            <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform duration-150 ${systemEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                        </button>
                     </div>
-                    {renderContent()}
-                </main>
+
+                    {/* Sistem Kapalı Uyarısı */}
+                    {!systemEnabled && (
+                        <div className="mx-4 mt-3 flex items-center justify-between gap-2 rounded-md bg-red-950 border border-red-800 px-3 py-2 text-sm text-red-300 shrink-0">
+                            <span>Sistem kapalı — API çağrıları durduruldu</span>
+                            <button onClick={handleToggleSystem} className="shrink-0 text-xs font-semibold text-red-200 underline">Aç</button>
+                        </div>
+                    )}
+
+                    {/* Kaydırılabilir içerik alanı */}
+                    <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 md:pb-8">
+                        {renderContent()}
+                    </main>
+                </div>
+
                 <BottomNav activeView={activeView} setActiveView={setActiveView} pendingAffiliateCount={pendingAffiliateCount} />
             </div>
         </div>
