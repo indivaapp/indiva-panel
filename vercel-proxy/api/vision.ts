@@ -59,7 +59,7 @@ SADECE JSON yaz, başka hiçbir şey ekleme:
                 'X-Title': 'INDIVA Panel Vision',
             },
             body: JSON.stringify({
-                model: 'google/gemini-2.5-flash-preview',
+                model: 'google/gemini-2.5-flash',
                 messages: [{
                     role: 'user',
                     content: [
