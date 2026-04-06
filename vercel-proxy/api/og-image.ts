@@ -23,19 +23,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     try {
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml',
-                'Accept-Language': 'tr-TR,tr;q=0.9',
-            },
-            redirect: 'follow',
-            signal: AbortSignal.timeout(12000),
-        });
+        // Sırayla farklı User-Agent'lar dene (bazı siteler DC IP'yi bot UA ile geçirir)
+        const USER_AGENTS = [
+            'Googlebot/2.1 (+http://www.google.com/bot.html)',
+            'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+            'Twitterbot/1.0',
+            'Mozilla/5.0 (compatible; Baiduspider/2.0; +http://www.baidu.com/search/spider.html)',
+        ];
 
-        if (!response.ok) {
-            res.status(502).json({ success: false, error: `Sayfa alınamadı: HTTP ${response.status}` });
+        let response: Response | null = null;
+        let lastStatus = 0;
+
+        for (const ua of USER_AGENTS) {
+            try {
+                const r = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'User-Agent': ua,
+                        'Accept': 'text/html,application/xhtml+xml',
+                        'Accept-Language': 'tr-TR,tr;q=0.9',
+                    },
+                    redirect: 'follow',
+                    signal: AbortSignal.timeout(10000),
+                });
+                if (r.ok) { response = r; break; }
+                lastStatus = r.status;
+                // 410 = sayfa yok (gerçek hata), devam etme
+                if (r.status === 410 || r.status === 404) break;
+            } catch {}
+        }
+
+        if (!response) {
+            res.status(502).json({ success: false, error: `Sayfa alınamadı: HTTP ${lastStatus}` });
             return;
         }
 
