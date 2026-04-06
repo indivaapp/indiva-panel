@@ -59,7 +59,7 @@ SADECE JSON yaz, başka hiçbir şey ekleme:
                 'X-Title': 'INDIVA Panel Vision',
             },
             body: JSON.stringify({
-                model: 'google/gemini-2.0-flash-exp:free',
+                model: 'google/gemini-2.5-flash-preview',
                 messages: [{
                     role: 'user',
                     content: [
@@ -161,7 +161,7 @@ async function fallbackModel(
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-            model: 'google/gemini-flash-1.5',
+            model: 'google/gemini-2.0-flash-001',
             messages: [{
                 role: 'user',
                 content: [
