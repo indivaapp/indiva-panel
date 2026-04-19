@@ -201,7 +201,8 @@ const DealFinder: React.FC<DealFinderProps> = ({ isAdmin, setActiveView, setSele
             // ── 1. Vercel proxy'den yapılandırılmış ürün verisi çek ──────────
             setAnalysisStep('Ürün sayfası okunuyor...');
             let title = '', imageUrl = '', newPrice = 0, oldPrice = 0, brand = '';
-            let proxySuccess = false;
+            let proxyHasTitle = false;   // başlık + görsel geldi
+            let proxySuccess  = false;   // başlık + görsel + fiyat geldi
 
             try {
                 const proxyRes = await fetch(
@@ -217,7 +218,8 @@ const DealFinder: React.FC<DealFinderProps> = ({ isAdmin, setActiveView, setSele
                         newPrice = p.newPrice || 0;
                         oldPrice = p.oldPrice || 0;
                         brand = p.brand || storeName;
-                        proxySuccess = !!(title && newPrice > 0);
+                        proxyHasTitle = !!title;
+                        proxySuccess  = !!(title && newPrice > 0);
                     }
                 }
             } catch (e) {
@@ -250,47 +252,70 @@ const DealFinder: React.FC<DealFinderProps> = ({ isAdmin, setActiveView, setSele
             if (GEMINI_KEY) {
                 let prompt: string;
 
+                // Her durumda Jina'dan sayfa içeriği çek (fiyat için güvenilir kaynak)
+                let pageContent = '';
+                try {
+                    const jinaRes = await fetch(`https://r.jina.ai/${url}`, {
+                        headers: { Accept: 'text/plain' },
+                        signal: AbortSignal.timeout(20000)
+                    });
+                    if (jinaRes.ok) pageContent = (await jinaRes.text()).substring(0, 8000);
+                } catch {}
+
                 if (proxySuccess) {
-                    // Proxy başarılı → Gemini başlığı düzeltip içerik üretiyor
-                    prompt = `Ürün bilgileri:
+                    // Proxy başarılı → sadece başlık düzeltme + içerik
+                    prompt = `E-ticaret ürünü:
 - Ham başlık: "${title}"
-- Fiyat: ${newPrice} TL${oldPrice > 0 ? ` (eski: ${oldPrice} TL)` : ''}
+- Fiyat: ${newPrice} TL${oldPrice > 0 ? ` (eski fiyat: ${oldPrice} TL)` : ''}
 - Mağaza: ${storeName}
 
-Ham başlık URL slug'dan gelmiş olabilir (küçük harf, tekrar eden kelimeler). Düzelt.
-SADECE aşağıdaki JSON döndür (başka hiçbir şey yazma):
+SAYFA İÇERİĞİ (fiyat doğrulaması için):
+${pageContent.substring(0, 3000)}
+
+Ham başlık URL slug'dan gelmiş olabilir. Düzelt.
+SADECE JSON döndür:
 {
-  "title": "Düzgün ürün başlığı, Türkçe, Title Case, max 80 karakter, tekrar eden kelimeler temizlenmiş",
+  "title": "Düzgün ürün başlığı, Title Case, max 80 karakter",
   "cleanTitle": "Kısa başlık, max 50 karakter",
   "category": "Teknoloji/Giyim/Ev & Yaşam/Market/Kozmetik/Anne & Bebek/Spor/Kitap/Sağlık/Pet/Otomotiv/Diğer",
-  "description": "2-3 cümle etkileyici Türkçe, FOMO içerecek, şimdi neden almalısın",
+  "description": "2-3 cümle etkileyici Türkçe, FOMO içerecek",
+  "aiFomoScore": 1-10
+}`;
+                } else if (proxyHasTitle) {
+                    // Proxy başlık buldu ama fiyat bulamadı → Gemini sadece fiyat + içerik
+                    prompt = `E-ticaret ürünü:
+- Ürün adı: "${title}"
+- Mağaza: ${storeName}
+
+SAYFA İÇERİĞİ:
+${pageContent}
+
+Bu ürünün güncel fiyatını sayfadan çıkar.
+SADECE JSON döndür:
+{
+  "title": "Düzgün ürün başlığı, Title Case, max 80 karakter",
+  "cleanTitle": "Kısa başlık, max 50 karakter",
+  "newPrice": indirimli/güncel fiyat (TL, sadece rakam, KESİNLİKLE tahmin yapma — sayfada yoksa 0),
+  "oldPrice": orijinal fiyat (TL, yoksa 0),
+  "category": "Teknoloji/Giyim/Ev & Yaşam/Market/Kozmetik/Anne & Bebek/Spor/Kitap/Sağlık/Pet/Otomotiv/Diğer",
+  "description": "2-3 cümle etkileyici Türkçe, FOMO içerecek",
   "aiFomoScore": 1-10
 }`;
                 } else {
-                    // Proxy başarısız → Gemini sayfa içeriğinden her şeyi çıkarıyor
-                    let pageContent = `URL: ${url}\nMağaza: ${storeName}`;
-                    try {
-                        const jinaRes = await fetch(`https://r.jina.ai/${url}`, {
-                            headers: { Accept: 'text/plain' },
-                            signal: AbortSignal.timeout(20000)
-                        });
-                        if (jinaRes.ok) pageContent = (await jinaRes.text()).substring(0, 8000);
-                    } catch {}
-
+                    // Proxy tamamen başarısız → Gemini her şeyi çıkarıyor
                     prompt = `E-ticaret ürün sayfasını analiz et:
-
 URL: ${url}
 Mağaza: ${storeName}
 
 SAYFA İÇERİĞİ:
 ${pageContent}
 
-SADECE aşağıdaki JSON döndür (başka hiçbir şey yazma):
+SADECE JSON döndür:
 {
-  "title": "ürün başlığı (temiz, max 80 karakter)",
-  "cleanTitle": "kısa başlık (max 50 karakter)",
-  "newPrice": indirimli fiyat (sayı, TL cinsinden, sadece rakam),
-  "oldPrice": orijinal fiyat (sayı, TL, yoksa 0),
+  "title": "ürün başlığı, Title Case, max 80 karakter",
+  "cleanTitle": "kısa başlık, max 50 karakter",
+  "newPrice": indirimli/güncel fiyat (TL, sadece rakam, KESİNLİKLE tahmin yapma — sayfada yoksa 0),
+  "oldPrice": orijinal fiyat (TL, yoksa 0),
   "category": "Teknoloji/Giyim/Ev & Yaşam/Market/Kozmetik/Anne & Bebek/Spor/Kitap/Sağlık/Pet/Otomotiv/Diğer",
   "description": "2-3 cümle etkileyici Türkçe, FOMO içerecek",
   "aiFomoScore": 1-10
@@ -299,7 +324,7 @@ SADECE aşağıdaki JSON döndür (başka hiçbir şey yazma):
 
                 try {
                     const aiRes = await fetch(
-                        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + GEMINI_KEY,
+                        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + GEMINI_KEY,
                         {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -321,7 +346,7 @@ SADECE aşağıdaki JSON döndür (başka hiçbir şey yazma):
                             category = result.category || 'Diğer';
                             description = result.description || '';
                             aiFomoScore = result.aiFomoScore || 5;
-                            // Proxy başarısız olduysa AI'ın fiyat verilerini de al
+                            // Fiyat proxy'den gelmediyse Gemini'den al
                             if (!proxySuccess) {
                                 if (!title) title = result.title || 'Ürün';
                                 newPrice = parseFloat(String(result.newPrice || 0)) || 0;
@@ -356,7 +381,7 @@ SADECE aşağıdaki JSON döndür (başka hiçbir şey yazma):
                 link: url,
                 originalStoreLink: url,
                 storeName,
-                brand: brand || storeName,
+                brand: storeName,  // INDIVA'da mağaza adı olarak gösterilir
                 status: 'aktif',
                 source: 'link_analyzer',
                 createdAt: serverTimestamp(),

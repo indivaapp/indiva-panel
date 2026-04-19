@@ -68,7 +68,8 @@ const ShareUrlTarget: React.FC<Props> = ({ url, onClose }) => {
             // ── 1. Vercel proxy → yapılandırılmış veri ────────────────────────
             setStage('reading');
             let title = '', imageUrl = '', newPrice = 0, oldPrice = 0, brand = '';
-            let proxySuccess = false;
+            let proxyHasTitle = false;
+            let proxySuccess  = false;
 
             try {
                 const res = await fetch(
@@ -83,8 +84,9 @@ const ShareUrlTarget: React.FC<Props> = ({ url, onClose }) => {
                         imageUrl = p.imageUrl || '';
                         newPrice = p.newPrice || 0;
                         oldPrice = p.oldPrice || 0;
-                        brand    = p.brand    || storeName;
-                        proxySuccess = !!(title && newPrice > 0);
+                        brand        = p.brand || storeName;
+                        proxyHasTitle = !!title;
+                        proxySuccess  = !!(title && newPrice > 0);
                     }
                 }
             } catch (e) { console.warn('Proxy hatası:', e); }
@@ -111,12 +113,22 @@ const ShareUrlTarget: React.FC<Props> = ({ url, onClose }) => {
 
             if (GEMINI_KEY) {
                 let prompt: string;
+                // Her durumda Jina'dan sayfa içeriği çek
+                let pageContent = '';
+                try {
+                    const r = await fetch(`https://r.jina.ai/${url}`, {
+                        headers: { Accept: 'text/plain' },
+                        signal: AbortSignal.timeout(20000),
+                    });
+                    if (r.ok) pageContent = (await r.text()).substring(0, 8000);
+                } catch {}
+
                 if (proxySuccess) {
-                    prompt = `Ürün bilgileri:
+                    prompt = `E-ticaret ürünü:
 - Ham başlık: "${title}"
 - Fiyat: ${newPrice} TL${oldPrice > 0 ? ` (eski: ${oldPrice} TL)` : ''}
 - Mağaza: ${storeName}
-
+SAYFA İÇERİĞİ: ${pageContent.substring(0, 3000)}
 Ham başlık URL slug'dan gelmiş olabilir. Düzelt.
 SADECE JSON döndür:
 {
@@ -126,28 +138,33 @@ SADECE JSON döndür:
   "description": "2-3 cümle etkileyici Türkçe, FOMO içerecek",
   "aiFomoScore": 1-10
 }`;
+                } else if (proxyHasTitle) {
+                    prompt = `E-ticaret ürünü:
+- Ürün adı: "${title}"
+- Mağaza: ${storeName}
+SAYFA İÇERİĞİ: ${pageContent}
+Sayfadan güncel fiyatı çıkar.
+SADECE JSON döndür:
+{
+  "title": "Düzgün ürün başlığı, Title Case, max 80 karakter",
+  "cleanTitle": "Kısa başlık, max 50 karakter",
+  "newPrice": güncel fiyat (TL, sadece rakam, sayfada yoksa 0),
+  "oldPrice": orijinal fiyat (TL, yoksa 0),
+  "category": "Teknoloji/Giyim/Ev & Yaşam/Market/Kozmetik/Anne & Bebek/Spor/Kitap/Sağlık/Pet/Otomotiv/Diğer",
+  "description": "2-3 cümle etkileyici Türkçe, FOMO içerecek",
+  "aiFomoScore": 1-10
+}`;
                 } else {
-                    let pageContent = `URL: ${url}\nMağaza: ${storeName}`;
-                    try {
-                        const r = await fetch(`https://r.jina.ai/${url}`, {
-                            headers: { Accept: 'text/plain' },
-                            signal: AbortSignal.timeout(20000),
-                        });
-                        if (r.ok) pageContent = (await r.text()).substring(0, 8000);
-                    } catch {}
-
                     prompt = `E-ticaret ürün sayfasını analiz et:
 URL: ${url}
 Mağaza: ${storeName}
-SAYFA İÇERİĞİ:
-${pageContent}
-
+SAYFA İÇERİĞİ: ${pageContent}
 SADECE JSON döndür:
 {
   "title": "ürün başlığı, Title Case, max 80 karakter",
   "cleanTitle": "kısa başlık, max 50 karakter",
-  "newPrice": indirimli fiyat (sayı TL),
-  "oldPrice": orijinal fiyat (sayı TL, yoksa 0),
+  "newPrice": güncel fiyat (TL, sadece rakam, sayfada yoksa 0),
+  "oldPrice": orijinal fiyat (TL, yoksa 0),
   "category": "Teknoloji/Giyim/Ev & Yaşam/Market/Kozmetik/Anne & Bebek/Spor/Kitap/Sağlık/Pet/Otomotiv/Diğer",
   "description": "2-3 cümle etkileyici Türkçe, FOMO içerecek",
   "aiFomoScore": 1-10
@@ -156,7 +173,7 @@ SADECE JSON döndür:
 
                 try {
                     const r = await fetch(
-                        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + GEMINI_KEY,
+                        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + GEMINI_KEY,
                         {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -208,7 +225,7 @@ SADECE JSON döndür:
                 link:            url,
                 originalStoreLink: url,
                 storeName,
-                brand:           brand || storeName,
+                brand:           storeName,  // INDIVA'da mağaza adı olarak gösterilir
                 status:          'aktif',
                 source:          'share_target',
                 createdAt:       serverTimestamp(),
