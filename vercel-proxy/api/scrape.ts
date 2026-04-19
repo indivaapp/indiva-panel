@@ -737,7 +737,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { action, url, market } = req.query;
 
     try {
-        } else if (action === 'list' || !action) {
+        if (action === 'list' || !action) {
             // Fetch main deals list
             const html = await fetchWithTimeout('https://onual.com/fiyat/');
             const deals = parseOnualHtml(html);
