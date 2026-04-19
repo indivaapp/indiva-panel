@@ -5,6 +5,7 @@ import { uploadToImgbb } from '../services/imgbb';
 import type { Discount } from '../types';
 import DeleteImgButton from './DeleteImgButton';
 import AdRequestListModal from './AdRequestListModal';
+import { CATEGORIES } from '../constants/categories';
 
 interface AdManagerProps {
     isAdmin: boolean;
@@ -63,7 +64,6 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
             setAds(adsData);
         } catch (err) {
             setError('Reklamlar yüklenemedi.');
-            console.error(err);
         } finally {
             setIsLoading(false);
         }
@@ -76,8 +76,8 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
                 const reqs = await getAdRequests();
                 const pending = reqs.filter(r => r.status === 'pending');
                 setPendingRequestCount(pending.length);
-            } catch (e) {
-                console.error("Error checking requests", e);
+            } catch {
+                // pending request count yüklenemedi
             }
         };
         checkRequests();
@@ -105,8 +105,7 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
                 setUploadedImageUrl(downloadURL);
                 setUploadedImageDeleteUrl(deleteUrl);
             } catch (err) {
-                console.error(err);
-                setImageUploadError('Görsel yüklenemedi.');
+                    setImageUploadError('Görsel yüklenemedi.');
                 e.target.value = '';
             } finally {
                 setIsUploadingImage(false);
@@ -128,8 +127,7 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
                 setUploadedScreenshotUrl(downloadURL);
                 setUploadedScreenshotDeleteUrl(deleteUrl);
             } catch (err) {
-                console.error(err);
-                setScreenshotUploadError('Ekran görüntüsü yüklenemedi.');
+                    setScreenshotUploadError('Ekran görüntüsü yüklenemedi.');
                 e.target.value = '';
             } finally {
                 setIsUploadingScreenshot(false);
@@ -194,7 +192,6 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
                 ? 'Reklam ekleme yetkiniz yok.'
                 : 'Reklam eklenirken bir hata oluştu.';
             setError(errorMessage);
-            console.error(err);
         } finally {
             setIsSubmitting(false);
         }
@@ -245,26 +242,9 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full p-3 bg-gray-700 rounded-md border border-gray-600" required>
                             <option value="">Ürün Kategorisi Seçin</option>
-                            <option value="Teknoloji">Teknoloji</option>
-                            <option value="Giyim & Ayakkabı">Giyim & Ayakkabı</option>
-                            <option value="Ev, Yaşam & Mutfak">Ev, Yaşam & Mutfak</option>
-                            <option value="Kozmetik & Kişisel Bakım">Kozmetik & Kişisel Bakım</option>
-                            <option value="Süpermarket">Süpermarket</option>
-                            <option value="Anne & Bebek">Anne & Bebek</option>
-                            <option value="Mobilya">Mobilya</option>
-                            <option value="Kitap & Kırtasiye">Kitap & Kırtasiye</option>
-                            <option value="Spor & Outdoor">Spor & Outdoor</option>
-                            <option value="Takı & Aksesuar">Takı & Aksesuar</option>
-                            <option value="Otomotiv & Motosiklet">Otomotiv & Motosiklet</option>
-                            <option value="Pet Shop">Pet Shop</option>
-                            <option value="Bahçe & Yapı Market">Bahçe & Yapı Market</option>
-                            <option value="Oyuncak & Hobi">Oyuncak & Hobi</option>
-                            <option value="Sağlık & Medikal">Sağlık & Medikal</option>
-                            <option value="Çanta & Valiz">Çanta & Valiz</option>
-                            <option value="Saat & Gözlük">Saat & Gözlük</option>
-                            <option value="Elektronik Aksesuar">Elektronik Aksesuar</option>
-                            <option value="Ofis & İş Dünyası">Ofis & İş Dünyası</option>
-                            <option value="Hediyelik Eşya">Hediyelik Eşya</option>
+                            {CATEGORIES.map(cat => (
+                                <option key={cat} value={cat}>{cat}</option>
+                            ))}
                         </select>
 
                         {/* NEW: Ad Badge Selection */}

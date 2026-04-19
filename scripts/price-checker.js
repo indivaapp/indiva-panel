@@ -3,8 +3,8 @@
  * 
  * Özellikler:
  * - Hibrit Tarama: Klasik fetch + Jina Reader (Bot engeli aşımı)
- * - Groq AI Entegrasyonu: Llama 3.3 ile yüksek hızlı ve ucuz doğrulama
- * - Akıllı Önceliklendirme: Sadece şüpheli durumlarda AI kullanımı
+ * - Gemini AI Entegrasyonu: Gemini 2.5 Flash ile yüksek doğruluktaki doğrulama
+ * - Akıllı Önceliklendirme: Önce hızlı fiyat karşılaştırma, sonra AI
  * - Gerçek Zamanlı Senkronizasyon: Uygulama içi bildirim ve FCM sinyali
  */
 
@@ -103,39 +103,139 @@ async function sendSilentExpiredNotification(discountId, title) {
     }
 }
 
-// ─── AI Verification (Groq) ──────────────────────────────────────────────────
-async function verifyWithAI(product, content) {
-    // VITE_ prefix'siz key'i de dene (GitHub Actions secrets'ta VITE_ olmaz)
-    const apiKey = process.env.GROQ_API_KEY || process.env.VITE_GROQ_API_KEY;
-    if (!apiKey || apiKey.startsWith('gsk_vU1y')) return { expired: false, reason: 'Groq API Key yok veya test key' };
+// ─── HTML Tabanlı Doğrulama (AI olmadan) ─────────────────────────────────────
+// AI_ENABLED=true değilse bu fonksiyon kullanılır. Sayfa HTML'ini tarayarak
+// stok durumu ve fiyat değişikliğini tespit eder.
+function verifyWithHTML(product, html) {
+    const lower = html.toLowerCase();
 
-    const prompt = `Ürün: "${product.title}" | Beklenen Fiyat: ${product.newPrice} TL
-    GÖREV: Sayfa içeriğine göre ürünün durumunu belirle.
-    1. Stokta mı?
-    2. Güncel fiyat nedir?
-    3. İndirim bitmiş mi? (Fiyat %10+ artmışsa veya stok yoksa true)
-    
-    SADECE JSON: {"expired": boolean, "currentPrice": number, "inStock": boolean, "reason": "kısa açıklama"}`;
+    // Stok bitti / ürün kaldırıldı sinyalleri
+    // ÖNEMLİ: includes() yerine daha spesifik kontrol — Trendyol/Amazon gibi sayfalarda
+    // diğer ürünlerin "tükendi" badge'leri false-positive üretmesin.
+    // Sadece özellikle yazılmış tam cümleleri veya yapısal sinyalleri kabul et.
+    const stockPhrases = [
+        'bu ürün artık satılmıyor',
+        'bu ürün mevcut değil',
+        'bu fırsat sonlandı',
+        'kampanya sona erdi',
+        'ürün kaldırıldı',
+        '"out of stock"',         // JSON-LD availability
+        '"discontinued"',
+        'availability":"outofstock',
+        'availability: "outofstock',
+    ];
+    const isOutOfStock = stockPhrases.some(kw => lower.includes(kw));
+    if (isOutOfStock) {
+        return { expired: true, reason: 'Stok tükendi (HTML kontrolü)' };
+    }
+
+    // Fiyat çıkarma: sayfadan basit regex ile mevcut fiyatı bul
+    const pricePatterns = [
+        /"price"\s*:\s*"?([\d.,]+)"?/i,
+        /itemprop="price"[^>]*content="([\d.,]+)"/i,
+        /"priceAmount"\s*:\s*([\d.,]+)/i,
+        /<span[^>]*class="[^"]*price[^"]*"[^>]*>([\d.,\s]+)\s*TL/i,
+    ];
+    let currentPrice = 0;
+    for (const pattern of pricePatterns) {
+        const match = html.match(pattern);
+        if (match) {
+            const raw = match[1].replace(/\./g, '').replace(',', '.');
+            const parsed = parseFloat(raw);
+            if (parsed > 0 && parsed < 1000000) { currentPrice = parsed; break; }
+        }
+    }
+
+    const savedPrice = product.newPrice || 0;
+    if (currentPrice > 0 && savedPrice > 0) {
+        const ratio = (currentPrice - savedPrice) / savedPrice;
+        if (ratio > 0.15) {
+            return {
+                expired: true,
+                currentPrice,
+                reason: `Fiyat: ${savedPrice}₺ → ${currentPrice}₺ (+%${Math.round(ratio * 100)})`
+            };
+        }
+        return { expired: false, currentPrice, reason: 'Aktif' };
+    }
+
+    return { expired: false, reason: 'HTML kontrolü: aktif görünüyor' };
+}
+
+// ─── AI Verification (Gemini 2.5 Flash) ───────────────────────────────────────
+// AI_ENABLED=true olduğunda kullanılır. Daha yüksek doğruluk sağlar.
+async function verifyWithAI(product, content) {
+    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+    if (!apiKey) return { expired: false, reason: 'Gemini API Key bulunamadı' };
+
+    const originalPrice = product.newPrice || 0;
+    const originalOldPrice = product.oldPrice || 0;
+
+    const prompt = `Sen bir e-ticaret fiyat kontrol uzmanısın. Aşağıdaki ürün sayfa içeriğine bak ve indirim durumunu değerlendir.
+
+KAYDEDİLEN ÜRÜN BİLGİLERİ:
+- Başlık: "${product.title}"
+- İndirimli Fiyat (kaydedildiğinde): ${originalPrice} TL
+- Liste Fiyatı (eski fiyat): ${originalOldPrice} TL
+
+SAYFA İÇERİĞİ:
+${content.substring(0, 12000)}
+
+GÖREV: Sayfa içeriğine göre aşağıdakileri belirle ve SADECE JSON döndür:
+1. "currentPrice": Şu an sayfada görünen fiyat (TL, sayı)
+2. "inStock": stokta var mı? (true/false)
+3. "expired": İndirim bitti mi? Kurallar:
+   - Stok yoksa ("tükendi", "satışta değil", "out of stock"): true
+   - Mevcut fiyat ${originalPrice} TL'den %15+ artmışsa: true
+   - Ürün sayfası 404 veya ürün kaldırılmışsa: true
+   - Aksi halde: false
+4. "reason": kısa Türkçe açıklama (max 50 karakter)
+
+YALNIZCA JSON: {"currentPrice": 0, "inStock": true, "expired": false, "reason": ""}`;
 
     try {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-            body: JSON.stringify({
-                model: "llama-3.3-70b-versatile",
-                messages: [{ role: "user", content: prompt + "\n\nİÇERİK:\n" + content.substring(0, 10000) }],
-                temperature: 0.1,
-                response_format: { type: "json_object" }
-            })
-        });
+        const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                    generationConfig: { temperature: 0.1, responseMimeType: 'application/json' }
+                }),
+                signal: AbortSignal.timeout(30000)
+            }
+        );
 
-        if (!response.ok) return { expired: false, reason: 'AI Servis Hatası' };
+        if (!response.ok) {
+            console.warn(`   ⚠️ Gemini API hatası: ${response.status}`);
+            return { expired: false, reason: `Gemini HTTP ${response.status}` };
+        }
 
         const data = await response.json();
-        const result = JSON.parse(data.choices?.[0]?.message?.content || '{}');
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) return { expired: false, reason: 'AI JSON döndürmedi' };
+        const result = JSON.parse(jsonMatch[0]);
+
+        // Ek kontrol: Fiyat artışı %15'ten fazla ise zorla expired=true
+        if (result.currentPrice > 0 && originalPrice > 0) {
+            const ratio = (result.currentPrice - originalPrice) / originalPrice;
+            if (ratio > 0.15) {
+                result.expired = true;
+                result.reason = `Fiyat: ${originalPrice}₺ → ${result.currentPrice}₺ (+%${Math.round(ratio * 100)})`;
+            }
+        }
+        // Stok yoksa zorla expired=true
+        if (result.inStock === false && !result.expired) {
+            result.expired = true;
+            result.reason = result.reason || 'Stok tükendi';
+        }
+
         return result;
     } catch (e) {
-        return { expired: false, reason: 'AI Analiz Hatası' };
+        console.warn(`   ⚠️ Gemini analiz hatası: ${e.message}`);
+        return { expired: false, reason: 'AI bağlantı hatası' };
     }
 }
 
@@ -155,18 +255,20 @@ async function checkPrices() {
 
         const activeDocs = activeSnapshot.docs;
         const now = Date.now();
-        const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
+        const ONE_HOUR_MS           =  1 * 60 * 60 * 1000;
+        const TWELVE_HOURS_MS       = 12 * 60 * 60 * 1000;
+        const TWENTY_FOUR_HOURS_MS  = 24 * 60 * 60 * 1000;
 
         console.log(`📊 Toplam ${activeDocs.length} aktif ilan kontrol ediliyor...\n`);
 
         let autoExpiredCount = 0;
-        const autoExpiredIds = new Set();
-        
+        const autoExpiredIds  = new Set();
+        const earlyWarningIds = new Set(); // 12-24 saat arası, öncelikli AI taraması
+
         for (const doc of activeDocs) {
             const deal = doc.data();
             let createdAtMs = 0;
-            
-            // Farklı tarih formatlarını destekle (Timestamp, Seconds, Number, String)
+
             if (deal.createdAt && typeof deal.createdAt.toMillis === 'function') {
                 createdAtMs = deal.createdAt.toMillis();
             } else if (deal.createdAt && deal.createdAt._seconds) {
@@ -177,36 +279,58 @@ async function checkPrices() {
                 createdAtMs = new Date(deal.createdAt).getTime();
             }
 
-            if (createdAtMs > 0 && (now - createdAtMs > TWELVE_HOURS_MS)) {
+            const ageMs = createdAtMs > 0 ? (now - createdAtMs) : 0;
+
+            if (ageMs > TWENTY_FOUR_HOURS_MS) {
+                // 24 saati geçmiş → anında pasife al
                 autoExpiredCount++;
                 autoExpiredIds.add(doc.id);
-                const deleteDate = new Date(Date.now() + 60 * 60 * 1000); // 1 saatlik sayaç
-                
+                const deleteDate = new Date(now + 60 * 60 * 1000);
                 await doc.ref.update({
                     status: 'İndirim Bitti',
                     expiredAt: FieldValue.serverTimestamp(),
                     expiresAt: FieldValue.serverTimestamp(),
                     deleteAt: deleteDate,
-                    errorReason: '12 saatlik yayın süresi dolmuştur (Otomatik).'
+                    errorReason: '24 saatlik yayın süresi dolmuştur (Otomatik).'
                 });
-                // Mobil uygulamaı gerçek zamanlı bilgilendirmek için sessiz FCM gönder
                 await sendSilentExpiredNotification(doc.id, deal.title);
-                console.log(`   ⏰ OTOMATİK PASİF: ${deal.title.substring(0, 30)}... (${( (now - createdAtMs) / 3600000).toFixed(1)} sa)`);
+                console.log(`   ⏰ OTOMATİK PASİF (24sa): ${deal.title.substring(0, 30)}... (${(ageMs / 3600000).toFixed(1)} sa)`);
+            } else if (ageMs > TWELVE_HOURS_MS) {
+                // 12-24 saat arası → erken uyarı, AI ile öncelikli tara
+                earlyWarningIds.add(doc.id);
             }
         }
 
         if (autoExpiredCount > 0) {
-            console.log(`\n✅ ${autoExpiredCount} adet 12 saati geçmiş ilan anında pasife alındı (Sayaç Başladı).`);
-        } else {
-            console.log('✅ 12 saati geçmiş aktif ilan bulunamadı.');
+            console.log(`\n✅ ${autoExpiredCount} adet 24 saati geçmiş ilan pasife alındı.`);
         }
 
-        // --- AŞAMA 2: KALAN GENÇ İLANLAR İÇİN AI FİYAT/STOK KONTROLÜ ---
-        // Sadece 12 saatten küçük olan ve bu turda pasife alınmayanlardan bir kısmını tarıyoruz.
-        const adsToInspect = activeDocs.filter(d => !autoExpiredIds.has(d.id)).slice(0, 100);
-        
+        // --- AŞAMA 2: TÜM KALAN İLANLAR İÇİN AI KONTROLÜ ---
+        // 1 saatten yeni ilanlar atlanır — yeni yayınlanan ilan dakikalar içinde
+        // false-positive almasın. Price-check için minimum olgunlaşma süresi gerekli.
+        const adsToInspect = activeDocs
+            .filter(d => {
+                if (autoExpiredIds.has(d.id)) return false;
+                const deal = d.data();
+                let createdAtMs = 0;
+                if (deal.createdAt?.toMillis) createdAtMs = deal.createdAt.toMillis();
+                else if (deal.createdAt?._seconds) createdAtMs = deal.createdAt._seconds * 1000;
+                else if (typeof deal.createdAt === 'number') createdAtMs = deal.createdAt;
+                const ageMs = createdAtMs > 0 ? (now - createdAtMs) : ONE_HOUR_MS + 1;
+                if (ageMs < ONE_HOUR_MS) {
+                    console.log(`   ⏳ Yeni ilan atlandı (${Math.round(ageMs / 60000)} dk): ${deal.title?.substring(0, 30)}...`);
+                    return false;
+                }
+                return true;
+            })
+            .sort((a, b) => {
+                const aW = earlyWarningIds.has(a.id) ? 0 : 1;
+                const bW = earlyWarningIds.has(b.id) ? 0 : 1;
+                return aW - bW;
+            });
+
         if (adsToInspect.length > 0) {
-            console.log(`\n🔍 ${adsToInspect.length} güncel ilan AI ile fiyat/stok kontrolüne alınıyor...\n`);
+            console.log(`\n🔍 ${adsToInspect.length} ilan AI kontrole alınıyor (${earlyWarningIds.size} adet 6+ saatlik öncelikli)...\n`);
         }
 
         const processDeal = async (doc) => {
@@ -230,7 +354,9 @@ async function checkPrices() {
                     return;
                 }
 
-                const aiResult = await verifyWithAI(deal, html);
+                const aiResult = process.env.AI_ENABLED === 'true'
+                    ? await verifyWithAI(deal, html)
+                    : verifyWithHTML(deal, html);
 
                 if (aiResult.expired) {
                     console.log(`   🚩 İNDİRİM BİTTİ: ${aiResult.reason} (${id})`);

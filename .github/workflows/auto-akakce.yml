@@ -1,8 +1,8 @@
 name: Auto Akakce Deal Fetcher
 
 on:
-  schedule:
-    - cron: '*/10 * * * *'  # Her 10 dakikada bir
+  # schedule: DEVRE DIŞI — maliyet optimizasyonu yapılıyor
+  #   - cron: '*/30 * * * *'
   workflow_dispatch:
 
 jobs:

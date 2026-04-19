@@ -54,44 +54,23 @@ const AutoDiscoveryPanel: React.FC<AutoDiscoveryPanelProps> = ({ isAdmin }) => {
     const resolveDealLink = async (deal: ScrapedDeal) => {
         setResolvedLink(''); // Reset
 
-        console.log('\n🔗 ═══════════════════════════════════════');
-        console.log('🔗 LİNK ÇÖZÜMLEME BAŞLADI');
-        console.log('🔗 ═══════════════════════════════════════');
-
         try {
             const link = deal.onualLink || deal.productLink || '';
 
             if (!link) {
-                console.error('❌ Link bulunamadı!');
                 setResolvedLink('');
                 return;
             }
 
-            console.log('📌 Orijinal Link:', link);
-
             if (link.includes('onu.al')) {
-                console.log('🔄 OnuAl kısa linki tespit edildi, çözümleniyor...');
                 const resolved = await resolveOnuAlLink(link);
-                console.log('✅ Link başarıyla çözümlendi!');
-                console.log('🎯 Gerçek Link:', resolved);
-                console.log('🔗 ═══════════════════════════════════════\n');
                 setResolvedLink(resolved);
             } else {
-                console.log('✅ Direkt ürün linki, çözümleme gerekmiyor');
-                console.log('🔗 ═══════════════════════════════════════\n');
                 setResolvedLink(link);
             }
-        } catch (error: any) {
-            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.error('❌ LİNK ÇÖZÜMLEME HATASI!');
-            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.error('Hata:', error.message);
-            console.error('Stack:', error.stack);
-            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-
+        } catch {
             // Hata durumunda orijinal linki kullan
             const fallbackLink = deal.onualLink || deal.productLink || '';
-            console.warn('⚠️ Fallback: Orijinal link kullanılıyor:', fallbackLink);
             setResolvedLink(fallbackLink);
         }
     };
@@ -108,39 +87,17 @@ const AutoDiscoveryPanel: React.FC<AutoDiscoveryPanelProps> = ({ isAdmin }) => {
         }
 
         setProcessing(true);
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('🚀 ONAYLA İŞLEMİ BAŞLADI');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('📦 Deal:', currentDeal.title);
-        console.log('🔗 Çözümlenmiş Link:', resolvedLink);
 
         try {
             // ADIM 1: AI ile ürün bilgilerini çek
-            console.log('\n📊 ADIM 1: AI Analizi Başlıyor...');
-            console.log('Link:', resolvedLink);
-
             const analyzed = await analyzeProductLink(resolvedLink);
 
-            console.log('✅ AI Analizi Tamamlandı:');
-            console.log('  - Başlık:', analyzed.title);
-            console.log('  - Marka:', analyzed.brand);
-            console.log('  - Kategori:', analyzed.category);
-            console.log('  - Eski Fiyat:', analyzed.oldPrice);
-            console.log('  - Yeni Fiyat:', analyzed.newPrice);
-            console.log('  - Görsel:', analyzed.imageUrl?.substring(0, 60) + '...');
-
             // ADIM 2: Veri doğrulama
-            console.log('\n🔍 ADIM 2: Veri Doğrulama...');
             if (!analyzed.title || analyzed.title.length < 3) {
                 throw new Error('❌ Ürün başlığı alınamadı. AI analizi başarısız.');
             }
-            if (!analyzed.imageUrl) {
-                console.warn('⚠️ Görsel URL bulunamadı, varsayılan kullanılacak');
-            }
-            console.log('✅ Veri doğrulama başarılı');
 
             // ADIM 3: Firebase'e kaydet
-            console.log('\n💾 ADIM 3: Firebase\'e Kaydediliyor...');
             await addDiscount({
                 title: analyzed.title,
                 brand: analyzed.brand || 'Bilinmiyor',
@@ -154,11 +111,6 @@ const AutoDiscoveryPanel: React.FC<AutoDiscoveryPanelProps> = ({ isAdmin }) => {
                 originalSource: 'telegram-onual',
                 importedAt: new Date() as any
             });
-
-            console.log('✅ Firebase\'e kaydedildi!');
-            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.log('🎉 BAŞARILI! Ürün yayınlandı.');
-            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
             setStats(s => ({ ...s, approved: s.approved + 1 }));
             nextDeal();
@@ -179,15 +131,6 @@ const AutoDiscoveryPanel: React.FC<AutoDiscoveryPanelProps> = ({ isAdmin }) => {
             setTimeout(() => notification.remove(), 3000);
 
         } catch (error: any) {
-            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.error('❌ HATA OLUŞTU!');
-            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.error('Hata:', error);
-            console.error('Mesaj:', error.message);
-            console.error('Stack:', error.stack);
-            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-
-            // Kullanıcıya detaylı hata göster
             let errorMessage = '❌ Hata Oluştu:\n\n';
 
             if (error.message?.includes('Failed to fetch')) {

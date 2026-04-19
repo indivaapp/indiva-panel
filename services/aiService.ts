@@ -4,6 +4,7 @@
  */
 
 import type { ScrapedDeal } from './dealFinder';
+import { isSystemEnabled } from '../utils/systemStatus';
 
 // Gemini API endpoint - gemini-2.0-flash en hızlı ve güncel stabil model
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
@@ -11,14 +12,7 @@ const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/
 // API Key (Vercel environment variable)
 const GEMINI_API_KEY = (import.meta as any).env.VITE_GEMINI_API_KEY || '';
 
-// Kategoriler
-const CATEGORIES = [
-    'Teknoloji', 'Giyim & Ayakkabı', 'Ev, Yaşam & Mutfak', 'Kozmetik & Kişisel Bakım',
-    'Süpermarket', 'Anne & Bebek', 'Mobilya', 'Kitap & Kırtasiye', 'Spor & Outdoor',
-    'Takı & Aksesuar', 'Otomotiv & Motosiklet', 'Pet Shop', 'Bahçe & Yapı Market',
-    'Oyuncak & Hobi', 'Sağlık & Medikal', 'Çanta & Valiz', 'Saat & Gözlük',
-    'Elektronik Aksesuar', 'Ofis & İş Dünyası', 'Hediyelik Eşya'
-] as const;
+import { CATEGORIES } from '../constants/categories';
 
 // Zenginleştirilmiş fırsat tipi
 export interface EnrichedDeal extends ScrapedDeal {
@@ -41,6 +35,10 @@ interface AIResponse {
  * Gemini API'ye istek gönder
  */
 async function callGeminiAPI(prompt: string): Promise<string> {
+    if (!isSystemEnabled()) {
+        throw new Error('Sistem kapalı');
+    }
+
     if (!GEMINI_API_KEY) {
         throw new Error('GEMINI_API_KEY tanımlı değil');
     }
@@ -66,8 +64,6 @@ async function callGeminiAPI(prompt: string): Promise<string> {
     });
 
     if (!response.ok) {
-        const error = await response.text();
-        console.error('Gemini API hatası:', error);
         throw new Error(`Gemini API hatası: ${response.status}`);
     }
 
@@ -106,16 +102,26 @@ function parseAIResponse(text: string): AIResponse {
             brand: parsed.brand || '',
             confidence: Math.min(100, Math.max(0, parsed.confidence || 50))
         };
-    } catch (error) {
-        console.error('JSON parse hatası:', text);
+    } catch {
         throw new Error('AI yanıtı parse edilemedi');
     }
 }
 
 /**
  * Tek bir fırsatı AI ile zenginleştir
+ * VITE_AI_ENABLED=true olmadığı sürece AI çağrısı yapılmaz, temel temizleme kullanılır.
  */
 export async function enrichDealWithAI(deal: ScrapedDeal): Promise<EnrichedDeal> {
+    if ((import.meta as any).env.VITE_AI_ENABLED !== 'true') {
+        return {
+            ...deal,
+            cleanTitle: cleanTitleBasic(deal.title),
+            category: 'Diğer',
+            brand: '',
+            confidenceScore: 30,
+            aiProcessed: false,
+        };
+    }
     const prompt = `Sen bir e-ticaret pazarlama uzmanısın. Aşağıdaki indirim bilgisini analiz et ve JSON formatında döndür.
 
 ÜRÜN BİLGİSİ:
@@ -127,7 +133,7 @@ ${deal.couponCode ? `Kupon Kodu: ${deal.couponCode}` : ''}
 GÖREV:
 1. Başlığı temizle: Emoji, "FIRSAT", "SÜPER", "KAÇIRMA" gibi gereksiz kelimeleri kaldır. Sadece ürün adını bırak.
 
-2. Kategori belirle (SADECE listedekilerden en uygun olanı seç): Teknoloji, Giyim & Ayakkabı, Ev, Yaşam & Mutfak, Kozmetik & Kişisel Bakım, Süpermarket, Anne & Bebek, Mobilya, Kitap & Kırtasiye, Spor & Outdoor, Takı & Aksesuar, Otomotiv & Motosiklet, Pet Shop, Bahçe & Yapı Market, Oyuncak & Hobi, Sağlık & Medikal, Çanta & Valiz, Saat & Gözlük, Elektronik Aksesuar, Ofis & İş Dünyası, Hediyelik Eşya. "Diğer" veya "Genel" KESİNLİKLE kullanma.
+2. Kategori belirle (SADECE listedekilerden en uygun olanı seç): ${CATEGORIES.filter(c => c !== 'Diğer').join(', ')}. "Diğer" veya "Genel" KESİNLİKLE kullanma.
 
 3. Marka tespit et: Başlıktan markayı çıkar (yoksa boş bırak)
 
@@ -153,9 +159,7 @@ SADECE JSON DÖNDÜR:
             confidenceScore: aiResponse.confidence,
             aiProcessed: true
         };
-    } catch (error) {
-        console.error('AI zenginleştirme hatası:', error);
-
+    } catch {
         // Fallback: Temel temizleme
         return {
             ...deal,
@@ -177,8 +181,6 @@ export async function batchEnrichDeals(deals: ScrapedDeal[]): Promise<EnrichedDe
 
     for (let i = 0; i < deals.length; i++) {
         const deal = deals[i];
-        console.log(`🤖 AI işleniyor: ${i + 1}/${deals.length}`);
-
         try {
             const enriched = await enrichDealWithAI(deal);
             enrichedDeals.push(enriched);
@@ -187,8 +189,7 @@ export async function batchEnrichDeals(deals: ScrapedDeal[]): Promise<EnrichedDe
             if (i < deals.length - 1) {
                 await new Promise(r => setTimeout(r, 1000));
             }
-        } catch (error) {
-            console.error(`Fırsat ${i + 1} işlenemedi:`, error);
+        } catch {
             // Hatalı olanı düşük skorla ekle
             enrichedDeals.push({
                 ...deal,

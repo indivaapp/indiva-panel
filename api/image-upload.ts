@@ -13,7 +13,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
  * - IMGBB_API_KEY: ImgBB API anahtarı
  */
 
-const IMGBB_API_KEY = process.env.IMGBB_API_KEY || 'd81f2725d96c8f13649c8ed79ba8d2bb';
+const IMGBB_API_KEY = process.env.IMGBB_API_KEY || '';
 
 interface ImgBBResponse {
     success: boolean;

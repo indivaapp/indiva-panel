@@ -10,7 +10,6 @@ export const ensureAnonymousAuth = async (): Promise<User | null> => {
         const userCredential = await signInAnonymously(auth);
         return userCredential.user;
     } catch (error: any) {
-        console.error("Anonymous sign-in failed:", error);
         if (error.code === 'auth/admin-restricted-operation') {
             throw new Error(
               "Anonim giriş başarısız oldu. Lütfen Firebase projenizde 'Authentication > Sign-in method' bölümünden 'Anonymous' (Anonim) sağlayıcısını etkinleştirdiğinizden emin olun."

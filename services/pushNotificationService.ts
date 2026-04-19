@@ -1,59 +1,23 @@
-import { PushNotifications } from '@capacitor/push-notifications';
 import { Capacitor } from '@capacitor/core';
 
 /**
  * Push Notification Service for INDIVA Panel App
- * Handles registration and subscription to admin alert topics.
+ *
+ * ⚠️ ŞU AN DEVRE DIŞI — google-services.json eksik.
+ *
+ * ETKİNLEŞTİRMEK İÇİN:
+ * 1. Firebase Console → "indiva-expo" projesi → Proje Ayarları
+ * 2. Android uygulaması ekle (com.indiva.panel) → google-services.json indir
+ * 3. Dosyayı: android/app/google-services.json olarak kaydet
+ * 4. npx cap sync android
+ * 5. Bu dosyadaki return satırını kaldır
  */
-export const initializePushNotifications = async () => {
+export const initializePushNotifications = async (): Promise<void> => {
     if (Capacitor.getPlatform() === 'web') {
-        console.warn('[Push] Web platform detected. Push notifications are only supported on native devices.');
-        return;
+        return; // Web'de Capacitor push desteklenmez
     }
 
-    console.log('[Push] Initializing...');
-
-    // Request permissions
-    let permStatus = await PushNotifications.checkPermissions();
-    
-    if (permStatus.receive === 'prompt') {
-        permStatus = await PushNotifications.requestPermissions();
-    }
-
-    if (permStatus.receive !== 'granted') {
-        console.error('[Push] User denied permissions!');
-        return;
-    }
-
-    // Register with FCM
-    await PushNotifications.register();
-
-    // Listeners
-    PushNotifications.addListener('registration', (token) => {
-        console.log('[Push] Registration successful, token:', token.value);
-        // Topic subscription is usually handled via FCM HTTP API or Firebase Console for Capacitor.
-        // However, we can use a server-side script to subscribe this token to 'panel_admin_alerts'
-        // OR use a plugin if available. For now, we log the token.
-    });
-
-    PushNotifications.addListener('registrationError', (err) => {
-        console.error('[Push] Registration error:', err.error);
-    });
-
-    PushNotifications.addListener('pushNotificationReceived', (notification) => {
-        console.log('[Push] Notification received:', notification);
-    });
-
-    PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
-        console.log('[Push] Action performed:', notification.actionId, notification.notification);
-    });
+    // google-services.json eksik — aktif edilene kadar devre dışı
+    console.info('[Push] Push bildirimleri yapılandırılmamış (google-services.json gerekli).');
+    return;
 };
-
-/**
- * Note: Topic subscription in Capacitor typically requires an additional plugin 
- * or a backend call to the FCM server using the device token.
- * 
- * Strategy: We will send alerts to the topic 'panel_admin_alerts'. 
- * The user must ensure the Panel App is registered in the Firebase console 
- * and this token is subscribed.
- */

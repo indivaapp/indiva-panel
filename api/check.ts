@@ -164,9 +164,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     try {
-        // Tanınan mağaza URL'lerini kontrol et
+        // URL parse et ve hostname'i kontrol et
+        let hostname: string;
+        try {
+            hostname = new URL(url).hostname.toLowerCase();
+        } catch {
+            res.status(400).json({ expired: false, reason: 'Geçersiz URL formatı.' });
+            return;
+        }
+
+        // Tanınan mağaza hostname'lerini kontrol et
         const storePatterns = ['trendyol.com', 'hepsiburada.com', 'amazon.com.tr', 'n11.com', 'gittigidiyor.com'];
-        const isKnownStore = storePatterns.some(p => url.includes(p));
+        const isKnownStore = storePatterns.some(p => hostname === p || hostname.endsWith(`.${p}`));
 
         if (!isKnownStore) {
             // Tanınmayan URL → güvenliye al, sil me

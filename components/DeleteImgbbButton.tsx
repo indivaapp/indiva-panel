@@ -29,8 +29,6 @@ const DeleteImgbbButton: React.FC<DeleteImgbbButtonProps> = ({ deleteUrl, onDele
             // This will trigger the parent to delete the DB record and unmount this button.
             onDeleted();
         } catch (error) {
-            console.error("ImgBB deletion failed:", error);
-            // Deletion failed, manual intervention needed.
             const errorMessage = (error as Error)?.message || 'Otomatik silinemedi. Lütfen tekrar deneyin.';
             setMessage(errorMessage);
 

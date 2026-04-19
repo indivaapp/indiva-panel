@@ -44,8 +44,7 @@ async function fetchWithProxy(targetUrl: string): Promise<string> {
             if (html && html.length > 1000) {
                 return html;
             }
-        } catch (error) {
-            console.warn('Proxy hatası:', error);
+        } catch {
             continue;
         }
     }
@@ -110,8 +109,8 @@ function parseProducts(html: string): CimriProduct[] {
                 });
                 index++;
             }
-        } catch (e) {
-            console.warn('Parse hatası:', e);
+        } catch {
+            // Parse hatası - devam et
         }
     }
 
@@ -140,21 +139,14 @@ function parseProducts(html: string): CimriProduct[] {
 export async function fetchFromCimri(page: number = 1): Promise<CimriProduct[]> {
     try {
         const url = `https://www.cimri.com/indirimli-urunler${page > 1 ? `?page=${page}` : ''}`;
-        console.log(`🔄 Cimri'den veri çekiliyor: ${url}`);
-
         const html = await fetchWithProxy(url);
 
         if (!html || html.length < 1000) {
-            console.warn('Cimri\'den yeterli veri alınamadı');
             return [];
         }
 
-        const products = parseProducts(html);
-        console.log(`✅ Cimri'den ${products.length} ürün çekildi`);
-
-        return products;
+        return parseProducts(html);
     } catch (error) {
-        console.error('Cimri fetch hatası:', error);
         throw error;
     }
 }
@@ -168,7 +160,6 @@ export async function getCimriDeals(forceRefresh: boolean = false): Promise<Cimr
     const now = Date.now();
 
     if (!forceRefresh && cimriCache.length > 0 && (now - cimriCacheTime) < CACHE_DURATION) {
-        console.log('📦 Cimri cache\'den döndürülüyor');
         return cimriCache;
     }
 

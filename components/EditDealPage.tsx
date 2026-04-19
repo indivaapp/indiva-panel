@@ -99,8 +99,8 @@ const EditDealPage: React.FC<EditDealPageProps> = ({ deal, setActiveView, isAdmi
                         imagePreview: details.imageUrl || prev.imagePreview,
                         imageUrl: details.imageUrl || prev.imageUrl
                     }));
-                } catch (err) {
-                    console.warn('Detay alınamadı:', err);
+                } catch {
+                    // Detay alınamadı
                 }
                 setFetchingDetails(false);
             }
@@ -353,8 +353,8 @@ const EditDealPage: React.FC<EditDealPageProps> = ({ deal, setActiveView, isAdmi
                                             return;
                                         }
                                     }
-                                } catch (err) {
-                                    console.warn('Clipboard API hatası:', err);
+                                } catch {
+                                    // Clipboard API hatası
                                 }
 
                                 // Fallback: kullanıcıdan manuel giriş iste

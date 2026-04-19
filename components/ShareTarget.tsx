@@ -36,7 +36,7 @@ interface StageInfo {
 const STAGES: Record<Stage, StageInfo> = {
     reading:    { label: 'Görüntü ve link okunuyor...',         emoji: '📖', progress: 15,  color: 'bg-blue-500' },
     analyzing:  { label: 'Yapay zeka fiyatları analiz ediyor...', emoji: '🤖', progress: 45,  color: 'bg-purple-500' },
-    uploading:  { label: 'Görsel yükleniyor...',                emoji: '☁️', progress: 72,  color: 'bg-yellow-500' },
+    uploading:  { label: 'Ürün görseli alınıyor...',             emoji: '🖼️', progress: 72,  color: 'bg-yellow-500' },
     publishing: { label: 'Firebase\'e yayınlanıyor...',         emoji: '🚀', progress: 90,  color: 'bg-orange-500' },
     success:    { label: 'Yayınlandı!',                         emoji: '✅', progress: 100, color: 'bg-green-500' },
     error:      { label: 'Hata oluştu',                         emoji: '❌', progress: 0,   color: 'bg-red-500' },
@@ -153,15 +153,28 @@ const ShareTarget: React.FC<ShareTargetProps> = ({ onClose }) => {
 
             setResult(productData);
 
-            // ── 4. UPLOADING: ImgBB'ye görsel yükle ─────────────────────────
+            // ── 4. UPLOADING: Ürün görselini crop et ve yükle ───────────────
+            // Gemini'nin döndürdüğü bounding box ile ekran görüntüsünden
+            // sadece ürün fotoğrafı bölgesi kırpılır → daha temiz ürün görseli
             setStage('uploading');
 
+            let imageUrl  = '';
+            let deleteUrl = '';
+
+            // Crop veya tam ekran görüntüsü → ImgBB'ye yükle
+            const imageToUpload = productData.productImageBox
+                ? await cropImageByBox(imageBuffer, imageMimeType, productData.productImageBox)
+                : new Blob([imageBuffer], { type: imageMimeType });
+
             const imageFile = new File(
-                [imageBuffer],
+                [imageToUpload],
                 `indiva-${Date.now()}.jpg`,
-                { type: imageMimeType }
+                { type: 'image/jpeg' }
             );
-            const { downloadURL: imageUrl, deleteUrl } = await uploadToImgbb(imageFile);
+            const uploaded = await uploadToImgbb(imageFile);
+            imageUrl  = uploaded.downloadURL;
+            deleteUrl = uploaded.deleteUrl;
+            console.log('[ShareTarget] Görsel yüklendi:', imageUrl, 'box:', productData.productImageBox);
 
             // ── 5. PUBLISHING: Firebase'e yayınla ───────────────────────────
             setStage('publishing');
@@ -284,7 +297,7 @@ const ShareTarget: React.FC<ShareTargetProps> = ({ onClose }) => {
                                      label="Gemini Vision fiyat ve başlığı analiz ediyor" />
                             <StepRow done={['publishing','success'].includes(stage)}
                                      active={stage === 'uploading'}
-                                     label="Görsel ImgBB'ye yükleniyor" />
+                                     label="Ürün görseli alınıyor" />
                             <StepRow done={stage === 'success'}
                                      active={stage === 'publishing'}
                                      label="İndirim Firebase'e yayınlanıyor" />
@@ -443,5 +456,69 @@ const ErrorCard: React.FC<{ message: string; onClose: () => void; onRetry: () =>
         </div>
     </div>
 );
+
+// ─── Görsel Kırpma (Canvas) ───────────────────────────────────────────────────
+
+/**
+ * Gemini'nin döndürdüğü [y1,x1,y2,x2] (0-1000 normalize) bounding box ile
+ * görüntüyü kırpar. Başarısız olursa orijinal görüntüyü döndürür.
+ */
+async function cropImageByBox(
+    buffer: ArrayBuffer,
+    mimeType: string,
+    box: [number, number, number, number]
+): Promise<Blob> {
+    return new Promise((resolve) => {
+        const blob = new Blob([buffer], { type: mimeType });
+        const url  = URL.createObjectURL(blob);
+        const img  = new Image();
+
+        img.onload = () => {
+            try {
+                const [y1, x1, y2, x2] = box;
+                const W = img.naturalWidth;
+                const H = img.naturalHeight;
+
+                // 0-1000 → piksel koordinatları
+                const sx = Math.max(0, Math.round((x1 / 1000) * W));
+                const sy = Math.max(0, Math.round((y1 / 1000) * H));
+                const sw = Math.min(W - sx, Math.round(((x2 - x1) / 1000) * W));
+                const sh = Math.min(H - sy, Math.round(((y2 - y1) / 1000) * H));
+
+                // Geçersiz boyutsa orijinali döndür
+                if (sw < 50 || sh < 50) {
+                    URL.revokeObjectURL(url);
+                    resolve(blob);
+                    return;
+                }
+
+                const canvas = document.createElement('canvas');
+                canvas.width  = sw;
+                canvas.height = sh;
+                const ctx = canvas.getContext('2d')!;
+                ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+
+                canvas.toBlob(
+                    (cropped) => {
+                        URL.revokeObjectURL(url);
+                        resolve(cropped || blob);
+                    },
+                    'image/jpeg',
+                    0.90
+                );
+            } catch {
+                URL.revokeObjectURL(url);
+                resolve(blob);
+            }
+        };
+
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            resolve(blob);
+        };
+
+        img.src = url;
+    });
+}
 
 export default ShareTarget;

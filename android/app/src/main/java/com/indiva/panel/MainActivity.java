@@ -6,6 +6,8 @@ import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.Plugin;
+import java.util.ArrayList;
 
 public class MainActivity extends BridgeActivity {
     
@@ -13,6 +15,7 @@ public class MainActivity extends BridgeActivity {
     
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        registerPlugin(BotPlugin.class);
         super.onCreate(savedInstanceState);
         
         // Check if app was opened via share intent

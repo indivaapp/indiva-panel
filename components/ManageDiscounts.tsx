@@ -90,7 +90,6 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
             setDiscounts(discountsData as Discount[]);
         } catch (err) {
             setError('İndirimler yüklenemedi.');
-            console.error(err);
         } finally {
             setIsLoading(false);
         }

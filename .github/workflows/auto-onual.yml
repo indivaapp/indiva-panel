@@ -38,5 +38,9 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          # AI_ENABLED: Gemini ile başlık/açıklama/kategori üretimini açar/kapatır.
+          # Açmak için GitHub repo → Settings → Secrets → Actions → AI_ENABLED=true ekleyin.
+          # Kapalıyken keyword tabanlı kategori + cleanProductTitle() kullanılır.
+          AI_ENABLED: ${{ secrets.AI_ENABLED || 'false' }}
         run: node scripts/auto-onual.js
 

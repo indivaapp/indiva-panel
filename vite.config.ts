@@ -10,10 +10,9 @@ export default defineConfig(({ mode }) => {
         host: '0.0.0.0',
       },
       plugins: [react()],
-      define: {
-        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
-      },
+      // NOT: API anahtarlarını buraya ekleme — build çıktısına gömülür ve
+      // tarayıcı kaynak kodunda görünür hale gelir.
+      // Bunun yerine import.meta.env.VITE_* kullan.
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),

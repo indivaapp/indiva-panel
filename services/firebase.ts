@@ -52,7 +52,6 @@ export const deleteDiscount = async (id: string, deleteUrl?: string, screenshotD
     try {
         await deleteDoc(doc(db, 'discounts', id));
     } catch (e) {
-        console.error("Error deleting discount from DB:", e);
         throw e;
     }
 };
@@ -156,17 +155,17 @@ export const getPendingAffiliateCount = async (): Promise<number> => {
         where('affiliateLinkUpdated', '==', false)
     );
     const querySnapshot = await getDocs(q);
-    const discounts = querySnapshot.docs.map(doc => doc.data() as Discount);
-
-    // Aynı filtreyi sayı için de uygula
-    const filteredCount = discounts.filter(deal =>
-        ALLOWED_AFFILIATE_STORES.some(store =>
-            (deal.storeName || '').toLowerCase() === store.toLowerCase() ||
-            (deal.brand || '').toLowerCase() === store.toLowerCase()
-        )
-    ).length;
-
-    return filteredCount;
+    const allowedLower = ALLOWED_AFFILIATE_STORES.map(s => s.toLowerCase());
+    let count = 0;
+    for (const docSnap of querySnapshot.docs) {
+        const data = docSnap.data();
+        const store = (data.storeName || '').toLowerCase();
+        const brand = (data.brand || '').toLowerCase();
+        if (allowedLower.includes(store) || allowedLower.includes(brand)) {
+            count++;
+        }
+    }
+    return count;
 };
 
 /**
@@ -303,7 +302,6 @@ export const deleteBrochure = async (id: string, marketName: string, deleteUrl?:
         const docRef = doc(db, "circulars", marketKey, "brochures", id);
         await deleteDoc(docRef);
     } catch (e) {
-        console.error("Error deleting brochure from DB:", e);
         throw e;
     }
 };
@@ -400,7 +398,7 @@ export const getAdvertisements = async (): Promise<Discount[]> => {
         if (expiryDate && expiryDate < now) {
             // Ad is expired. Delete it automatically.
             // Fire and forget deletion
-            deleteDiscount(ad.id, ad.deleteUrl, ad.screenshotDeleteUrl).catch(err => console.error("Auto-delete failed", err));
+            deleteDiscount(ad.id, ad.deleteUrl, ad.screenshotDeleteUrl).catch(() => {});
         } else {
             validAds.push(ad);
         }
@@ -444,9 +442,19 @@ export const archiveAdRequest = async (id: string) => {
 
 // Hard delete
 export const deleteAdRequest = async (id: string) => {
-    // Basit ve net silme işlemi
     const docRef = doc(db, 'adRequests', id);
     await deleteDoc(docRef);
+};
+
+export const getPendingAdRequestCount = async (): Promise<number> => {
+    const q = query(collection(db, 'adRequests'), where('status', '==', 'pending'));
+    const snap = await getDocs(q);
+    return snap.size;
+};
+
+export const getPendingDiscountCount = async (): Promise<number> => {
+    const snap = await getDocs(collection(db, 'pendingDiscounts'));
+    return snap.size;
 };
 
 

@@ -46,21 +46,28 @@ const MAX_NEW_PRODUCTS = 15; // Biraz artırılabilir, artık daha verimli
 const REQUEST_DELAY_MS = 1000; // İstekler arası bekleme (ms)
 
 // AI Config
-const MODEL = 'gemini-2.5-flash'; // Mart 2026 itibarıyla aktif, ücretsiz tier destekli model
+const MODEL = 'gemini-2.5-flash-lite'; // Maliyet optimizasyonu için Flash Lite kullanılıyor
 
-// Kategorileri tespit için anahtar kelimeler
+// Kategorileri tespit için anahtar kelimeler — uygulama kategori isimleriyle BİREBİR eşleşmeli
 const CATEGORY_MAP = [
-    { keywords: ['klavye', 'mouse', 'fare', 'monitör', 'bilgisayar', 'laptop', 'notebook', 'tablet', 'telefon', 'iphone', 'samsung', 'xiaomi', 'kulaklık', 'hoparlör', 'kamera', 'projeksiyon', 'ssd', 'harddisk', 'şarj', 'powerbank', 'kablo', 'adaptör', 'akıllı saat', 'scooter', 'drone'], category: 'Teknoloji' },
-    { keywords: ['mont', 'ceket', 'kazak', 'gömlek', 'pantolon', 'şort', 'elbise', 'bluz', 'tişört', 't-shirt', 'sweatshirt', 'polar', 'ayakkabı', 'sneaker', 'bot', 'sandalet', 'çanta', 'sırt çantası', 'bere', 'eldiven', 'çorap', 'yelek', 'kemer', 'cüzdan', 'pijama', 'iç giyim'], category: 'Giyim' },
-    { keywords: ['şampuan', 'krem', 'losyon', 'maske', 'serum', 'parfüm', 'deodorant', 'saç', 'cilt', 'diş', 'tıraş', 'makyaj', 'ruj', 'oje', 'ped', 'orkid', 'hijyen', 'sabun', 'duş jeli', 'vücut spreyi'], category: 'Kozmetik' },
-    { keywords: ['tencere', 'tava', 'çaydanlık', 'bıçak', 'kaşık', 'tabak', 'bardak', 'fincan', 'yemek takımı', 'çay takımı', 'mobilya', 'masa', 'sandalye', 'yatak', 'dolap', 'nevresim', 'perde', 'halı', 'kilim', 'aydınlatma', 'lamba', 'havlu', 'nevresim'], category: 'Ev' },
-    { keywords: ['deterjan', 'sabun', 'temizlik', 'bez', 'süpürge', 'mop', 'fırça', 'çöp', 'bakliyat', 'yağ', 'şeker', 'çay', 'kahve', 'atıştırmalık', 'makarna', 'peynir', 'süt', 'yoğurt', 'çikolata', 'gıda', 'bisküvi', 'nutella', 'kahvaltılık'], category: 'Market' },
-    { keywords: ['bebek', 'bez', 'emzik', 'biberon', 'oyuncak', 'lego', 'puzzle', 'bebek arabası', 'mama'], category: 'Bebek' },
-    { keywords: ['vitamini', 'takviye', 'kapsül', 'şurup', 'macun', 'sağlık', 'maske', 'eldiven'], category: 'Sağlık' },
-    { keywords: ['kalem', 'defter', 'boya', 'çizim', 'kağıt', 'resim', 'kitap', 'roman'], category: 'Kitap' },
-    { keywords: ['kamp', 'spor', 'fitness', 'outdoor', 'bisiklet', 'top', 'forma', 'pilates'], category: 'Spor' },
-    { keywords: ['kedi', 'köpek', 'mama', 'kum', 'tasma', 'kuş', 'balık'], category: 'Pet' },
-    { keywords: ['araba', 'otomobil', 'tekerlek', 'lastik', 'yağ', 'aksesuar', 'motosiklet', 'kask'], category: 'Oto' },
+    { keywords: ['klavye', 'mouse', 'fare', 'monitör', 'bilgisayar', 'laptop', 'notebook', 'tablet', 'telefon', 'iphone', 'samsung', 'xiaomi', 'kulaklık', 'hoparlör', 'kamera', 'projeksiyon', 'ssd', 'harddisk', 'şarj', 'powerbank', 'kablo', 'adaptör', 'akıllı saat', 'scooter', 'drone', 'robot süpürge', 'akıllı tv', 'gaming'], category: 'Teknoloji' },
+    { keywords: ['buzdolabı', 'çamaşır makinesi', 'bulaşık makinesi', 'fırın', 'mikrodalga', 'davlumbaz', 'klima', 'su ısıtıcı', 'elektrikli süpürge', 'ütü', 'fritöz', 'blender', 'kahve makinesi', 'tost makinesi', 'beyaz eşya'], category: 'Beyaz Eşya' },
+    { keywords: ['mont', 'ceket', 'kazak', 'gömlek', 'pantolon', 'şort', 'elbise', 'bluz', 'tişört', 't-shirt', 'sweatshirt', 'polar', 'bere', 'eldiven', 'çorap', 'yelek', 'kemer', 'pijama', 'iç giyim', 'elbise', 'tunik', 'tayt'], category: 'Giyim & Moda' },
+    { keywords: ['ayakkabı', 'sneaker', 'bot', 'sandalet', 'terlik', 'loafer', 'spor ayakkabı', 'çanta', 'sırt çantası', 'el çantası', 'cüzdan', 'kemer', 'valiz', 'bavul'], category: 'Ayakkabı & Çanta' },
+    { keywords: ['tencere', 'tava', 'çaydanlık', 'bıçak', 'kaşık', 'tabak', 'bardak', 'fincan', 'yemek takımı', 'çay takımı', 'nevresim', 'perde', 'halı', 'kilim', 'aydınlatma', 'lamba', 'havlu', 'yastık', 'yorgan', 'banyo', 'ev tekstili'], category: 'Ev & Yaşam' },
+    { keywords: ['mobilya', 'masa', 'sandalye', 'yatak', 'dolap', 'koltuk', 'çekyat', 'raf', 'kitaplık', 'gardırop', 'dekorasyon', 'tablo', 'ayna', 'çerçeve', 'aksesuar'], category: 'Mobilya & Dekorasyon' },
+    { keywords: ['spor', 'fitness', 'outdoor', 'bisiklet', 'top', 'forma', 'pilates', 'kamp', 'çadır', 'uyku tulumu', 'yürüyüş', 'koşu', 'dambıl', 'mat'], category: 'Spor & Outdoor' },
+    { keywords: ['şampuan', 'krem', 'losyon', 'maske', 'serum', 'parfüm', 'deodorant', 'saç', 'cilt', 'diş', 'tıraş', 'makyaj', 'ruj', 'oje', 'ped', 'orkid', 'hijyen', 'sabun', 'duş jeli', 'vücut spreyi', 'kozmetik', 'fondöten'], category: 'Kozmetik & Bakım' },
+    { keywords: ['deterjan', 'temizlik', 'süpürge', 'mop', 'fırça', 'çöp', 'bakliyat', 'yağ', 'şeker', 'çay', 'kahve', 'atıştırmalık', 'makarna', 'peynir', 'süt', 'yoğurt', 'çikolata', 'gıda', 'bisküvi', 'nutella', 'kahvaltılık', 'market'], category: 'Süpermarket' },
+    { keywords: ['bebek bezi', 'emzik', 'biberon', 'bebek arabası', 'mama sandalyesi', 'bebek kıyafeti', 'kundak', 'uyku tulumu bebek', 'anne sütü', 'hamile', 'bebek'], category: 'Anne & Bebek' },
+    { keywords: ['kalem', 'defter', 'boya', 'çizim', 'kağıt', 'resim', 'kitap', 'roman', 'kırtasiye', 'ajanda', 'planlayıcı'], category: 'Kitap & Kırtasiye' },
+    { keywords: ['oyuncak', 'lego', 'puzzle', 'oyun seti', 'kutu oyunu', 'action figure', 'bebek arabası oyuncak', 'uzaktan kumandalı', 'oyun konsol', 'playstation', 'nintendo'], category: 'Oyun & Oyuncak' },
+    { keywords: ['otel', 'uçak', 'tatil', 'seyahat', 'bavul', 'pasaport', 'bilet', 'rezervasyon', 'tur'], category: 'Seyahat' },
+    { keywords: ['restoran', 'yemek', 'sipariş', 'içecek', 'kahve', 'çay seti', 'yemek seti', 'gıda kutusu', 'abonelik yemek'], category: 'Yemek & İçecek' },
+    { keywords: ['vitamini', 'takviye', 'kapsül', 'şurup', 'macun', 'ilaç', 'bandaj', 'tansiyon', 'ateş ölçer', 'maske tıbbi', 'sağlık'], category: 'Sağlık' },
+    { keywords: ['araba', 'otomobil', 'tekerlek', 'lastik', 'motor yağı', 'motosiklet', 'kask', 'oto aksesuar', 'araç', 'navigasyon', 'far'], category: 'Otomotiv' },
+    { keywords: ['kedi', 'köpek', 'kuş', 'balık', 'kemirgen', 'pet mama', 'kedi kumu', 'tasma', 'kafes', 'akvaryum', 'evcil hayvan'], category: 'Pet Shop' },
+    { keywords: ['bahçe', 'çiçek', 'toprak', 'saksı', 'hortum', 'çim', 'yapı', 'boya duvar', 'alçı', 'çimento', 'alet', 'tornavida', 'matkap', 'testere', 'inşaat'], category: 'Bahçe & Yapı' },
 ];
 
 // Mağaza tespiti
@@ -113,13 +120,18 @@ function initFirebase() {
     return getFirestore();
 }
 
-// ─── OpenRouter AI ───────────────────────────────────────────────────────────
+// ─── AI Config ───────────────────────────────────────────────────────────────
+// AI_ENABLED=true olmadığı sürece Gemini çağrısı yapılmaz, keyword tabanlı
+// fallback kullanılır. İleride AI açmak için GitHub Actions secret olarak
+// AI_ENABLED=true eklemek yeterlidir.
 
 function getGeminiKey() {
-    // @google/genai SDK Google endpoint kullanır — sadece GEMINI_API_KEY çalışır.
-    // OpenRouter ayrı bir endpoint gerektirir (fetch tabanlı) — SDK ile çalışmaz.
+    if (process.env.AI_ENABLED !== 'true') return null;
     const key = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
-    if (!key) throw new Error('GEMINI_API_KEY env değişkeni eksik. .env dosyasını kontrol et.');
+    if (!key) {
+        console.warn('⚠️  AI_ENABLED=true ama GEMINI_API_KEY eksik — AI devre dışı bırakıldı.');
+        return null;
+    }
     return key;
 }
 
@@ -171,7 +183,7 @@ async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, me
 
     GÖREV KURALLARI:
     1. SANİTİZE BAŞLIK (title): Paylaşılan başlıkta "Son 6 Ayın En Düşük Fiyatı", "Sepette %20 İndirim", "Fırsat Ürünü" gibi pazarlama sloganlarını TEMİZLE. Sadece gerçek ÜRÜN ADI ve MODELİNİ (varsa Marka ile) döndür. Örn: "Philips MG3710/15 Tıraş Makinesi".
-    2. KATEGORİ TESPİTİ: Ürünü analiz et ve şu kategorilerden EN UYGUN olanı seç: [Teknoloji, Giyim, Kozmetik, Ev, Market, Bebek, Sağlık, Kitap, Spor, Pet, Oto].
+    2. KATEGORİ TESPİTİ: Ürünü analiz et ve şu kategorilerden EN UYGUN olanı seç: [Teknoloji, Beyaz Eşya, Giyim & Moda, Ayakkabı & Çanta, Ev & Yaşam, Mobilya & Dekorasyon, Spor & Outdoor, Kozmetik & Bakım, Süpermarket, Anne & Bebek, Kitap & Kırtasiye, Oyun & Oyuncak, Seyahat, Yemek & İçecek, Sağlık, Otomotiv, Pet Shop, Bahçe & Yapı]. SADECE bu listeden birini yaz, başka bir şey yazma.
     3. TEKNİK ANALİZ: Sadece başlığı süsleme. Ürünün segmentindeki yerini, malzeme kalitesini veya kullanım amacını teknik bir ciddiyetle ele al.
     4. BİLİRKİŞİ TONU: Bir pazarlamacı gibi değil, o alanda uzman bir bilirkişi gibi konuş.
     5. FOMO PUANI (aiFomoScore): Fırsatın gerçekçiliğini 1-10 arası puanla.
@@ -204,23 +216,42 @@ async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, me
         const jsonStr = jsonMatch ? jsonMatch[0] : text;
         const aiData = JSON.parse(jsonStr.trim());
 
-        // Kategori Map Uygula
+        // AI eski/kısaltılmış isim döndürdüyse doğru uygulama ismine çevir
         const CATEGORY_MAPPING = {
             "Elektronik": "Teknoloji",
             "Cep Telefonu": "Teknoloji",
             "Bilgisayar": "Teknoloji",
-            "Mutfak": "Ev",
-            "Ev Aletleri": "Ev",
-            "Giyim & Ayakkabı": "Giyim",
-            "Süpermarket": "Market",
-            "Anne & Bebek": "Bebek",
-            "Otomotiv & Motosiklet": "Oto",
-            "Kitap & Kırtasiye": "Kitap",
-            "Kozmetik & Kişisel Bakım": "Kozmetik",
-            "Spor & Outdoor": "Spor",
-            "Pet Shop": "Pet"
+            "Mutfak": "Ev & Yaşam",
+            "Ev Aletleri": "Beyaz Eşya",
+            "Ev": "Ev & Yaşam",
+            "Giyim": "Giyim & Moda",
+            "Giyim & Ayakkabı": "Giyim & Moda",
+            "Ayakkabı": "Ayakkabı & Çanta",
+            "Kozmetik": "Kozmetik & Bakım",
+            "Kozmetik & Kişisel Bakım": "Kozmetik & Bakım",
+            "Market": "Süpermarket",
+            "Bebek": "Anne & Bebek",
+            "Kitap": "Kitap & Kırtasiye",
+            "Oyuncak": "Oyun & Oyuncak",
+            "Spor": "Spor & Outdoor",
+            "Pet": "Pet Shop",
+            "Oto": "Otomotiv",
+            "Otomotiv & Motosiklet": "Otomotiv",
+            "Bahçe": "Bahçe & Yapı",
+            "Mobilya": "Mobilya & Dekorasyon",
+            "Seyahat & Turizm": "Seyahat",
+            "Yemek": "Yemek & İçecek",
         };
-        const finalCategory = CATEGORY_MAPPING[aiData.category] || aiData.category || detectCategory(productTitle);
+
+        const VALID_APP_CATEGORIES = new Set([
+            'Teknoloji', 'Beyaz Eşya', 'Giyim & Moda', 'Ayakkabı & Çanta',
+            'Ev & Yaşam', 'Mobilya & Dekorasyon', 'Spor & Outdoor', 'Kozmetik & Bakım',
+            'Süpermarket', 'Anne & Bebek', 'Kitap & Kırtasiye', 'Oyun & Oyuncak',
+            'Seyahat', 'Yemek & İçecek', 'Sağlık', 'Otomotiv', 'Pet Shop', 'Bahçe & Yapı',
+        ]);
+
+        const mapped = CATEGORY_MAPPING[aiData.category] || aiData.category;
+        const finalCategory = VALID_APP_CATEGORIES.has(mapped) ? mapped : detectCategory(productTitle);
 
         return {
             title: aiData.title || productTitle,
@@ -242,7 +273,7 @@ async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, me
  * AI to generate push notifications using Google SDK
  */
 async function generatePushNotifications(apiKey, productTitle, discountPercent) {
-    if (discountPercent < 10) return [];
+    if (!apiKey || discountPercent < 10) return [];
 
     const genAI = new GoogleGenAI({ apiKey });
     const prompt = `Şu e-ticaret ürünü için 3 farklı Push Bildirimi oluştur (Kısa, Mizahi, FOMO):
@@ -446,17 +477,20 @@ async function fetchProductDetails(product) {
         }
 
         // ── Sonlanmış İndirim Kontrolü ──────────────────────────────────
+        // Sadece buton metnine veya çok spesifik sayfa ifadelerine bak.
+        // Geniş "wholeText.includes('bitti')" kullanma — yanlış pozitif üretir.
         let isExpired = false;
-        const buttonText = button.text().toLowerCase();
+        const buttonText = button.text().toLowerCase().trim();
+
+        const expiredButtonPhrases = ['tükendi', 'sonlandı', 'indirim bitti', 'stok yok', 'satışa kapalı', 'kampanya bitti'];
+        const isExpiredButton = expiredButtonPhrases.some(p => buttonText === p || buttonText.startsWith(p));
+
+        // Sayfa metninde yalnızca çok özgün tam cümleler ara
         const wholeText = $('body').text().toLowerCase();
-        
-        if (
-            buttonText.includes('tükendi') ||
-            buttonText.includes('sonlandı') ||
-            buttonText.includes('bitti') ||
-            wholeText.includes('bu fırsat sonlandı') ||
-            wholeText.includes('stokta yok')
-        ) {
+        const expiredPagePhrases = ['bu fırsat sonlandı', 'bu indirim sona erdi', 'bu kampanya sona erdi', 'fırsat sona erdi'];
+        const isExpiredPage = expiredPagePhrases.some(p => wholeText.includes(p));
+
+        if (isExpiredButton || isExpiredPage) {
             isExpired = true;
         }
 
@@ -516,7 +550,7 @@ function detectCategory(title) {
     for (const { keywords, category } of CATEGORY_MAP) {
         if (keywords.some(kw => lower.includes(kw))) return category;
     }
-    return 'Ev, Yaşam & Mutfak'; // default fallback if everything else fails
+    return 'Ev & Yaşam'; // default fallback if everything else fails
 }
 
 // ─── QUOTA OPTIMIZATION: Batch Check ─────────────────────────────────────────
@@ -557,7 +591,11 @@ async function main() {
     console.log('🏗️  Servisler başlatılıyor...');
     const db = initFirebase();
     const aiKey = getGeminiKey();
-    console.log('✅ Servisler hazır.');
+    if (aiKey) {
+        console.log('✅ Servisler hazır. (AI: AÇIK)');
+    } else {
+        console.log('✅ Servisler hazır. (AI: KAPALI — keyword tabanlı kategori kullanılıyor)');
+    }
     // 1. Ürün listesini çek (onual.com/fiyat/)
     const allProducts = await fetchProductList();
 
@@ -680,12 +718,18 @@ async function main() {
             // Tekrar aktif etmek için bu satırı silin ve aşağıdaki generatePushNotifications bloğunu geri açın
             let pushNotifications = [];
 
+            // Expired olarak tespit edilen ilanı yayınlama — atla
+            if (details.isExpired) {
+                console.log(`   ⏭️  İndirim sona ermiş, atlanıyor: ${product.id}`);
+                continue;
+            }
+
             // Firebase'e kaydet
             const cleanedTitle = cleanProductTitle(details.title || product.title);
             const discountData = {
                 title: (aiData.title || cleanedTitle).substring(0, 200),
                 brand: store.name || 'Mağaza',
-                category: aiData.category || 'Ev, Yaşam & Mutfak',
+                category: aiData.category || 'Ev & Yaşam',
                 description: aiData.description || '',
                 link: storeLink,
                 originalStoreLink: storeLink,
@@ -698,7 +742,7 @@ async function main() {
                 affiliateLinkUpdated: false,
                 originalSource: 'onual.com',
                 storeName: store.name,
-                status: details.isExpired ? 'İndirim Bitti' : 'aktif', // 'active' yerine 'aktif' kullanıyoruz (Panel uyumu için)
+                status: 'aktif',
                 telegramMessageId: `onual_${product.id}`,
                 pushNotifications: pushNotifications, // Array of AI generated notifications
                 lastPriceCheck: FieldValue.serverTimestamp(), // Fiyat takibi için başlangıç zamanı

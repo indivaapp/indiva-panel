@@ -19,7 +19,6 @@ const VERCEL_API_URL = 'https://indiva-proxy.vercel.app/api/akakce-deals';
 export async function fetchAkakceDeals(
     onProgress?: (step: string) => void
 ): Promise<AkakceProduct[]> {
-    console.log('📰 Akakce fırsatları çekiliyor...');
     onProgress?.('Akakce sayfası yükleniyor...');
 
     try {
@@ -53,12 +52,10 @@ export async function fetchAkakceDeals(
             fetchedAt: now,
         }));
 
-        console.log(`✅ ${products.length} ürün bulundu`);
         onProgress?.(`${products.length} ürün bulundu`);
 
         return products;
     } catch (error: any) {
-        console.error('Akakce fetch hatası:', error);
         throw new Error(`Akakce verileri çekilemedi: ${error.message}`);
     }
 }

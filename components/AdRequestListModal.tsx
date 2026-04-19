@@ -18,8 +18,8 @@ const AdRequestListModal: React.FC<AdRequestListModalProps> = ({ onClose }) => {
         try {
             const data = await getAdRequests();
             setRequests(data);
-        } catch (error) {
-            console.error("Error fetching ad requests:", error);
+        } catch {
+            // hata - yükleme başarısız
         } finally {
             setIsLoading(false);
         }
@@ -36,8 +36,7 @@ const AdRequestListModal: React.FC<AdRequestListModalProps> = ({ onClose }) => {
             if (selectedRequest && selectedRequest.id === id) {
                 setSelectedRequest({ ...selectedRequest, status });
             }
-        } catch (error) {
-            console.error("Update failed", error);
+        } catch {
             alert("Durum güncellenemedi.");
         }
     };

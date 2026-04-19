@@ -16,7 +16,9 @@ export type ViewType =
     | 'editDeal'          // Fırsat düzenleme sayfası
     | 'affiliateLinks'    // Affiliate link yönetim sayfası
     | 'autoDiscovery'     // Otomatik keşif sayfası (Tinder-style)
-    | 'shareCapture';     // Ekran görüntüsü paylaşım overlay'i
+    | 'shareCapture'      // Ekran görüntüsü paylaşım overlay'i
+    | 'addDiscount'       // Yeni indirim ekleme formu
+    | 'affiliateBot';     // Affiliate link otomasyon botu
 
 // Using the actual Firestore Timestamp type for better integration
 export type FirestoreTimestamp = Timestamp;

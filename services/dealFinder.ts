@@ -1,6 +1,7 @@
 
 import type { Discount } from '../types';
 import { uploadToImgbb } from './imgbb';
+import { CACHE_TTL, RATE_LIMIT_INTERVAL, TIMEOUT_DEFAULT, TIMEOUT_IMAGE_UPLOAD, TIMEOUT_IP_BLOCK, TIMEOUT_LONG, TIMEOUT_SHORT } from '../constants/timeouts';
 
 // ===== CACHE SİSTEMİ =====
 // Gereksiz istekleri azaltmak için memory cache (10 dakika TTL)
@@ -12,7 +13,8 @@ interface CacheEntry<T> {
 }
 
 const dealCache = new Map<string, CacheEntry<ScrapedDeal[]>>();
-const CACHE_DURATION = 10 * 60 * 1000; // 10 dakika
+const CACHE_DURATION = CACHE_TTL;
+const CACHE_MAX_SIZE = 20; // Maksimum cache girdisi
 
 /**
  * Cache'den veri al veya yeni veri çek
@@ -20,7 +22,6 @@ const CACHE_DURATION = 10 * 60 * 1000; // 10 dakika
 function getCachedData(key: string): ScrapedDeal[] | null {
     const cached = dealCache.get(key);
     if (cached && Date.now() < cached.expiresAt) {
-        console.log(`📦 Cache'den ${cached.data.length} fırsat döndürülüyor (${key})`);
         return cached.data;
     }
     // Süresi dolmuş cache'i temizle
@@ -31,16 +32,27 @@ function getCachedData(key: string): ScrapedDeal[] | null {
 }
 
 /**
- * Veriyi cache'e kaydet
+ * Veriyi cache'e kaydet (boyut ve TTL limiti ile)
  */
 function setCacheData(key: string, data: ScrapedDeal[]): void {
     const now = Date.now();
+
+    // Boyut limitini aş → en eski girdiyi sil
+    if (dealCache.size >= CACHE_MAX_SIZE && !dealCache.has(key)) {
+        const oldestKey = dealCache.keys().next().value;
+        if (oldestKey) dealCache.delete(oldestKey);
+    }
+
+    // Süresi dolmuş tüm girdileri temizle
+    for (const [k, v] of dealCache) {
+        if (now >= v.expiresAt) dealCache.delete(k);
+    }
+
     dealCache.set(key, {
         data,
         timestamp: now,
         expiresAt: now + CACHE_DURATION
     });
-    console.log(`💾 ${data.length} fırsat cache'lendi (${key})`);
 }
 
 /**
@@ -48,14 +60,13 @@ function setCacheData(key: string, data: ScrapedDeal[]): void {
  */
 export function clearDealCache(): void {
     dealCache.clear();
-    console.log('🗑️ Cache temizlendi');
 }
 
 // ===== RATE LIMITING =====
 // IP engellemesini önlemek için istekler arası bekleme
 
 let lastRequestTime = 0;
-const MIN_REQUEST_INTERVAL = 2000; // 2 saniye minimum bekleme
+const MIN_REQUEST_INTERVAL = RATE_LIMIT_INTERVAL;
 
 /**
  * Rate limiting ile bekleme
@@ -66,7 +77,6 @@ async function waitForRateLimit(): Promise<void> {
 
     if (timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
         const waitTime = MIN_REQUEST_INTERVAL - timeSinceLastRequest;
-        console.log(`⏳ Rate limit: ${waitTime}ms bekleniyor...`);
         await new Promise(r => setTimeout(r, waitTime));
     }
 
@@ -186,7 +196,7 @@ const VERCEL_PROXY_URL = 'https://indiva-proxy.vercel.app/api/scrape';
 /**
  * Timeout ile fetch
  */
-async function fetchWithTimeout(url: string, options: RequestInit = {}, timeout = 20000): Promise<Response> {
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeout = TIMEOUT_DEFAULT): Promise<Response> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -215,26 +225,21 @@ async function fetchWithProxy(targetUrl: string, retryCount = 0): Promise<string
             // Cache busting için timestamp ekle
             const timestamp = Date.now();
             const vercelUrl = `${VERCEL_PROXY_URL}?action=list&_t=${timestamp}`;
-            console.log('Vercel proxy deneniyor...');
-
             const response = await fetchWithTimeout(vercelUrl, {
                 headers: {
                     'Accept': 'application/json',
                     'Cache-Control': 'no-cache',
                 }
-            }, 30000); // Daha uzun timeout
+            }, TIMEOUT_LONG);
 
             if (response.ok) {
                 const json = await response.json();
                 if (json.success && json.deals && json.deals.length > 0) {
-                    console.log(`Vercel proxy başarılı: ${json.deals.length} fırsat`);
                     return JSON.stringify(json);
                 }
-            } else {
-                console.log(`Vercel proxy HTTP ${response.status}, CORS proxy'lere geçiliyor...`);
             }
-        } catch (e: any) {
-            console.log('Vercel proxy hatası:', e.message);
+        } catch {
+            // Vercel proxy başarısız, CORS proxy'lere geçiliyor
         }
     }
 
@@ -249,7 +254,7 @@ async function fetchWithProxy(targetUrl: string, retryCount = 0): Promise<string
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 },
-            }, 20000);
+            }, TIMEOUT_DEFAULT);
 
             if (response.ok) {
                 const data = await response.text();
@@ -259,7 +264,6 @@ async function fetchWithProxy(targetUrl: string, retryCount = 0): Promise<string
                     try {
                         const json = JSON.parse(data);
                         if (json.contents && json.contents.length > 500) {
-                            console.log(`Proxy ${i + 1} (allorigins) başarılı`);
                             return json.contents;
                         }
                     } catch {
@@ -272,7 +276,6 @@ async function fetchWithProxy(targetUrl: string, retryCount = 0): Promise<string
                     try {
                         const json = JSON.parse(data);
                         if (json.body && json.body.length > 500) {
-                            console.log(`Proxy ${i + 1} (cors.lol) başarılı`);
                             return json.body;
                         }
                     } catch {
@@ -282,7 +285,6 @@ async function fetchWithProxy(targetUrl: string, retryCount = 0): Promise<string
 
                 // Diğer proxy'ler direkt HTML dönüyor
                 if (data && data.length > 500) {
-                    console.log(`Proxy ${i + 1} başarılı`);
                     return data;
                 }
             }
@@ -302,12 +304,10 @@ async function fetchWithProxy(targetUrl: string, retryCount = 0): Promise<string
 
     // Tüm proxy'ler başarısız olduysa, bir kez daha dene
     if (retryCount < maxRetries) {
-        console.log(`Retry ${retryCount + 1}/${maxRetries}...`);
         await new Promise(r => setTimeout(r, 1000));
         return fetchWithProxy(targetUrl, retryCount + 1);
     }
 
-    console.error('Tüm proxy denemeleri başarısız:', errors);
     throw lastError || new Error('Tüm proxy servisleri başarısız oldu. Lütfen birkaç dakika sonra tekrar deneyin.');
 }
 
@@ -325,16 +325,12 @@ const resolvedLinksCache = new Map<string, string>();
 export async function resolveOnuAlLink(shortLink: string): Promise<string> {
     // Cache kontrolü
     if (resolvedLinksCache.has(shortLink)) {
-        console.log(`📋 Cache'den link: ${resolvedLinksCache.get(shortLink)!.substring(0, 50)}...`);
         return resolvedLinksCache.get(shortLink)!;
     }
 
-    // onu.al linki değilse direkt döndür
     if (!shortLink.includes('onu.al')) {
         return shortLink;
     }
-
-    console.log(`🔗 Link çözümleniyor: ${shortLink}`);
 
     try {
         // ADIM 1: onu.al kısa linkinden onual.com/fiyat/... ara sayfasını al
@@ -342,10 +338,9 @@ export async function resolveOnuAlLink(shortLink: string): Promise<string> {
 
         const response = await fetchWithTimeout(proxyUrl, {
             headers: { 'Accept': 'application/json' }
-        }, 10000);
+        }, TIMEOUT_SHORT);
 
         if (!response.ok) {
-            console.warn(`Link çözümleme başarısız: ${shortLink}`);
             return shortLink;
         }
 
@@ -362,8 +357,7 @@ export async function resolveOnuAlLink(shortLink: string): Promise<string> {
             const rawUrl = butonIdMatch[1];
             const storeUrl = extractFinalUrl(rawUrl); // Redirect URL'yi decode et
             if (isProductUrl(rawUrl)) {
-                console.log(`✅ id="buton" ile çözümlendi: ${storeUrl.substring(0, 50)}...`);
-                resolvedLinksCache.set(shortLink, storeUrl);
+                    resolvedLinksCache.set(shortLink, storeUrl);
                 return storeUrl;
             }
         }
@@ -375,7 +369,6 @@ export async function resolveOnuAlLink(shortLink: string): Promise<string> {
                 const hrefMatch = match.match(/href=["']([^"']+)["']/i);
                 if (hrefMatch && isProductUrl(hrefMatch[1])) {
                     const storeUrl = extractFinalUrl(hrefMatch[1]);
-                    console.log(`✅ class="btn" ile çözümlendi: ${storeUrl.substring(0, 50)}...`);
                     resolvedLinksCache.set(shortLink, storeUrl);
                     return storeUrl;
                 }
@@ -388,7 +381,6 @@ export async function resolveOnuAlLink(shortLink: string): Promise<string> {
             for (const match of buttonTextMatch) {
                 const hrefMatch = match.match(/href=["']([^"']+)["']/i);
                 if (hrefMatch && isProductUrl(hrefMatch[1])) {
-                    console.log(`✅ Buton metni ile çözümlendi: ${hrefMatch[1].substring(0, 50)}...`);
                     resolvedLinksCache.set(shortLink, hrefMatch[1]);
                     return hrefMatch[1];
                 }
@@ -409,7 +401,6 @@ export async function resolveOnuAlLink(shortLink: string): Promise<string> {
                 const storeUrl = match[1];
                 // onu.al linklerini atla
                 if (!storeUrl.includes('onu.al') && !storeUrl.includes('onual.com')) {
-                    console.log(`✅ Mağaza pattern ile çözümlendi: ${storeUrl.substring(0, 50)}...`);
                     resolvedLinksCache.set(shortLink, storeUrl);
                     return storeUrl;
                 }
@@ -419,14 +410,12 @@ export async function resolveOnuAlLink(shortLink: string): Promise<string> {
         // 5. Son çare: meta refresh veya window.location
         const metaRefreshMatch = html.match(/url=([^"'\s>]+)/i);
         if (metaRefreshMatch && isProductUrl(metaRefreshMatch[1])) {
-            console.log(`✅ Meta refresh ile çözümlendi: ${metaRefreshMatch[1].substring(0, 50)}...`);
             resolvedLinksCache.set(shortLink, metaRefreshMatch[1]);
             return metaRefreshMatch[1];
         }
 
         const jsRedirectMatch = html.match(/(?:window\.location|location\.href)\s*=\s*['"]([^'"]+)['"]/i);
         if (jsRedirectMatch && isProductUrl(jsRedirectMatch[1])) {
-            console.log(`✅ JS redirect ile çözümlendi: ${jsRedirectMatch[1].substring(0, 50)}...`);
             resolvedLinksCache.set(shortLink, jsRedirectMatch[1]);
             return jsRedirectMatch[1];
         }
@@ -434,15 +423,12 @@ export async function resolveOnuAlLink(shortLink: string): Promise<string> {
         // Çözümlenemedi, en azından onual.com linkini döndür (onu.al'dan daha iyi)
         const onualLinkMatch = html.match(/href=["'](https?:\/\/onual\.com\/fiyat\/[^"']+)["']/i);
         if (onualLinkMatch) {
-            console.log(`⚠️ Sadece OnuAl linki bulundu: ${onualLinkMatch[1].substring(0, 50)}...`);
             // Bu linki de fetch edip gerçek mağaza linkini çıkarmayı dene
             return await resolveOnuAlProductPage(onualLinkMatch[1], shortLink);
         }
 
-        console.warn(`❌ Link çözümlenemedi: ${shortLink}`);
         return shortLink;
-    } catch (error) {
-        console.warn(`❌ Link çözümleme hatası: ${shortLink}`, error);
+    } catch {
         return shortLink;
     }
 }
@@ -452,12 +438,11 @@ export async function resolveOnuAlLink(shortLink: string): Promise<string> {
  */
 async function resolveOnuAlProductPage(onualPageUrl: string, originalShortLink: string): Promise<string> {
     try {
-        console.log(`🔄 OnuAl ara sayfası fetch ediliyor: ${onualPageUrl.substring(0, 50)}...`);
 
         const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(onualPageUrl)}`;
         const response = await fetchWithTimeout(proxyUrl, {
             headers: { 'Accept': 'application/json' }
-        }, 10000);
+        }, TIMEOUT_SHORT);
 
         if (!response.ok) {
             return originalShortLink;
@@ -471,7 +456,6 @@ async function resolveOnuAlProductPage(onualPageUrl: string, originalShortLink: 
             html.match(/href=[\"']([^\"']+)[\"'][^>]*id=[\"']buton[\"']/i);
         if (butonMatch && isProductUrl(butonMatch[1])) {
             const storeUrl = extractFinalUrl(butonMatch[1]);
-            console.log(`✅ Ara sayfadan çözümlendi: ${storeUrl.substring(0, 50)}...`);
             resolvedLinksCache.set(originalShortLink, storeUrl);
             return storeUrl;
         }
@@ -489,7 +473,6 @@ async function resolveOnuAlProductPage(onualPageUrl: string, originalShortLink: 
             for (const match of matches) {
                 const storeUrl = match[1];
                 if (!storeUrl.includes('onu.al') && !storeUrl.includes('onual.com')) {
-                    console.log(`✅ Ara sayfadan pattern ile çözümlendi: ${storeUrl.substring(0, 50)}...`);
                     resolvedLinksCache.set(originalShortLink, storeUrl);
                     return storeUrl;
                 }
@@ -499,8 +482,7 @@ async function resolveOnuAlProductPage(onualPageUrl: string, originalShortLink: 
         // OnuAl sayfasını döndür (en azından kısa linkten daha iyi)
         resolvedLinksCache.set(originalShortLink, onualPageUrl);
         return onualPageUrl;
-    } catch (error) {
-        console.warn(`Ara sayfa çözümleme hatası:`, error);
+    } catch {
         return originalShortLink;
     }
 }
@@ -545,7 +527,6 @@ function extractFinalUrl(url: string): string {
             const encodedUrl = urlObj.searchParams.get('url');
             if (encodedUrl) {
                 const decoded = decodeURIComponent(encodedUrl);
-                console.log(`🔓 zxro.com URL decode edildi: ${decoded.substring(0, 50)}...`);
                 return decoded;
             }
         }
@@ -558,8 +539,8 @@ function extractFinalUrl(url: string): string {
                 return decoded;
             }
         }
-    } catch (e) {
-        console.warn('URL decode hatası:', e);
+    } catch {
+        // URL decode başarısız
     }
 
     return url;
@@ -569,8 +550,6 @@ function extractFinalUrl(url: string): string {
  * Birden fazla linki paralel olarak çözümle (max 5 aynı anda)
  */
 async function resolveLinksInBatch(deals: ScrapedDeal[]): Promise<ScrapedDeal[]> {
-    console.log(`🔗 ${deals.length} ürün linki çözümleniyor...`);
-
     // Paralel işlem için batch'lere böl (5'erli)
     const batchSize = 5;
     const resolvedDeals = [...deals];
@@ -599,9 +578,6 @@ async function resolveLinksInBatch(deals: ScrapedDeal[]): Promise<ScrapedDeal[]>
         }
     }
 
-    const resolvedCount = resolvedDeals.filter(d => d.productLink && !d.productLink.includes('onu.al')).length;
-    console.log(`✅ ${resolvedCount}/${deals.length} link çözümlendi`);
-
     return resolvedDeals;
 }
 
@@ -621,8 +597,6 @@ export async function fetchFromTelegram(channel: TelegramChannel = TELEGRAM_CHAN
             return cachedDeals;
         }
     }
-
-    console.log(`📱 ${channel.name} kanalından veri çekiliyor...`);
 
     // 2. Rate limiting uygula
     await waitForRateLimit();
@@ -659,7 +633,6 @@ export async function fetchFromTelegram(channel: TelegramChannel = TELEGRAM_CHAN
         const successfulProxy = telegramProxies[lastSuccessfulProxyIndex];
         telegramProxies.splice(lastSuccessfulProxyIndex, 1);
         telegramProxies.unshift(successfulProxy);
-        console.log(`🎯 Son başarılı proxy öncelikli: ${successfulProxy.name}`);
     }
 
     let lastError: Error | null = null;
@@ -670,8 +643,6 @@ export async function fetchFromTelegram(channel: TelegramChannel = TELEGRAM_CHAN
         const proxy = telegramProxies[i];
 
         try {
-            console.log(`🔄 Proxy ${i + 1}/${telegramProxies.length} (${proxy.name}) deneniyor...`);
-
             const response = await fetchWithTimeout(proxy.url, {
                 headers: {
                     'Accept': 'application/json, text/html, */*',
@@ -681,7 +652,6 @@ export async function fetchFromTelegram(channel: TelegramChannel = TELEGRAM_CHAN
             // IP engelleme kontrolü
             if (isBlockedResponse(response.status)) {
                 const errorMsg = `Proxy ${proxy.name}: IP engellendi (HTTP ${response.status})`;
-                console.warn(`⚠️ ${errorMsg}`);
                 errors.push(errorMsg);
 
                 // Bir sonraki proxy'e geçmeden önce biraz bekle
@@ -701,7 +671,6 @@ export async function fetchFromTelegram(channel: TelegramChannel = TELEGRAM_CHAN
 
             // İçerikte engelleme işareti var mı kontrol et
             if (isBlockedResponse(response.status, html)) {
-                console.warn(`⚠️ Proxy ${proxy.name}: İçerikte engelleme tespit edildi`);
                 errors.push(`Proxy ${proxy.name}: İçerikte engelleme tespit edildi`);
                 continue;
             }
@@ -710,7 +679,6 @@ export async function fetchFromTelegram(channel: TelegramChannel = TELEGRAM_CHAN
             const deals = parseTelegramHtml(html);
 
             if (deals.length === 0) {
-                console.warn(`⚠️ Proxy ${proxy.name}: Fırsat bulunamadı, sonraki proxy deneniyor...`);
                 continue;
             }
 
@@ -726,16 +694,12 @@ export async function fetchFromTelegram(channel: TelegramChannel = TELEGRAM_CHAN
 
             // Başarılı proxy'yi hatırla
             lastSuccessfulProxyIndex = i;
-
-            console.log(`✅ Proxy ${proxy.name} başarılı: ${deals.length} fırsat`);
             return dealsWithChannel;
 
         } catch (error: any) {
             const errorMsg = error.name === 'AbortError'
                 ? `Proxy ${proxy.name}: Timeout`
                 : `Proxy ${proxy.name}: ${error.message}`;
-
-            console.warn(`⚠️ ${errorMsg}`);
             errors.push(errorMsg);
             lastError = error;
         }
@@ -746,14 +710,11 @@ export async function fetchFromTelegram(channel: TelegramChannel = TELEGRAM_CHAN
         }
     }
 
-    // 6. Tüm proxy'ler başarısız oldu
-    console.error('❌ Tüm proxy denemeleri başarısız:', errors);
-
     // IP engelleme tespit edildiyse özel hata döndür
     if (errors.some(e => e.includes('engellen'))) {
         throw createBlockedError(
             '⚠️ IP engelleme tespit edildi. Lütfen 5-10 dakika bekleyip tekrar deneyin veya VPN kullanın.',
-            300000 // 5 dakika
+            TIMEOUT_IP_BLOCK
         );
     }
 
@@ -864,8 +825,8 @@ function parseTelegramHtml(html: string): ScrapedDeal[] {
                 scrapedAt: new Date(),
                 postedAt
             });
-        } catch (err) {
-            console.warn('Mesaj parse hatası:', err);
+        } catch {
+            // Mesaj parse hatası - devam et
         }
     });
 
@@ -876,7 +837,6 @@ function parseTelegramHtml(html: string): ScrapedDeal[] {
         return dateB - dateA; // Azalan sıralama (en yeni en üstte)
     });
 
-    console.log(`📱 Telegram'dan ${deals.length} fırsat bulundu (tarihe göre sıralı)`);
     return deals;
 }
 
@@ -895,8 +855,6 @@ export async function fetchDealsFromChannel(channelId: string, forceRefresh = fa
     try {
         return await fetchFromTelegram(channel, forceRefresh);
     } catch (error: any) {
-        console.error(`${channel.name} kanalından veri çekilemedi:`, error.message);
-
         // IP engelleme hatası mı kontrol et
         if (error.isIPBlocked) {
             throw error; // Orijinal hatayı ilet
@@ -917,10 +875,8 @@ export async function fetchAllChannels(): Promise<ScrapedDeal[]> {
         try {
             const deals = await fetchFromTelegram(channel);
             allDeals.push(...deals);
-            console.log(`✅ ${channel.name}: ${deals.length} fırsat`);
         } catch (error: any) {
             errors.push(`${channel.name}: ${error.message}`);
-            console.warn(`⚠️ ${channel.name} başarısız:`, error.message);
         }
     }
 
@@ -933,7 +889,6 @@ export async function fetchAllChannels(): Promise<ScrapedDeal[]> {
         index === self.findIndex(d => d.id === deal.id)
     );
 
-    console.log(`📊 Toplam: ${uniqueDeals.length} benzersiz fırsat`);
     return uniqueDeals;
 }
 
@@ -951,13 +906,12 @@ export async function fetchOnualDeals(channel?: TelegramChannel): Promise<Scrape
         if (telegramDeals.length > 0) {
             return telegramDeals;
         }
-    } catch (error: any) {
-        console.log('Telegram başarısız:', error.message);
+    } catch {
+        // Telegram başarısız, website'a düş
     }
 
     // 2. Yedek: OnuAl website'ı (sadece OnuAl kanalı için)
     if (targetChannel.id === 'onual') {
-        console.log('🌐 Website üzerinden deneniyor...');
         const targetUrl = 'https://onual.com/fiyat/';
 
         try {
@@ -968,7 +922,6 @@ export async function fetchOnualDeals(channel?: TelegramChannel): Promise<Scrape
                 try {
                     const json = JSON.parse(response);
                     if (json.success && json.deals && Array.isArray(json.deals)) {
-                        console.log(`Vercel proxy'den ${json.deals.length} fırsat alındı`);
                         return json.deals.map((deal: any) => ({
                             ...deal,
                             scrapedAt: new Date(),
@@ -983,8 +936,7 @@ export async function fetchOnualDeals(channel?: TelegramChannel): Promise<Scrape
             // CORS proxy HTML döndürüyor, parse et
             const deals = parseOnualHtml(response);
             return deals.map(deal => ({ ...deal, channelName: 'OnuAl' }));
-        } catch (error) {
-            console.error('OnuAl verileri çekilirken hata:', error);
+        } catch {
             throw new Error('Bağlantı hatası - Lütfen internet bağlantınızı kontrol edip tekrar deneyin.');
         }
     }
@@ -1192,8 +1144,7 @@ export async function fetchDealDetails(onualLink: string): Promise<DealDetails> 
         const brand = extractBrand(pageTitle);
 
         return { productLink, imageUrl, description, brand };
-    } catch (error) {
-        console.error('Detay bilgisi çekilirken hata:', error);
+    } catch {
         return { productLink: '' };
     }
 }
@@ -1245,31 +1196,25 @@ function extractBrand(title: string): string {
 export async function uploadImageFromUrl(imageUrl: string): Promise<{ downloadURL: string; deleteUrl: string } | null> {
     if (!imageUrl) return null;
 
-    console.log(`📷 Görsel yükleniyor: ${imageUrl.substring(0, 60)}...`);
-
     // 1. ÖNCELİKLİ: Vercel proxy endpoint'i (server-side, CORS yok)
     // Telegram CDN görselleri için bu yöntem gerekli
     try {
         const vercelEndpoint = `${VERCEL_PROXY_URL.replace('/scrape', '/image-upload')}?imageUrl=${encodeURIComponent(imageUrl)}`;
-        console.log('🔄 Vercel proxy deneniyor...');
-
         const response = await fetchWithTimeout(vercelEndpoint, {
             headers: { 'Accept': 'application/json' }
-        }, 45000); // 45 saniye timeout (görsel yükleme yavaş olabilir)
+        }, TIMEOUT_IMAGE_UPLOAD);
 
         if (response.ok) {
             const data = await response.json();
             if (data.success && data.downloadURL) {
-                console.log(`✅ Vercel proxy başarılı: ${data.downloadURL.substring(0, 50)}...`);
                 return {
                     downloadURL: data.downloadURL,
                     deleteUrl: data.deleteUrl || ''
                 };
             }
         }
-        console.log('⚠️ Vercel proxy başarısız, CORS proxy deneniyor...');
-    } catch (error: any) {
-        console.log(`⚠️ Vercel proxy hatası: ${error.message}, CORS proxy deneniyor...`);
+    } catch {
+        // Vercel proxy başarısız, CORS proxy'e düş
     }
 
     // 2. FALLBACK: CORS proxy üzerinden görseli çek (eski yöntem)
@@ -1284,7 +1229,6 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<{ downloadUR
                 if (response.ok) {
                     blob = await response.blob();
                     if (blob && blob.size > 1000) {
-                        console.log(`✅ CORS proxy ${i + 1} başarılı: ${Math.round(blob.size / 1024)}KB`);
                         break;
                     }
                 }
@@ -1303,13 +1247,11 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<{ downloadUR
         // Merkezi imgbb servisini kullan
         const result = await uploadToImgbb(file);
 
-        console.log(`✅ ImgBB yükleme başarılı: ${result.downloadURL.substring(0, 50)}...`);
         return {
             downloadURL: result.downloadURL,
             deleteUrl: result.deleteUrl,
         };
-    } catch (error: any) {
-        console.error(`❌ Görsel yükleme tamamen başarısız: ${error.message}`);
+    } catch {
         return null;
     }
 }

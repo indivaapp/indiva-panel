@@ -430,20 +430,146 @@ const AKAKCE_MARKETS: Record<string, string> = {
     'sok': 'https://www.akakce.com/brosurler/sok',
 };
 
+// ─── Ürün Sayfası: JSON-LD + OG Tag Çıkarma ──────────────────────────────────
+
+interface ProductScraped {
+    title: string;
+    brand: string;
+    newPrice: number;
+    oldPrice: number;
+    imageUrl: string;
+    resolvedUrl: string;
+}
+
+function parseFloat2(val: unknown): number {
+    if (!val) return 0;
+    const s = String(val).replace(/[^\d.,]/g, '');
+    // Turkish format: "1.299,00" → 1299
+    if (s.includes(',')) return parseFloat(s.replace(/\./g, '').replace(',', '.')) || 0;
+    return parseFloat(s) || 0;
+}
+
+function extractProductFromJsonLd(html: string): Partial<ProductScraped> {
+    const $ = cheerio.load(html);
+    let product: any = null;
+
+    $('script[type="application/ld+json"]').each((_, el) => {
+        if (product) return;
+        try {
+            const raw = $(el).html() || '';
+            const json = JSON.parse(raw);
+            const candidates = Array.isArray(json) ? json : json['@graph'] ? json['@graph'] : [json];
+            for (const item of candidates) {
+                if (item?.['@type'] === 'Product') { product = item; break; }
+            }
+        } catch {}
+    });
+
+    if (!product) return {};
+
+    // Title
+    const title: string = String(product.name || '').trim();
+
+    // Brand
+    let brand = '';
+    if (typeof product.brand === 'string') brand = product.brand;
+    else if (product.brand?.name) brand = String(product.brand.name);
+
+    // Image
+    let imageUrl = '';
+    if (typeof product.image === 'string') imageUrl = product.image;
+    else if (Array.isArray(product.image) && product.image.length > 0) imageUrl = String(product.image[0]);
+    else if (product.image?.url) imageUrl = String(product.image.url);
+
+    // Prices
+    let newPrice = 0, oldPrice = 0;
+    const offers = product.offers;
+    if (offers) {
+        if (offers['@type'] === 'AggregateOffer') {
+            newPrice = parseFloat2(offers.lowPrice);
+            oldPrice = parseFloat2(offers.highPrice);
+        } else {
+            newPrice = parseFloat2(offers.price);
+            // priceSpecification for original price
+            const specs: any[] = Array.isArray(offers.priceSpecification)
+                ? offers.priceSpecification : offers.priceSpecification ? [offers.priceSpecification] : [];
+            for (const spec of specs) {
+                const t = String(spec['@type'] || spec.priceType || '').toLowerCase();
+                if (t.includes('list') || t.includes('regular') || t.includes('suggested')) {
+                    oldPrice = parseFloat2(spec.price);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Old price from HTML (strikethrough) if JSON-LD didn't have it
+    if (oldPrice === 0 && newPrice > 0) {
+        const oldPriceSelectors = [
+            'del', 's.price', '.old-price', '.original-price', '.crossed-price',
+            '[class*="originalPrice"]', '[class*="oldPrice"]', '[class*="crossed"]',
+            '.product-old-price', '.prc-org', '.price-box del',
+        ];
+        for (const sel of oldPriceSelectors) {
+            const text = $(sel).first().text().replace(/[^\d.,]/g, '');
+            const val = parseFloat2(text);
+            if (val > newPrice) { oldPrice = val; break; }
+        }
+    }
+
+    return { title, brand, newPrice, oldPrice, imageUrl };
+}
+
+function extractFromOgTags(html: string): Partial<ProductScraped> {
+    const $ = cheerio.load(html);
+    const title = ($('meta[property="og:title"]').attr('content') || $('title').text() || '').trim();
+    const imageUrl = $('meta[property="og:image"]').attr('content') || '';
+    const priceStr = $('meta[property="product:price:amount"]').attr('content')
+        || $('meta[property="og:price:amount"]').attr('content') || '';
+    const newPrice = parseFloat2(priceStr);
+    // Clean title: remove " - Hepsiburada", " | Trendyol" etc.
+    const cleanedTitle = title.replace(/\s*[-|·|–]\s*(hepsiburada|trendyol|amazon|n11|gittigidiyor|morhipo)[^-|·]*$/gi, '').trim();
+    return { title: cleanedTitle, imageUrl, newPrice };
+}
+
+async function scrapeProduct(targetUrl: string): Promise<ProductScraped> {
+    const html = await fetchWithTimeout(targetUrl, 25000);
+    const jsonLd = extractProductFromJsonLd(html);
+    const og = extractFromOgTags(html);
+
+    const title = jsonLd.title || og.title || '';
+    const brand = jsonLd.brand || '';
+    const imageUrl = jsonLd.imageUrl || og.imageUrl || '';
+    const newPrice = jsonLd.newPrice || og.newPrice || 0;
+    const oldPrice = jsonLd.oldPrice || 0;
+
+    return { title, brand, newPrice, oldPrice, imageUrl, resolvedUrl: targetUrl };
+}
+
 /**
  * Main API Handler
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Handle CORS preflight
     if (req.method === 'OPTIONS') {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
         res.status(200).end();
         return;
     }
 
+    res.setHeader('Access-Control-Allow-Origin', '*');
+
     const { action, url, market } = req.query;
 
     try {
-        if (action === 'list' || !action) {
+        if (action === 'product' && url) {
+            // ─── Ürün sayfasından JSON-LD ile veri çek ───────────────────────
+            const targetUrl = Array.isArray(url) ? url[0] : url;
+            const product = await scrapeProduct(targetUrl);
+            res.status(200).json({ success: true, product });
+
+        } else if (action === 'list' || !action) {
             // Fetch main deals list
             const html = await fetchWithTimeout('https://onual.com/fiyat/');
             const deals = parseOnualHtml(html);

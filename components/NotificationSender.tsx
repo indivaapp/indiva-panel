@@ -55,7 +55,6 @@ const NotificationSender: React.FC<NotificationSenderProps> = ({ isAdmin }) => {
             const data = await getScheduledNotifications();
             setSchedules(data);
         } catch (e) {
-            console.error(e);
         } finally {
             setIsScheduleLoading(false);
         }
@@ -160,7 +159,6 @@ const NotificationSender: React.FC<NotificationSenderProps> = ({ isAdmin }) => {
             setSchImageUrl(null);
             fetchSchedules();
         } catch (e) {
-            console.error(e);
             alert("Program eklenirken hata oluştu.");
         } finally {
             setIsLoading(false);
@@ -173,7 +171,6 @@ const NotificationSender: React.FC<NotificationSenderProps> = ({ isAdmin }) => {
             setSchedules(prev => prev.map(s => s.id === id ? { ...s, isActive: !currentStatus } : s));
             await toggleScheduledNotification(id, !currentStatus);
         } catch (e) {
-            console.error(e);
             fetchSchedules(); // Revert on error
         }
     };
@@ -184,7 +181,6 @@ const NotificationSender: React.FC<NotificationSenderProps> = ({ isAdmin }) => {
             await deleteScheduledNotification(id);
             setSchedules(prev => prev.filter(s => s.id !== id));
         } catch (e) {
-            console.error(e);
         }
     };
 

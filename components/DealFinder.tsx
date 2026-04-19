@@ -1,10 +1,11 @@
 
-import React, { useState, useEffect } from 'react';
-import { collection, query, where, getDocs, doc, deleteDoc, updateDoc, orderBy, limit } from 'firebase/firestore';
+import React, { useState, useEffect, useRef } from 'react';
+import { collection, query, where, getDocs, doc, deleteDoc, updateDoc, addDoc, orderBy, limit, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 import type { ViewType } from '../types';
+import { isSystemEnabled } from '../utils/systemStatus';
 
-// ScrapedDeal tipi
+// ─── Tipler ──────────────────────────────────────────────────────────────────
 interface ScrapedDeal {
     id: string;
     title: string;
@@ -18,578 +19,478 @@ interface ScrapedDeal {
     createdAt?: any;
 }
 
-// Türkçe karakter düzeltme fonksiyonu
+interface AIAnalysisResult {
+    title: string;
+    cleanTitle: string;
+    newPrice: number;
+    oldPrice: number;
+    discountPercent: number;
+    category: string;
+    description: string;
+    aiFomoScore: number;
+    imageUrl: string;
+    storeName: string;
+    isValidDeal: boolean;
+    reason?: string;
+}
+
+// ─── Yardımcı Fonksiyonlar ────────────────────────────────────────────────────
 function fixTurkishChars(text: string): string {
     if (!text) return '';
-
-    // HTML entities decode
-    const htmlEntities: { [key: string]: string } = {
-        '&amp;': '&',
-        '&lt;': '<',
-        '&gt;': '>',
-        '&quot;': '"',
-        '&#39;': "'",
-        '&#x27;': "'",
-        '&nbsp;': ' ',
-        '&#8217;': "'",
-        '&#8211;': '-',
-        '&#8220;': '"',
-        '&#8221;': '"',
-    };
-
+    const htmlEntities: { [k: string]: string } = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'" };
     let result = text;
-    for (const [entity, char] of Object.entries(htmlEntities)) {
-        result = result.replace(new RegExp(entity, 'g'), char);
-    }
-
-    // Common Turkish character encoding fixes
-    const replacements: { [key: string]: string } = {
-        'Ä±': 'ı',
-        'Ä°': 'İ',
-        'ÅŸ': 'ş',
-        'Å': 'Ş',
-        'ÄŸ': 'ğ',
-        'Ä': 'Ğ',
-        'Ãœ': 'Ü',
-        'Ã¼': 'ü',
-        'Ã–': 'Ö',
-        'Ã¶': 'ö',
-        'Ã‡': 'Ç',
-        'Ã§': 'ç',
-        'â€™': "'",
-        'â€œ': '"',
-        'â€': '"',
-        'Ã‚': '',
-        'Ã¢': 'â',
-        '\u0000': '',
-    };
-
-    for (const [wrong, correct] of Object.entries(replacements)) {
-        result = result.replace(new RegExp(wrong, 'g'), correct);
-    }
-
-    // Fazla boşlukları temizle
-    result = result.replace(/\s+/g, ' ').trim();
-
-    return result;
+    for (const [e, c] of Object.entries(htmlEntities)) result = result.replace(new RegExp(e, 'g'), c);
+    return result.replace(/\s+/g, ' ').trim();
 }
 
-// Görülen ilanları localStorage'da sakla
 const SEEN_DEALS_KEY = 'indiva_seen_deal_ids';
+function getSeenDealIds() { try { return new Set(JSON.parse(localStorage.getItem(SEEN_DEALS_KEY) || '[]')); } catch { return new Set(); } }
+function markDealsAsSeen(ids: string[]) { try { const s = getSeenDealIds(); ids.forEach(id => s.add(id)); localStorage.setItem(SEEN_DEALS_KEY, JSON.stringify([...s].slice(-500))); } catch {} }
+function clearSeenDeals() { try { localStorage.removeItem(SEEN_DEALS_KEY); } catch {} }
 
-function getSeenDealIds(): Set<string> {
-    try {
-        const stored = localStorage.getItem(SEEN_DEALS_KEY);
-        return new Set(stored ? JSON.parse(stored) : []);
-    } catch {
-        return new Set();
-    }
+function detectStore(url: string): string {
+    if (url.includes('trendyol.com')) return 'Trendyol';
+    if (url.includes('hepsiburada.com')) return 'Hepsiburada';
+    if (url.includes('amazon.com.tr') || url.includes('amazon.com')) return 'Amazon';
+    if (url.includes('n11.com')) return 'n11';
+    if (url.includes('ciceksepeti.com')) return 'Çiçeksepeti';
+    if (url.includes('morhipo.com')) return 'Morhipo';
+    if (url.includes('teknosa.com')) return 'Teknosa';
+    if (url.includes('mediamarkt.com.tr')) return 'MediaMarkt';
+    if (url.includes('gittigidiyor.com')) return 'GittiGidiyor';
+    return 'Mağaza';
 }
 
-function markDealsAsSeen(dealIds: string[]): void {
-    try {
-        const seen = getSeenDealIds();
-        dealIds.forEach(id => seen.add(id));
-        // Son 500 görülen ilanı sakla (bellek tasarrufu)
-        const arr = [...seen].slice(-500);
-        localStorage.setItem(SEEN_DEALS_KEY, JSON.stringify(arr));
-    } catch {
-        // localStorage hatası
-    }
-}
-
-function clearSeenDeals(): void {
-    try {
-        localStorage.removeItem(SEEN_DEALS_KEY);
-    } catch {
-        // hata
-    }
-}
-
+// ─── Props ────────────────────────────────────────────────────────────────────
 interface DealFinderProps {
     isAdmin: boolean;
     setActiveView?: (view: ViewType) => void;
     setSelectedDeal?: (deal: any) => void;
+    startDealQueue?: (deals: ScrapedDeal[]) => void;
 }
 
-const DealFinder: React.FC<DealFinderProps> = ({ isAdmin, setActiveView, setSelectedDeal }) => {
-    // State
+// ─── Bileşen ──────────────────────────────────────────────────────────────────
+const DealFinder: React.FC<DealFinderProps> = ({ isAdmin, setActiveView, setSelectedDeal, startDealQueue }) => {
+    // Sekme: 'drafts' | 'analyzer'
+    const [activeTab, setActiveTab] = useState<'drafts' | 'analyzer'>('drafts');
+
+    // ── Taslak İlanlar ──
     const [deals, setDeals] = useState<ScrapedDeal[]>([]);
-    const [allDeals, setAllDeals] = useState<ScrapedDeal[]>([]); // Tüm ilanlar (filtre için)
+    const [allDeals, setAllDeals] = useState<ScrapedDeal[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [isFetching, setIsFetching] = useState(false);
-    const [isGeneratingAI, setIsGeneratingAI] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    const [successMessage, setSuccessMessage] = useState<string | null>(null);
+    const [showOnlyNew, setShowOnlyNew] = useState(true);
     const [editingDeal, setEditingDeal] = useState<ScrapedDeal | null>(null);
-    const [showOnlyNew, setShowOnlyNew] = useState(true); // Sadece yenileri göster
-    const [editForm, setEditForm] = useState({
-        title: '',
-        oldPrice: 0,
-        newPrice: 0,
-        link: ''
-    });
+    const [editForm, setEditForm] = useState({ title: '', oldPrice: 0, newPrice: 0, link: '' });
+    const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+    // ── Link Analiz (Arka Plan) ──
+    const [analyzerUrl, setAnalyzerUrl] = useState('');
+    const [isAddingToQueue, setIsAddingToQueue] = useState(false);
+    const [queueStatus, setQueueStatus] = useState<null | 'running' | 'done' | 'error'>(null);
+    const [queueError, setQueueError] = useState('');
+    const queueUnsubRef = useRef<(() => void) | null>(null);
 
-    // Sayfa yüklendiğinde ilanları çek
-    useEffect(() => {
-        loadDeals();
-    }, []);
+    useEffect(() => { loadDeals(); }, []);
 
-    // Firebase'den draft ilanları çek
+    const showMessage = (type: 'success' | 'error', text: string) => {
+        setMessage({ type, text });
+        setTimeout(() => setMessage(null), 4000);
+    };
+
+    // ── Taslak İlanları Yükle ──────────────────────────────────────────────────
     const loadDeals = async () => {
         setIsLoading(true);
-        setError(null);
-
         try {
-            const q = query(
-                collection(db, 'discounts'),
-                where('status', '==', 'draft'),
-                orderBy('createdAt', 'desc'),
-                limit(50)
-            );
-
-            const snapshot = await getDocs(q);
+            const q = query(collection(db, 'discounts'), where('status', '==', 'draft'), orderBy('createdAt', 'desc'), limit(50));
+            const snap = await getDocs(q);
             const seenIds = getSeenDealIds();
-
-            let fetchedDeals: ScrapedDeal[] = snapshot.docs.map(docSnap => {
-                const data = docSnap.data();
-                return {
-                    id: docSnap.id,
-                    title: fixTurkishChars(data.title || ''),
-                    newPrice: data.newPrice || 0,
-                    oldPrice: data.oldPrice || 0,
-                    link: data.link || '',
-                    imageUrl: data.imageUrl || '',
-                    storeName: data.storeName || 'Mağaza',
-                    status: data.status,
-                    needsReview: data.needsReview,
-                    createdAt: data.createdAt
-                };
+            const fetched: ScrapedDeal[] = snap.docs.map(d => {
+                const data = d.data();
+                return { id: d.id, title: fixTurkishChars(data.title || ''), newPrice: data.newPrice || 0, oldPrice: data.oldPrice || 0, link: data.link || '', imageUrl: data.imageUrl, storeName: data.storeName || 'Mağaza', status: data.status, needsReview: data.needsReview, createdAt: data.createdAt };
             });
-
-            setAllDeals(fetchedDeals);
-
-            // Sadece yeni (görülmemiş) ilanları filtrele
-            const newDeals = fetchedDeals.filter(d => !seenIds.has(d.id));
-
-            if (showOnlyNew) {
-                setDeals(newDeals);
-            } else {
-                setDeals(fetchedDeals);
-            }
-
-            if (newDeals.length === 0 && fetchedDeals.length > 0) {
-                setError(`Tüm ilanları gördünüz! (${fetchedDeals.length} ilan mevcut)`);
-            } else if (fetchedDeals.length === 0) {
-                setError('Bekleyen taslak yok. "Yeni İndirim Çek" butonuna tıklayın.');
-            }
+            setAllDeals(fetched);
+            setDeals(showOnlyNew ? fetched.filter(d => !seenIds.has(d.id)) : fetched);
         } catch (err: any) {
-            console.error('Firebase hatası:', err);
-            setError(err.message || 'Veriler çekilirken bir hata oluştu.');
+            showMessage('error', err.message);
         } finally {
             setIsLoading(false);
         }
     };
 
-    // GitHub Actions Workflow'u tetikle
+    // ── GitHub Workflow Tetikle ────────────────────────────────────────────────
     const triggerGitHubWorkflow = async () => {
         setIsFetching(true);
-        setError(null);
-
         try {
-            // @ts-ignore
             const GITHUB_TOKEN = (import.meta as any).env?.VITE_GITHUB_TOKEN || '';
-            const REPO_OWNER = 'AdemHan';
-            const REPO_NAME = 'indiva-app';
-            const WORKFLOW_ID = 'auto-onual.yml';
-
-            if (!GITHUB_TOKEN) {
-                throw new Error('GitHub token tanımlı değil. VITE_GITHUB_TOKEN environment variable ekleyin.');
-            }
-
-            const response = await fetch(
-                `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/workflows/${WORKFLOW_ID}/dispatches`,
-                {
-                    method: 'POST',
-                    headers: {
-                        'Accept': 'application/vnd.github.v3+json',
-                        'Authorization': `token ${GITHUB_TOKEN}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        ref: 'main'
-                    })
-                }
-            );
-
-            if (response.status === 204) {
-                setSuccessMessage('✅ GitHub Actions tetiklendi! 30 saniye sonra otomatik yenilenecek...');
-                // 30 saniye sonra verileri yenile
-                setTimeout(() => {
-                    loadDeals();
-                    setSuccessMessage(null);
-                }, 30000);
-            } else if (response.status === 401 || response.status === 403) {
-                throw new Error('GitHub token geçersiz veya workflow yetkisi yok.');
+            if (!GITHUB_TOKEN || GITHUB_TOKEN === 'YOUR_GITHUB_TOKEN_HERE') throw new Error('VITE_GITHUB_TOKEN tanımlı değil.');
+            const res = await fetch('https://api.github.com/repos/AdemHan/indiva-app/actions/workflows/auto-onual.yml/dispatches', {
+                method: 'POST',
+                headers: { Accept: 'application/vnd.github.v3+json', Authorization: `token ${GITHUB_TOKEN}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ref: 'main' })
+            });
+            if (res.status === 204) {
+                showMessage('success', '✅ GitHub Actions tetiklendi! 30sn sonra yenilenecek...');
+                setTimeout(() => { loadDeals(); }, 30000);
             } else {
-                const errorData = await response.json();
-                throw new Error(errorData.message || `HTTP ${response.status}`);
+                throw new Error(`HTTP ${res.status}`);
             }
         } catch (err: any) {
-            console.error('GitHub API hatası:', err);
-            setError('Workflow tetiklenemedi: ' + err.message);
+            showMessage('error', 'Workflow tetiklenemedi: ' + err.message);
         } finally {
             setIsFetching(false);
         }
     };
 
-    // Tüm ilanları göster/gizle toggle
-    const toggleShowAll = () => {
-        if (showOnlyNew) {
-            // Tümünü göster
-            setDeals(allDeals);
-            setShowOnlyNew(false);
-        } else {
-            // Sadece yenileri göster
-            const seenIds = getSeenDealIds();
-            setDeals(allDeals.filter(d => !seenIds.has(d.id)));
-            setShowOnlyNew(true);
-        }
-    };
-
-    // Tümünü görüldü olarak işaretle
-    const markAllAsSeen = () => {
-        const dealIds = deals.map(d => d.id);
-        markDealsAsSeen(dealIds);
-        setDeals([]);
-        setSuccessMessage('Tüm ilanlar görüldü olarak işaretlendi');
-        setTimeout(() => setSuccessMessage(null), 3000);
-    };
-
-    // Görüldü geçmişini temizle
-    const resetSeenHistory = () => {
-        clearSeenDeals();
-        setDeals(allDeals);
-        setShowOnlyNew(true);
-        setSuccessMessage('Görüldü geçmişi temizlendi');
-        setTimeout(() => setSuccessMessage(null), 3000);
-    };
-
-    // Düzenlemeye başla
-    const startEditing = (deal: ScrapedDeal) => {
-        // İlanı görüldü olarak işaretle
-        markDealsAsSeen([deal.id]);
-
-        setEditingDeal(deal);
-        setEditForm({
-            title: deal.title,
-            oldPrice: deal.oldPrice,
-            newPrice: deal.newPrice,
-            link: deal.link
-        });
-    };
-
-    // Düzenlemeyi kaydet ve yayınla
+    // ── Taslak Düzenle & Yayınla ──────────────────────────────────────────────
     const saveAndPublish = async () => {
         if (!editingDeal) return;
-
+        setIsLoading(true);
         try {
-            setIsLoading(true);
-
-            await updateDoc(doc(db, 'discounts', editingDeal.id), {
-                title: editForm.title,
-                oldPrice: editForm.oldPrice,
-                newPrice: editForm.newPrice,
-                link: editForm.link,
-                status: 'published',
-                needsReview: false,
-                publishedAt: new Date()
-            });
-
-            setSuccessMessage('✅ İlan yayınlandı!');
+            await updateDoc(doc(db, 'discounts', editingDeal.id), { ...editForm, status: 'aktif', needsReview: false, publishedAt: new Date() });
+            showMessage('success', '✅ İlan yayınlandı!');
             setEditingDeal(null);
-
-            // Listeden kaldır
-            setDeals(prev => prev.filter(d => d.id !== editingDeal.id));
-            setAllDeals(prev => prev.filter(d => d.id !== editingDeal.id));
+            setDeals(p => p.filter(d => d.id !== editingDeal.id));
+            setAllDeals(p => p.filter(d => d.id !== editingDeal.id));
         } catch (err: any) {
-            console.error('Kaydetme hatası:', err);
-            setError('Kaydetme hatası: ' + err.message);
+            showMessage('error', 'Kaydetme hatası: ' + err.message);
         } finally {
             setIsLoading(false);
-            setTimeout(() => setSuccessMessage(null), 3000);
         }
     };
 
-    // İlanı sil
-    const deleteDeal = async (dealId: string) => {
-        if (!confirm('Bu ilanı silmek istediğinize emin misiniz?')) return;
+    const deleteDeal = async (id: string) => {
+        if (!confirm('Silmek istiyor musunuz?')) return;
+        await deleteDoc(doc(db, 'discounts', id));
+        markDealsAsSeen([id]);
+        setDeals(p => p.filter(d => d.id !== id));
+        setAllDeals(p => p.filter(d => d.id !== id));
+    };
 
+    // ── Arka Planda Analiz Et & Yayınla ──────────────────────────────────
+    const addToQueue = async () => {
+        if (!isSystemEnabled()) {
+            showMessage('error', 'Sistem kapalı. Lütfen sistemi açıp tekrar deneyin.');
+            return;
+        }
+
+        const url = analyzerUrl.trim();
+        if (!url || !url.startsWith('http')) {
+            showMessage('error', 'Geçerli bir URL girin (https://...)');
+            return;
+        }
+
+        setIsAddingToQueue(true);
+        setQueueStatus('running');
+        setQueueError('');
+        setAnalyzerUrl(''); // URL alanını hemen temizle
+
+        // Arka planda analiz başlat (await yok — kullanıcı beklemez)
+        runAnalyzeAndPublish(url);
+
+        // UI'yi hemen serbest bırak
+        setIsAddingToQueue(false);
+    };
+
+    const runAnalyzeAndPublish = async (url: string) => {
         try {
-            await deleteDoc(doc(db, 'discounts', dealId));
-            markDealsAsSeen([dealId]); // Silinen de görüldü sayılsın
-            setDeals(prev => prev.filter(d => d.id !== dealId));
-            setAllDeals(prev => prev.filter(d => d.id !== dealId));
-            setSuccessMessage('İlan silindi');
-            setTimeout(() => setSuccessMessage(null), 3000);
+            const GEMINI_KEY = (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+            if (!GEMINI_KEY) throw new Error('VITE_GEMINI_API_KEY tanımlı değil.');
+            const storeName = detectStore(url);
+
+            // 1. Jina ile sayfa içeriği çek
+            let pageContent = `URL: ${url}\nMağaza: ${storeName}`;
+            let imageUrl = '';
+            try {
+                const jinaRes = await fetch(`https://r.jina.ai/${url}`, { headers: { Accept: 'text/plain' }, signal: AbortSignal.timeout(25000) });
+                if (jinaRes.ok) pageContent = (await jinaRes.text()).substring(0, 10000);
+            } catch {}
+
+            // 2. OG image
+            try {
+                const ogRes = await fetch(`https://r.jina.ai/${url}`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+                if (ogRes.ok) { const j = await ogRes.json(); imageUrl = j?.data?.ogImage || j?.data?.image || ''; }
+            } catch {}
+
+            // 3. Gemini analizi
+            const prompt = `Sen bir e-ticaret ürün analistisisin. Aşağıdaki URL ve sayfa içeriğini analiz et:
+
+URL: ${url}
+Mağaza: ${storeName}
+
+SAYFA İÇERİĞİ:
+${pageContent}
+
+Bu ürünü analiz et ve SADECE aşağıdaki JSON formatında yanıt ver (Türkçe):
+{
+  "title": "ürün başlığı (temiz, max 80 karakter)",
+  "cleanTitle": "kısa başlık (max 50 karakter)",
+  "newPrice": indirimli fiyat (sayı, TL),
+  "oldPrice": normal fiyat (sayı, TL, yoksa 0),
+  "discountPercent": indirim yüzdesi (sayı),
+  "category": "Teknoloji/Giyim/Ev/Market/Kozmetik/Bebek/Spor/Kitap/Sağlık/Pet/Oto",
+  "description": "neden şimdi almalısın - 2-3 cümle, etkileyici Türkçe, FOMO içerecek",
+  "aiFomoScore": 1-10 arası puan,
+  "imageUrl": "ürün görseli URL (boş bırakabilirsin)",
+  "storeName": "${storeName}"
+}`;
+
+            const aiRes = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=' + GEMINI_KEY, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, responseMimeType: 'application/json' } })
+            });
+            if (!aiRes.ok) throw new Error(`Gemini API: ${aiRes.status}`);
+            const aiData = await aiRes.json();
+            const aiText = aiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+            if (!jsonMatch) throw new Error('AI geçerli JSON döndürmedi.');
+            const result = JSON.parse(jsonMatch[0]);
+
+            const newPrice = parseFloat(String(result.newPrice || 0).replace(/[^\d.]/g, '')) || 0;
+            let oldPrice = parseFloat(String(result.oldPrice || 0).replace(/[^\d.]/g, '')) || 0;
+            if (oldPrice === 0 && newPrice > 0) oldPrice = Math.round(newPrice * 1.3);
+            const discountPercent = result.discountPercent || (oldPrice > 0 ? Math.round(((oldPrice - newPrice) / oldPrice) * 100) : 0);
+
+            // 4. Firebase'e yaz
+            await addDoc(collection(db, 'discounts'), {
+                title: result.title || 'Ürün',
+                cleanTitle: result.cleanTitle || result.title || 'Ürün',
+                newPrice,
+                oldPrice,
+                discountPercent,
+                category: result.category || 'Diğer',
+                description: result.description || '',
+                aiFomoScore: result.aiFomoScore || 5,
+                imageUrl: imageUrl || result.imageUrl || '',
+                link: url,
+                originalStoreLink: url,
+                storeName,
+                brand: storeName,
+                status: 'aktif',
+                source: 'queue_analyzer',
+                createdAt: serverTimestamp(),
+            });
+
+            setQueueStatus('done');
+            showMessage('success', '🎉 İndirim yayınlandı!');
         } catch (err: any) {
-            console.error('Silme hatası:', err);
+            setQueueStatus('error');
+            setQueueError(err.message || 'Bilinmeyen hata');
+            showMessage('error', 'Analiz başarısız: ' + err.message);
         }
     };
 
-    // Admin değilse erişim yok
-    if (!isAdmin) {
-        return (
-            <div className="flex items-center justify-center h-96">
-                <p className="text-red-400">Bu sayfaya erişim yetkiniz yok.</p>
-            </div>
-        );
-    }
+    // Sıfırla
+    const resetQueue = () => {
+        setQueueStatus(null);
+        setQueueError('');
+        setAnalyzerUrl('');
+    };
+
+    if (!isAdmin) return <div className="flex items-center justify-center h-96"><p className="text-red-400">Bu sayfaya erişim yetkiniz yok.</p></div>;
 
     return (
         <div className="max-w-4xl mx-auto px-4 py-6">
-            {/* Başlık */}
-            <div className="mb-6">
-                <h1 className="text-2xl font-bold text-white mb-1 flex items-center gap-2">
-                    📥 Taslak İlanlar
-                    {deals.length > 0 && (
-                        <span className="bg-orange-500 text-white text-sm px-2 py-0.5 rounded-full">
-                            {deals.length} yeni
-                        </span>
+            {/* Sekme Başlıkları */}
+            <div className="flex gap-1 mb-6 bg-gray-800 p-1 rounded-xl">
+                <button
+                    onClick={() => setActiveTab('drafts')}
+                    className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-semibold transition-all ${activeTab === 'drafts' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
+                >
+                    📥 Taslak İlanlar {allDeals.length > 0 && <span className="ml-1 bg-orange-500 text-white text-xs px-1.5 py-0.5 rounded-full">{allDeals.length}</span>}
+                </button>
+                <button
+                    onClick={() => setActiveTab('analyzer')}
+                    className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-semibold transition-all ${activeTab === 'analyzer' ? 'bg-purple-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
+                >
+                    🔗 Link ile İndirim Ekle
+                </button>
+            </div>
+
+            {/* Bildirim */}
+            {message && (
+                <div className={`mb-4 p-4 rounded-lg text-sm ${message.type === 'success' ? 'bg-green-500/20 border border-green-500/30 text-green-400' : 'bg-red-500/20 border border-red-500/30 text-red-400'}`}>
+                    {message.text}
+                </div>
+            )}
+
+            {/* ── TAB 1: Taslak İlanlar ── */}
+            {activeTab === 'drafts' && (
+                <div>
+                    <div className="flex gap-2 mb-4">
+                        <button onClick={triggerGitHubWorkflow} disabled={isFetching} className="flex-1 py-3 px-4 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white font-bold rounded-xl shadow-lg transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                            {isFetching ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Çekiliyor...</> : '🚀 Yeni İndirim Çek'}
+                        </button>
+                        <button onClick={loadDeals} disabled={isLoading} className="py-3 px-4 bg-gray-700 hover:bg-gray-600 text-white rounded-xl transition-colors disabled:opacity-50" title="Yenile">🔄</button>
+                    </div>
+
+                    <div className="flex gap-2 mb-4 flex-wrap">
+                        <button onClick={() => { setShowOnlyNew(p => !p); setDeals(showOnlyNew ? allDeals : allDeals.filter(d => !getSeenDealIds().has(d.id))); }} className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${showOnlyNew ? 'bg-blue-500/20 text-blue-400 border border-blue-500/50' : 'bg-gray-700 text-gray-400'}`}>
+                            {showOnlyNew ? '👁️ Tümünü Göster' : '✨ Sadece Yeniler'}
+                        </button>
+                        {deals.length > 0 && <button onClick={() => { markDealsAsSeen(deals.map(d => d.id)); setDeals([]); }} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 rounded-lg text-sm">✓ Tümünü Görüldü Yap</button>}
+                        <button onClick={() => { clearSeenDeals(); setDeals(allDeals); }} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 rounded-lg text-sm">🗑️ Geçmişi Sıfırla</button>
+                    </div>
+
+                    {isLoading && <div className="text-center py-10"><div className="inline-block w-8 h-8 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" /></div>}
+
+                    {!isLoading && deals.length === 0 && (
+                        <div className="text-center py-16 bg-gray-800/50 rounded-2xl border border-gray-700">
+                            <div className="text-5xl mb-3">🎉</div>
+                            <p className="text-white font-bold">Tüm yeni ilanları gördünüz!</p>
+                            <p className="text-gray-400 text-sm mt-1">"Yeni İndirim Çek" ile daha fazla veri çekebilirsiniz.</p>
+                        </div>
                     )}
-                </h1>
-                <p className="text-gray-400 text-sm">
-                    {showOnlyNew ? 'Sadece yeni ilanlar gösteriliyor' : `Tüm taslaklar gösteriliyor (${allDeals.length})`}
-                </p>
-            </div>
 
-            {/* Üst butonlar */}
-            <div className="flex gap-2 mb-4">
-                <button
-                    onClick={triggerGitHubWorkflow}
-                    disabled={isFetching}
-                    className="flex-1 py-3 px-4 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white font-bold rounded-xl shadow-lg transition-all duration-300 disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                    {isFetching ? (
-                        <>
-                            <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                            Çekiliyor...
-                        </>
-                    ) : (
-                        <>🚀 Yeni İndirim Çek</>
+                    <div className="space-y-3">
+                        {deals.map(deal => (
+                            <div key={deal.id} onClick={() => { markDealsAsSeen([deal.id]); setEditingDeal(deal); setEditForm({ title: deal.title, oldPrice: deal.oldPrice, newPrice: deal.newPrice, link: deal.link }); }}
+                                className="bg-gray-800 rounded-xl p-4 cursor-pointer hover:bg-gray-750 transition-all border border-gray-700 hover:border-blue-500/50 flex gap-4 items-center">
+                                <div className="w-16 h-16 flex-shrink-0 bg-gray-700 rounded-lg overflow-hidden">
+                                    {deal.imageUrl ? <img src={deal.imageUrl} alt="" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} /> : <div className="w-full h-full flex items-center justify-center text-xl">📷</div>}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-white font-medium text-sm line-clamp-2">{deal.title}</p>
+                                    <div className="flex items-center gap-2 mt-1 text-sm">
+                                        <span className="text-orange-400 font-bold">{deal.newPrice > 0 ? `${deal.newPrice.toLocaleString('tr-TR')}₺` : '—'}</span>
+                                        {deal.oldPrice > 0 && <span className="text-gray-500 line-through">{deal.oldPrice.toLocaleString('tr-TR')}₺</span>}
+                                        <span className="text-gray-600">· {deal.storeName}</span>
+                                    </div>
+                                </div>
+                                <button onClick={(e) => { e.stopPropagation(); deleteDeal(deal.id); }} className="flex-shrink-0 w-8 h-8 bg-red-500/20 hover:bg-red-500/40 text-red-400 rounded-lg flex items-center justify-center text-sm">🗑️</button>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Düzenleme Modal */}
+                    {editingDeal && (
+                        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+                            <div className="bg-gray-800 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
+                                <h2 className="text-xl font-bold text-white mb-4">📝 İlanı Düzenle</h2>
+                                {editingDeal.imageUrl && <img src={editingDeal.imageUrl} alt="" className="w-full h-40 object-cover rounded-lg mb-4" />}
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-gray-400 text-sm mb-1">Başlık</label>
+                                        <input type="text" value={editForm.title} onChange={e => setEditForm(p => ({ ...p, title: e.target.value }))} className="w-full px-4 py-3 bg-gray-900 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-gray-400 text-sm mb-1">Eski Fiyat (₺)</label>
+                                            <input type="number" value={editForm.oldPrice || ''} onChange={e => setEditForm(p => ({ ...p, oldPrice: Number(e.target.value) }))} className="w-full px-4 py-3 bg-gray-900 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-gray-400 text-sm mb-1">Yeni Fiyat (₺)</label>
+                                            <input type="number" value={editForm.newPrice || ''} onChange={e => setEditForm(p => ({ ...p, newPrice: Number(e.target.value) }))} className="w-full px-4 py-3 bg-gray-900 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-gray-400 text-sm mb-1">Ürün Linki</label>
+                                        <input type="url" value={editForm.link} onChange={e => setEditForm(p => ({ ...p, link: e.target.value }))} className="w-full px-4 py-3 bg-gray-900 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500" />
+                                    </div>
+                                </div>
+                                <div className="flex gap-3 mt-6">
+                                    <button onClick={() => setEditingDeal(null)} className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors">İptal</button>
+                                    <button onClick={saveAndPublish} disabled={isLoading} className="flex-1 py-3 bg-green-600 hover:bg-green-500 text-white font-bold rounded-lg transition-colors disabled:opacity-50">✅ Kaydet & Yayınla</button>
+                                </div>
+                            </div>
+                        </div>
                     )}
-                </button>
-
-                <button
-                    onClick={loadDeals}
-                    disabled={isLoading}
-                    className="py-3 px-4 bg-gray-700 hover:bg-gray-600 text-white rounded-xl transition-colors disabled:opacity-50"
-                    title="Yenile"
-                >
-                    🔄
-                </button>
-            </div>
-
-            {/* Filtre butonları */}
-            <div className="flex gap-2 mb-4 flex-wrap">
-                <button
-                    onClick={toggleShowAll}
-                    className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${showOnlyNew
-                        ? 'bg-blue-500/20 text-blue-400 border border-blue-500/50'
-                        : 'bg-gray-700 text-gray-400'
-                        }`}
-                >
-                    {showOnlyNew ? '👁️ Tümünü Göster' : '✨ Sadece Yeniler'}
-                </button>
-
-                {deals.length > 0 && (
-                    <button
-                        onClick={markAllAsSeen}
-                        className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 rounded-lg text-sm transition-colors"
-                    >
-                        ✓ Tümünü Görüldü Yap
-                    </button>
-                )}
-
-                <button
-                    onClick={resetSeenHistory}
-                    className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 rounded-lg text-sm transition-colors"
-                >
-                    🗑️ Geçmişi Sıfırla
-                </button>
-            </div>
-
-            {/* Mesajlar */}
-            {successMessage && (
-                <div className="mb-4 p-4 bg-green-500/20 border border-green-500/30 rounded-lg text-green-400">
-                    {successMessage}
                 </div>
             )}
 
-            {error && (
-                <div className="mb-4 p-4 bg-yellow-500/20 border border-yellow-500/30 rounded-lg text-yellow-400">
-                    {error}
-                </div>
-            )}
+            {/* ── TAB 2: Link ile İndirim Ekle (Kuyruk Sistemi) ── */}
+            {activeTab === 'analyzer' && (
+                <div>
+                    {/* URL Giriş Kartı - sadece kuyruk yokken göster */}
+                    {!queueStatus && (
+                        <div className="bg-gray-800 rounded-2xl p-6 border border-purple-500/30 mb-6">
+                            <h2 className="text-xl font-bold text-white mb-1">🔗 Link ile İndirim Ekle</h2>
+                            <p className="text-gray-400 text-sm mb-4">
+                                Ürün linkini yapıştırın ve kuyruğa ekleyin. Arka planda analiz edilip otomatik yayınlanır — uygulamayı kapatabilirsiniz.
+                            </p>
 
-            {/* Yükleniyor */}
-            {isLoading && !editingDeal && (
-                <div className="text-center py-10">
-                    <div className="inline-block w-8 h-8 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin"></div>
-                    <p className="text-gray-400 mt-4">Yükleniyor...</p>
-                </div>
-            )}
-
-            {/* Düzenleme Modal */}
-            {editingDeal && (
-                <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
-                    <div className="bg-gray-800 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-                        <div className="p-6">
-                            <h2 className="text-xl font-bold text-white mb-4">📝 İlanı Düzenle</h2>
-
-                            {editingDeal.imageUrl && (
-                                <img
-                                    src={editingDeal.imageUrl}
-                                    alt=""
-                                    className="w-full h-40 object-cover rounded-lg mb-4"
+                            <div className="flex gap-2">
+                                <input
+                                    type="url"
+                                    value={analyzerUrl}
+                                    onChange={e => setAnalyzerUrl(e.target.value)}
+                                    placeholder="https://www.trendyol.com/marka/urun-p-123456.html"
+                                    className="flex-1 px-4 py-3 bg-gray-900 border border-gray-600 rounded-xl text-white text-sm focus:outline-none focus:border-purple-500 placeholder-gray-600"
+                                    onKeyDown={e => { if (e.key === 'Enter' && !isAddingToQueue) addToQueue(); }}
                                 />
+                                <button
+                                    onClick={addToQueue}
+                                    disabled={isAddingToQueue || !analyzerUrl.trim()}
+                                    className="px-5 py-3 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-500 hover:to-purple-600 text-white font-bold rounded-xl transition-all disabled:opacity-50 flex items-center gap-2 whitespace-nowrap"
+                                >
+                                    {isAddingToQueue
+                                        ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Ekleniyor...</>
+                                        : '➕ Kuyruğa Ekle'}
+                                </button>
+                            </div>
+
+                            {/* Desteklenen mağazalar */}
+                            <div className="grid grid-cols-2 gap-2 mt-4">
+                                {['trendyol.com', 'hepsiburada.com', 'amazon.com.tr', 'n11.com', 'ciceksepeti.com', 'temu.com'].map(store => (
+                                    <div key={store} className="bg-gray-900/50 border border-gray-700 rounded-lg p-2 text-center">
+                                        <p className="text-gray-400 text-xs">✅ {store}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Kuyruk Durum Kartı */}
+                    {queueStatus && (
+                        <div className="bg-gray-800 rounded-2xl p-6 border border-gray-700">
+
+                            {/* İŝleniyor — arka planda çalışıyor */}
+                            {queueStatus === 'running' && (
+                                <div className="text-center py-6">
+                                    <div className="w-14 h-14 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mx-auto mb-4" />
+                                    <h3 className="text-white font-bold text-lg mb-1">Analiz Ediliyor...</h3>
+                                    <p className="text-gray-400 text-sm">Arka planda işleniyor. Başka bir sekmeye geçebilirsiniz.</p>
+                                    <div className="flex flex-col gap-1 mt-3 text-xs text-gray-500">
+                                        <span>🌐 Sayfa okunuyor...</span>
+                                        <span>🤖 Analiz yapılıyor...</span>
+                                        <span>🚀 Firebase'e yayınlanıyor...</span>
+                                    </div>
+                                </div>
                             )}
 
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="block text-gray-400 text-sm mb-1">Başlık</label>
-                                    <input
-                                        type="text"
-                                        value={editForm.title}
-                                        onChange={(e) => setEditForm(prev => ({ ...prev, title: e.target.value }))}
-                                        className="w-full px-4 py-3 bg-gray-900 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                                    />
-                                </div>
-
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-gray-400 text-sm mb-1">Eski Fiyat (TL)</label>
-                                        <input
-                                            type="number"
-                                            value={editForm.oldPrice || ''}
-                                            onChange={(e) => setEditForm(prev => ({ ...prev, oldPrice: Number(e.target.value) }))}
-                                            placeholder="0"
-                                            className="w-full px-4 py-3 bg-gray-900 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-gray-400 text-sm mb-1">Yeni Fiyat (TL)</label>
-                                        <input
-                                            type="number"
-                                            value={editForm.newPrice || ''}
-                                            onChange={(e) => setEditForm(prev => ({ ...prev, newPrice: Number(e.target.value) }))}
-                                            className="w-full px-4 py-3 bg-gray-900 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                                        />
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label className="block text-gray-400 text-sm mb-1">Ürün Linki</label>
-                                    <input
-                                        type="url"
-                                        value={editForm.link}
-                                        onChange={(e) => setEditForm(prev => ({ ...prev, link: e.target.value }))}
-                                        placeholder="https://..."
-                                        className="w-full px-4 py-3 bg-gray-900 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                                    />
-                                    <a
-                                        href={editForm.link}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-blue-400 text-sm mt-1 inline-block hover:underline"
+                            {/* Tamamlandı */}
+                            {queueStatus === 'done' && (
+                                <div className="text-center py-8">
+                                    <div className="text-6xl mb-4">🎉</div>
+                                    <h3 className="text-xl font-bold text-white mb-2">İndirim Yayında!</h3>
+                                    <p className="text-gray-400 text-sm mb-6">İlan analiz edildi ve İNDİVA kullanıcılarına gösterilmeye başladı.</p>
+                                    <button
+                                        onClick={resetQueue}
+                                        className="px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-xl transition-colors"
                                     >
-                                        🔗 Linki Aç
-                                    </a>
+                                        ➕ Yeni İndirim Ekle
+                                    </button>
                                 </div>
-                            </div>
+                            )}
 
-                            <div className="flex gap-3 mt-6">
-                                <button
-                                    onClick={() => setEditingDeal(null)}
-                                    className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
-                                >
-                                    İptal
-                                </button>
-                                <button
-                                    onClick={saveAndPublish}
-                                    disabled={isLoading || !editForm.title}
-                                    className="flex-1 py-3 bg-green-600 hover:bg-green-500 text-white font-bold rounded-lg transition-colors disabled:opacity-50"
-                                >
-                                    ✅ Kaydet ve Yayınla
-                                </button>
-                            </div>
+                            {/* Hata */}
+                            {queueStatus === 'error' && (
+                                <div className="text-center py-6">
+                                    <div className="text-5xl mb-4">❌</div>
+                                    <h3 className="text-white font-bold text-lg mb-2">Analiz Başarısız</h3>
+                                    <p className="text-red-400 text-sm mb-1">{queueError || 'Bir hata oluştu.'}</p>
+                                    <p className="text-gray-500 text-xs mb-6">Farklı bir link veya daha sonra tekrar deneyin.</p>
+                                    <button
+                                        onClick={resetQueue}
+                                        className="px-6 py-3 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded-xl transition-colors"
+                                    >
+                                        🔄 Tekrar Dene
+                                    </button>
+                                </div>
+                            )}
                         </div>
-                    </div>
-                </div>
-            )}
-
-            {/* İlan Listesi */}
-            {!isLoading && deals.length > 0 && (
-                <div className="space-y-3">
-                    {deals.map((deal) => (
-                        <div
-                            key={deal.id}
-                            onClick={() => startEditing(deal)}
-                            className="bg-gray-800 rounded-xl p-4 cursor-pointer hover:bg-gray-750 transition-colors border border-gray-700 hover:border-blue-500/50"
-                        >
-                            <div className="flex gap-4">
-                                <div className="w-20 h-20 flex-shrink-0 bg-gray-700 rounded-lg overflow-hidden">
-                                    {deal.imageUrl ? (
-                                        <img
-                                            src={deal.imageUrl}
-                                            alt=""
-                                            className="w-full h-full object-cover"
-                                            onError={(e) => {
-                                                (e.target as HTMLImageElement).src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect fill="%23374151" width="100" height="100"/><text x="50" y="55" text-anchor="middle" fill="%239CA3AF" font-size="30">📷</text></svg>';
-                                            }}
-                                        />
-                                    ) : (
-                                        <div className="w-full h-full flex items-center justify-center text-2xl">📷</div>
-                                    )}
-                                </div>
-
-                                <div className="flex-1 min-w-0">
-                                    <h3 className="text-white font-medium line-clamp-2 text-sm mb-1">
-                                        {deal.title}
-                                    </h3>
-                                    <div className="flex items-center gap-2 text-sm">
-                                        <span className="text-orange-400 font-bold">
-                                            {deal.newPrice > 0 ? `${deal.newPrice.toLocaleString('tr-TR')}₺` : 'Fiyat yok'}
-                                        </span>
-                                        <span className="text-gray-500">•</span>
-                                        <span className="text-gray-500">{deal.storeName}</span>
-                                    </div>
-                                </div>
-
-                                <button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        deleteDeal(deal.id);
-                                    }}
-                                    className="flex-shrink-0 w-8 h-8 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg flex items-center justify-center transition-colors"
-                                >
-                                    🗑️
-                                </button>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            {/* Boş durum */}
-            {!isLoading && deals.length === 0 && !error && (
-                <div className="text-center py-16 bg-gray-800/50 rounded-2xl border border-gray-700">
-                    <div className="text-6xl mb-4">🎉</div>
-                    <h2 className="text-xl font-bold text-white mb-2">Tüm yeni ilanları gördünüz!</h2>
-                    <p className="text-gray-400 mb-4">
-                        "Yeni İndirim Çek" ile daha fazla veri çekebilirsiniz
-                    </p>
+                    )}
                 </div>
             )}
         </div>

@@ -1,6 +1,5 @@
 
-// This key is for testing purposes. For production, generate a new one.
-const IMGBB_API_KEY = 'd81f2725d96c8f13649c8ed79ba8d2bb';
+const IMGBB_API_KEY = import.meta.env.VITE_IMGBB_API_KEY as string;
 
 interface ImgbbUploadResult {
     downloadURL: string;
@@ -28,7 +27,6 @@ export const uploadToImgbb = async (file: File): Promise<ImgbbUploadResult> => {
     const result = await response.json();
 
     if (!result.success) {
-        console.error('ImgBB Upload Error:', result);
         throw new Error(result.error?.message || 'Görsel ImgBB\'ye yüklenemedi.');
     }
 
@@ -62,9 +60,8 @@ export const deleteFromImgbb = (deleteUrl: string | undefined | null): void => {
         // we assume deleteUrl is the one provided.
         // Actually, typically we just fire and forget.
         mode: 'no-cors',
-    }).catch(err => {
-        // Suppress all errors.
-        console.warn("Background image delete cleanup failed (expected behavior for some CORS restricted URLs):", err);
+    }).catch(() => {
+        // Suppress all errors (expected behavior for CORS-restricted URLs)
     });
 };
 
@@ -101,7 +98,6 @@ export const uploadFromUrl = async (imageUrl: string): Promise<ImgbbUploadResult
         // Görsel URL'sinden fetch et
         const response = await fetch(imageUrl);
         if (!response.ok) {
-            console.log('Görsel fetch edilemedi:', response.status);
             return null;
         }
 
@@ -109,8 +105,7 @@ export const uploadFromUrl = async (imageUrl: string): Promise<ImgbbUploadResult
         const file = new File([blob], 'image.jpg', { type: blob.type || 'image/jpeg' });
 
         return await uploadToImgbb(file);
-    } catch (err) {
-        console.error('URL\'den görsel yüklenemedi:', err);
+    } catch {
         return null;
     }
 };

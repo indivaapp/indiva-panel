@@ -26,9 +26,11 @@ import EditDealPage from './components/EditDealPage';
 import AffiliateLinkManager from './components/AffiliateLinkManager';
 import AutoDiscoveryPanel from './components/AutoDiscoveryPanel';
 import Dashboard from './components/Dashboard';
+import AddDiscountForm from './components/AddDiscountForm';
+import AffiliateBot from './src/components/AffiliateBot';
 import ShareTarget from './components/ShareTarget';
 import { ensureAnonymousAuth, onAuthReady } from './services/auth';
-import { getPendingAffiliateCount } from './services/firebase';
+import { getPendingAffiliateCount, getPendingAdRequestCount, getPendingDiscountCount } from './services/firebase';
 
 const SYSTEM_KEY = 'indiva_system_active';
 
@@ -52,6 +54,8 @@ const App: React.FC = () => {
 
     const [selectedDeal, setSelectedDeal] = useState<ScrapedDeal | null>(null);
     const [pendingAffiliateCount, setPendingAffiliateCount] = useState(0);
+    const [pendingAdRequestCount, setPendingAdRequestCount] = useState(0);
+    const [pendingDiscountCount, setPendingDiscountCount] = useState(0);
     const [dealQueue, setDealQueue] = useState<ScrapedDeal[]>([]);
     const [currentQueueIndex, setCurrentQueueIndex] = useState(0);
     const [sharedLink, setSharedLink] = useState<string | null>(null);
@@ -180,11 +184,13 @@ const App: React.FC = () => {
 
     useEffect(() => {
         if (!authReady) return;
-        const loadPendingCount = async () => {
+        const loadCounts = async () => {
             try { setPendingAffiliateCount(await getPendingAffiliateCount()); } catch {}
+            try { setPendingAdRequestCount(await getPendingAdRequestCount()); } catch {}
+            try { setPendingDiscountCount(await getPendingDiscountCount()); } catch {}
         };
-        loadPendingCount();
-        const interval = setInterval(loadPendingCount, 30000);
+        loadCounts();
+        const interval = setInterval(loadCounts, 30000);
         return () => clearInterval(interval);
     }, [authReady]);
 
@@ -221,7 +227,7 @@ const App: React.FC = () => {
             case 'brochures':
                 return <BrochureManager setActiveView={setActiveView} isAdmin={isAdmin} />;
             case 'submissions':
-                return <SubmissionReview isAdmin={isAdmin} />;
+                return <SubmissionReview isAdmin={isAdmin} onAdRequestCountChange={setPendingAdRequestCount} onDiscountCountChange={setPendingDiscountCount} />;
             case 'ads':
                 return <AdManager isAdmin={isAdmin} />;
             case 'notifications':
@@ -243,16 +249,20 @@ const App: React.FC = () => {
                 ) : <DealFinder isAdmin={isAdmin} setActiveView={setActiveView} setSelectedDeal={setSelectedDeal} startDealQueue={startDealQueue} />;
             case 'autoDiscovery':
                 return <AutoDiscoveryPanel isAdmin={isAdmin} setActiveView={setActiveView} />;
+            case 'addDiscount':
+                return <AddDiscountForm setActiveView={setActiveView} isAdmin={isAdmin} />;
+            case 'affiliateBot':
+                return <AffiliateBot isAdmin={isAdmin} />;
             default:
                 return <DiscountManager setActiveView={setActiveView} isAdmin={isAdmin} />;
         }
     };
 
     const viewLabels: Record<string, string> = {
-        dashboard: 'Ana Sayfa', dealFinder: 'Fırsat Bul', discounts: 'Ekle',
-        manageDiscounts: 'Yönet', brochures: 'Aktüel', submissions: 'Onay',
+        dashboard: 'Ana Sayfa', dealFinder: 'Fırsat Bul', discounts: 'Düzenle',
+        addDiscount: 'Yeni İlan Ekle', manageDiscounts: 'Yönet', brochures: 'Aktüel', submissions: 'Onay',
         ads: 'Reklam', notifications: 'Bildirim', editDeal: 'Düzenle',
-        affiliateLinks: 'Affiliate', autoDiscovery: 'Keşif',
+        affiliateLinks: 'Affiliate', autoDiscovery: 'Keşif', affiliateBot: 'Affiliate Bot',
     };
 
     return (
@@ -276,15 +286,8 @@ const App: React.FC = () => {
 
                 <div className="flex-1 flex flex-col overflow-hidden">
                     {/* Mobil Header — sabit kalır, scroll olmaz */}
-                    <div className="md:hidden flex justify-between items-center px-4 py-3 border-b border-gray-800 shrink-0">
+                    <div className="md:hidden flex items-center px-4 py-3 border-b border-gray-800 shrink-0">
                         <span className="text-white font-semibold">{viewLabels[activeView] ?? activeView}</span>
-                        <button
-                            onClick={handleToggleSystem}
-                            title={systemEnabled ? 'Sistemi Kapat' : 'Sistemi Aç'}
-                            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full focus:outline-none ${systemEnabled ? 'bg-green-500' : 'bg-gray-600'}`}
-                        >
-                            <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform duration-150 ${systemEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
-                        </button>
                     </div>
 
                     {/* Sistem Kapalı Uyarısı */}
@@ -301,7 +304,7 @@ const App: React.FC = () => {
                     </main>
                 </div>
 
-                <BottomNav activeView={activeView} setActiveView={setActiveView} pendingAffiliateCount={pendingAffiliateCount} />
+                <BottomNav activeView={activeView} setActiveView={setActiveView} pendingAffiliateCount={pendingAffiliateCount} pendingSubmissionsCount={pendingAdRequestCount + pendingDiscountCount} />
             </div>
         </div>
     );

@@ -31,9 +31,7 @@ export async function deleteImgbb(deleteUrl: string): Promise<void> {
             // ve ana `try/catch` bloğu genel ağ sorunlarını yakalayacaktır.
         });
 
-    } catch (error) {
-        // Bu blok genellikle ağ bağlantısı sorunları gibi temel fetch hatalarında tetiklenir.
-        console.error("ImgBB silme isteği sırasında ağ hatası:", error);
+    } catch {
         throw new Error("Görsel silinirken bir ağ hatası oluştu. Lütfen internet bağlantınızı kontrol edin.");
     }
 }

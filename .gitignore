@@ -29,3 +29,7 @@ firebase-service-account.json
 .DS_Store
 *.zip
 logs.zip
+.firebase/
+.claude/
+action_error.log
+logs_extracted/

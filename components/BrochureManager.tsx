@@ -39,7 +39,6 @@ const BrochureManager: React.FC<BrochureManagerProps> = ({ isAdmin }) => {
             setBrochures(data);
         } catch (err) {
             setFetchError('Aktüeller yüklenirken bir hata oluştu.');
-            console.error(err);
         } finally {
             setIsLoadingBrochures(false);
         }
@@ -75,14 +74,16 @@ const BrochureManager: React.FC<BrochureManagerProps> = ({ isAdmin }) => {
                     marketName: selectedMarketForUpload,
                     imageUrl: downloadURL,
                     deleteUrl,
+                    title: `${selectedMarketForUpload} Aktüel`,
+                    storeName: selectedMarketForUpload,
+                    validityDate: '',
                 });
             } catch (err) {
                 const errorMessage = (err as any)?.code === 'permission-denied'
                     ? 'Afiş ekleme yetkiniz yok.'
                     : `${file.name} yüklenemedi. Lütfen tekrar deneyin.`;
                 setUploadError(errorMessage);
-                console.error(err);
-                setIsUploading(false);
+                    setIsUploading(false);
                 return; // Stop on first error
             }
         }
@@ -114,8 +115,7 @@ const BrochureManager: React.FC<BrochureManagerProps> = ({ isAdmin }) => {
             } catch (err: any) {
                 const errorMessage = `Toplu silme sırasında bir hata oluştu: ${err.message || 'Bilinmeyen hata.'}`;
                 alert(errorMessage);
-                console.error(err);
-            } finally {
+                } finally {
                 setIsDeleting(false);
             }
         }

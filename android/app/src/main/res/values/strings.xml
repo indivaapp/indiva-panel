@@ -4,4 +4,5 @@
     <string name="title_activity_main">İNDİVA PANEL</string>
     <string name="package_name">com.indiva.panel</string>
     <string name="custom_url_scheme">com.indiva.panel</string>
+    <string name="accessibility_service_description">İNDİVA Panel affiliate link botunu çalıştırmak için ekrana otomatik dokunma iznine ihtiyaç duyar.</string>
 </resources>

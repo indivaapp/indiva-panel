@@ -37,7 +37,6 @@ const DeleteImgButton: React.FC<Props> = ({ onDelete, isTextButton = false }) =>
                 await onDelete();
                 // Component will likely unmount here if successful
             } catch (err: any) {
-                console.error("Silme işlemi hatası:", err);
                 setError('Hata!');
                 setStatus('idle');
                 alert(`Silinemedi: ${err.message}`);

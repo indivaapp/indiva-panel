@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import type { PendingDiscount } from '../types';
 import { addDiscount, deletePendingDiscount } from '../services/firebase';
 import { uploadToImgbb, base64ToFile } from '../services/imgbb';
+import { CATEGORIES } from '../constants/categories';
 
 interface ReviewSubmissionModalProps {
     submission: PendingDiscount;
@@ -75,7 +76,6 @@ const ReviewSubmissionModal: React.FC<ReviewSubmissionModalProps> = ({ submissio
 
             onApproveSuccess();
         } catch (err: any) {
-            console.error(err);
             const msg = err.message || 'Onaylama işlemi sırasında bir hata oluştu.';
             setError(msg);
         } finally {
@@ -115,26 +115,9 @@ const ReviewSubmissionModal: React.FC<ReviewSubmissionModalProps> = ({ submissio
                             <label className="block text-sm text-gray-400 mb-1">Kategori</label>
                             <select name="category" value={formData.category} onChange={handleChange} className="w-full p-3 bg-gray-700 rounded-md border border-gray-600 text-white" required>
                                 <option value="">Kategori Seçin</option>
-                                <option value="Teknoloji">Teknoloji</option>
-                                <option value="Giyim & Ayakkabı">Giyim & Ayakkabı</option>
-                                <option value="Ev, Yaşam & Mutfak">Ev, Yaşam & Mutfak</option>
-                                <option value="Kozmetik & Kişisel Bakım">Kozmetik & Kişisel Bakım</option>
-                                <option value="Süpermarket">Süpermarket</option>
-                                <option value="Anne & Bebek">Anne & Bebek</option>
-                                <option value="Mobilya">Mobilya</option>
-                                <option value="Kitap & Kırtasiye">Kitap & Kırtasiye</option>
-                                <option value="Spor & Outdoor">Spor & Outdoor</option>
-                                <option value="Takı & Aksesuar">Takı & Aksesuar</option>
-                                <option value="Otomotiv & Motosiklet">Otomotiv & Motosiklet</option>
-                                <option value="Pet Shop">Pet Shop</option>
-                                <option value="Bahçe & Yapı Market">Bahçe & Yapı Market</option>
-                                <option value="Oyuncak & Hobi">Oyuncak & Hobi</option>
-                                <option value="Sağlık & Medikal">Sağlık & Medikal</option>
-                                <option value="Çanta & Valiz">Çanta & Valiz</option>
-                                <option value="Saat & Gözlük">Saat & Gözlük</option>
-                                <option value="Elektronik Aksesuar">Elektronik Aksesuar</option>
-                                <option value="Ofis & İş Dünyası">Ofis & İş Dünyası</option>
-                                <option value="Hediyelik Eşya">Hediyelik Eşya</option>
+                                {CATEGORIES.map(cat => (
+                                    <option key={cat} value={cat}>{cat}</option>
+                                ))}
                             </select>
                         </div>
 

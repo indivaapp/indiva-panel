@@ -3,16 +3,32 @@ import { GoogleGenAI } from '@google/genai';
 import type { Discount } from '../types';
 import { updateDiscount } from '../services/firebase';
 import { uploadToImgbb, deleteFromImgbb } from '../services/imgbb';
+import { CATEGORIES } from '../constants/categories';
+import { sendDirectPushNotification } from '../services/fcmService';
+
+const NOTIF_TITLES = [
+    '🔥 Fırsatı kaçırma! İNDİVA\'da süper indirim!',
+    '⚡ Şimdi bak! Anlık indirim yakalandı',
+    '💰 Cebinde kalsın! Harika bir fırsat seni bekliyor',
+    '🎯 Tam zamanında! İşte bugünün en iyi fırsatı',
+    '🛍️ İndirim avcıları buraya! Fırsat kapında',
+    '🚨 Dikkat! Stoklar tükenmeden incele',
+    '✨ Kaçırmak istemezsin! İNDİVA\'da özel fırsat',
+    '📢 Fırsat alarmı! Bu fiyatı başka yerde bulamazsın',
+    '🏷️ İnanılmaz indirim! Hemen İNDİVA\'ya gir',
+    '💎 Bugünün fırsatı! İNDİVA topluluğu için özel',
+];
 
 
 interface EditDiscountModalProps {
     discount: Discount;
     onClose: () => void;
     onSaveSuccess: () => void;
+    onDelete?: (d: Discount) => void;
     isAdmin: boolean;
 }
 
-const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose, onSaveSuccess, isAdmin }) => {
+const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose, onSaveSuccess, onDelete, isAdmin }) => {
     const [formData, setFormData] = useState<Partial<Discount>>({});
 
     // Main Image states
@@ -25,6 +41,11 @@ const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose
 
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    // Notification states
+    const [notifTitleIdx, setNotifTitleIdx] = useState(() => Math.floor(Math.random() * NOTIF_TITLES.length));
+    const [isSendingNotif, setIsSendingNotif] = useState(false);
+    const [notifResult, setNotifResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
     useEffect(() => {
         setFormData({
@@ -117,7 +138,6 @@ const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose
                 ? 'Güncelleme yetkiniz yok.'
                 : 'İndirim güncellenirken bir hata oluştu.';
             setError(errorMessage);
-            console.error(err);
         } finally {
             setIsLoading(false);
         }
@@ -152,26 +172,9 @@ const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose
                             <label className="block text-sm text-gray-400 mb-1">Kategori</label>
                             <select name="category" value={formData.category || ''} onChange={handleChange} className="w-full p-3 bg-gray-700 rounded-md border border-gray-600 text-white" required>
                                 <option value="">Kategori Seçin</option>
-                                <option value="Teknoloji">Teknoloji</option>
-                                <option value="Giyim & Ayakkabı">Giyim & Ayakkabı</option>
-                                <option value="Ev, Yaşam & Mutfak">Ev, Yaşam & Mutfak</option>
-                                <option value="Kozmetik & Kişisel Bakım">Kozmetik & Kişisel Bakım</option>
-                                <option value="Süpermarket">Süpermarket</option>
-                                <option value="Anne & Bebek">Anne & Bebek</option>
-                                <option value="Mobilya">Mobilya</option>
-                                <option value="Kitap & Kırtasiye">Kitap & Kırtasiye</option>
-                                <option value="Spor & Outdoor">Spor & Outdoor</option>
-                                <option value="Takı & Aksesuar">Takı & Aksesuar</option>
-                                <option value="Otomotiv & Motosiklet">Otomotiv & Motosiklet</option>
-                                <option value="Pet Shop">Pet Shop</option>
-                                <option value="Bahçe & Yapı Market">Bahçe & Yapı Market</option>
-                                <option value="Oyuncak & Hobi">Oyuncak & Hobi</option>
-                                <option value="Sağlık & Medikal">Sağlık & Medikal</option>
-                                <option value="Çanta & Valiz">Çanta & Valiz</option>
-                                <option value="Saat & Gözlük">Saat & Gözlük</option>
-                                <option value="Elektronik Aksesuar">Elektronik Aksesuar</option>
-                                <option value="Ofis & İş Dünyası">Ofis & İş Dünyası</option>
-                                <option value="Hediyelik Eşya">Hediyelik Eşya</option>
+                                {CATEGORIES.map(cat => (
+                                    <option key={cat} value={cat}>{cat}</option>
+                                ))}
                             </select>
                         </div>
 
@@ -232,15 +235,88 @@ const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose
                         </div>
 
                         {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
+
+                        {/* ── Push Bildirim ─────────────────────────────── */}
+                        <div className="border-t border-gray-700 pt-4 mt-2 space-y-3">
+                            <p className="text-sm font-bold text-white flex items-center gap-2">
+                                🔔 Push Bildirim Gönder
+                            </p>
+
+                            {/* Başlık seçici */}
+                            <div className="bg-gray-900 rounded-xl p-3 flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setNotifTitleIdx(i => (i - 1 + NOTIF_TITLES.length) % NOTIF_TITLES.length)}
+                                    className="shrink-0 w-7 h-7 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center text-white transition-colors"
+                                >‹</button>
+                                <p className="flex-1 text-xs text-center text-white font-medium">{NOTIF_TITLES[notifTitleIdx]}</p>
+                                <button
+                                    type="button"
+                                    onClick={() => setNotifTitleIdx(i => (i + 1) % NOTIF_TITLES.length)}
+                                    className="shrink-0 w-7 h-7 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center text-white transition-colors"
+                                >›</button>
+                            </div>
+
+                            {/* Önizleme */}
+                            <div className="bg-gray-900 rounded-xl p-3 flex items-center gap-3 text-xs text-gray-400">
+                                {imagePreview && <img src={imagePreview} className="w-10 h-10 rounded-lg object-cover shrink-0" />}
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-white font-semibold truncate">{NOTIF_TITLES[notifTitleIdx]}</p>
+                                    <p className="truncate mt-0.5">{formData.title || discount.title}</p>
+                                </div>
+                            </div>
+
+                            {notifResult && (
+                                <p className={`text-xs font-semibold ${notifResult.ok ? 'text-green-400' : 'text-red-400'}`}>
+                                    {notifResult.msg}
+                                </p>
+                            )}
+
+                            <button
+                                type="button"
+                                disabled={isSendingNotif}
+                                onClick={async () => {
+                                    setIsSendingNotif(true);
+                                    setNotifResult(null);
+                                    try {
+                                        const currentImage = newImageFile ? imagePreview : discount.imageUrl;
+                                        await sendDirectPushNotification(
+                                            NOTIF_TITLES[notifTitleIdx],
+                                            formData.title || discount.title,
+                                            currentImage || undefined,
+                                            discount.link || undefined,
+                                            discount.id,
+                                        );
+                                        setNotifResult({ ok: true, msg: '✅ Bildirim başarıyla gönderildi!' });
+                                    } catch {
+                                        setNotifResult({ ok: false, msg: '❌ Bildirim gönderilemedi.' });
+                                    } finally {
+                                        setIsSendingNotif(false);
+                                    }
+                                }}
+                                className="w-full py-3 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-bold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99]"
+                            >
+                                {isSendingNotif ? '📤 Gönderiliyor...' : '🚀 Tüm Kullanıcılara Bildirim Gönder'}
+                            </button>
+                        </div>
                     </form>
                 </div>
 
-                {/* Fixed Footer with Buttons */}
-                <div className="p-4 border-t border-gray-700 bg-gray-800 flex justify-end space-x-2 flex-shrink-0 rounded-b-lg">
-                    <button type="button" onClick={onClose} className="px-6 py-3 bg-gray-600 text-white rounded-md hover:bg-gray-500 transition-colors">İptal</button>
-                    <button type="submit" form="edit-form" disabled={isLoading} className="px-6 py-3 bg-blue-600 text-white font-bold rounded-md hover:bg-blue-700 disabled:bg-gray-500 disabled:cursor-not-allowed transition-colors">
-                        {isLoading ? 'Kaydediliyor...' : 'Kaydet'}
-                    </button>
+                {/* Fixed Footer */}
+                <div className="p-4 border-t border-gray-700 bg-gray-800 flex gap-2 flex-shrink-0 rounded-b-lg">
+                    {onDelete && (
+                        <button
+                            type="button"
+                            onClick={() => onDelete(discount)}
+                            className="px-4 py-3 bg-red-700 hover:bg-red-600 text-white font-bold rounded-md transition-colors"
+                        >Sil</button>
+                    )}
+                    <div className="flex-1 flex justify-end gap-2">
+                        <button type="button" onClick={onClose} className="px-6 py-3 bg-gray-600 text-white rounded-md hover:bg-gray-500 transition-colors">İptal</button>
+                        <button type="submit" form="edit-form" disabled={isLoading} className="px-6 py-3 bg-blue-600 text-white font-bold rounded-md hover:bg-blue-700 disabled:bg-gray-500 disabled:cursor-not-allowed transition-colors">
+                            {isLoading ? 'Kaydediliyor...' : 'Kaydet'}
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
