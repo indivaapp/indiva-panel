@@ -528,7 +528,12 @@ function extractFromOgTags(html: string): Partial<ProductScraped> {
         || $('meta[property="og:price:amount"]').attr('content') || '';
     const newPrice = parseFloat2(priceStr);
     // Clean title: remove " - Hepsiburada", " | Trendyol" etc.
-    const cleanedTitle = title.replace(/\s*[-|·|–]\s*(hepsiburada|trendyol|amazon|n11|gittigidiyor|morhipo)[^-|·]*$/gi, '').trim();
+    const cleanedTitle = title
+        .replace(/\s*[-|·|–]\s*(hepsiburada|trendyol|amazon|n11|gittigidiyor|morhipo)[^-|·]*$/gi, '')
+        .replace(/\s*[-–|]\s*(fiyatı|yorumları|fiyat|yorum|satın al|incele|özellikleri|fiyatları)[^-–|]*/gi, '')
+        .replace(/\s*\(fiyatı,?\s*yorumları?\)/gi, '')
+        .replace(/\s*-\s*fiyatı,?\s*yorumları?$/gi, '')
+        .trim();
     return { title: cleanedTitle, imageUrl, newPrice };
 }
 

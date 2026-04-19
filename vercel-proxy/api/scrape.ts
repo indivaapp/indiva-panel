@@ -140,6 +140,10 @@ function cleanTitle(title: string): string {
         .replace(/🏷️.*$/g, '')
         .replace(/🤖/g, '')
         .replace(/🔻/g, '')
+        // Trendyol/Hepsiburada sayfa başlığı suffix'leri
+        .replace(/\s*[-–|]\s*(fiyatı|yorumları|fiyat|yorum|satın al|incele|özellikleri|fiyatları)[^-–|]*/gi, '')
+        .replace(/\s*\(fiyatı,?\s*yorumları?\)/gi, '')
+        .replace(/\s*-\s*fiyatı,?\s*yorumları?$/gi, '')
         .trim();
 }
 
