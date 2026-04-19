@@ -29,6 +29,7 @@ import Dashboard from './components/Dashboard';
 import AddDiscountForm from './components/AddDiscountForm';
 import AffiliateBot from './src/components/AffiliateBot';
 import ShareTarget from './components/ShareTarget';
+import ShareUrlTarget from './components/ShareUrlTarget';
 import { ensureAnonymousAuth, onAuthReady } from './services/auth';
 import { getPendingAffiliateCount, getPendingAdRequestCount, getPendingDiscountCount } from './services/firebase';
 
@@ -147,7 +148,7 @@ const App: React.FC = () => {
         const processSharedUrl = (url: string) => {
             if (url.includes('://')) {
                 const urlMatch = url.match(/https?:\/\/[^\s]+/);
-                if (urlMatch) { setSharedLink(urlMatch[0]); setActiveView('affiliateLinks'); }
+                if (urlMatch) { setSharedLink(urlMatch[0]); }
             }
         };
         const handleAppUrlOpen = async () => {
@@ -165,7 +166,7 @@ const App: React.FC = () => {
                     const sharedText = await window.AndroidShareHandler.getSharedText();
                     if (sharedText) {
                         const urlMatch = sharedText.match(/https?:\/\/[^\s]+/);
-                        if (urlMatch) { setSharedLink(urlMatch[0]); setActiveView('affiliateLinks'); }
+                        if (urlMatch) { setSharedLink(urlMatch[0]); }
                     }
                 }
             } catch {}
@@ -173,7 +174,7 @@ const App: React.FC = () => {
         handleAppUrlOpen();
         checkAndroidIntent();
         const handleSharedUrl = (event: CustomEvent<string>) => {
-            if (event.detail) { setSharedLink(event.detail); setActiveView('affiliateLinks'); }
+            if (event.detail) { setSharedLink(event.detail); }
         };
         window.addEventListener('sharedUrl', handleSharedUrl as EventListener);
         return () => {
@@ -273,6 +274,14 @@ const App: React.FC = () => {
                 işlemi tamamlayınca kapanır. Tüm UI'ın üzerinde görünür.      */}
             {showShareTarget && authReady && (
                 <ShareTarget onClose={handleShareTargetClose} />
+            )}
+
+            {/* URL Share Target — Trendyol/HB vb.'den link paylaşılınca açılır */}
+            {sharedLink && authReady && (
+                <ShareUrlTarget
+                    url={sharedLink}
+                    onClose={() => setSharedLink(null)}
+                />
             )}
 
             <div className="flex flex-1 overflow-hidden">
