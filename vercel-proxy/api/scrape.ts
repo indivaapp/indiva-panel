@@ -539,7 +539,11 @@ function extractProductNameFromUrl(productUrl: string): string {
         if (productUrl.includes('hepsiburada')) {
             rawName = lastPart.replace(/-pm-HB[A-Z0-9]+$/i, '');
         } else if (productUrl.includes('n11.com')) {
-            rawName = lastPart.replace(/-p-\d+(\.\w+)?$/, '').replace(/W\d+\.html$/, '').replace(/\.html$/, '');
+            rawName = lastPart
+                .replace(/-p-\d+(\.\w+)?$/, '')   // eski format: -p-12345.html
+                .replace(/-\d{5,}$/, '')            // yeni format: -1063941525
+                .replace(/W\d+\.html$/, '')
+                .replace(/\.html$/, '');
         } else if (productUrl.includes('amazon.com.tr')) {
             const dpIdx = pathParts.indexOf('dp');
             rawName = dpIdx > 0 ? pathParts[dpIdx - 1] : lastPart;
@@ -870,7 +874,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 }
             }
 
-            if (html.length < 500) {
+            // Cloudflare/security sayfası geldi — bloklanmış sayılır
+            const isCloudflareBlock = html.includes('Cloudflare') && html.includes('blocked');
+
+            if (html.length < 500 || isCloudflareBlock) {
                 // Engellenen mağazalar için Akakce fallback
                 if (isBlockedStore) {
                     console.log('HTML çekilemedi, Akakce fallback deneniyor...');
