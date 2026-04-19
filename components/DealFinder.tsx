@@ -251,15 +251,17 @@ const DealFinder: React.FC<DealFinderProps> = ({ isAdmin, setActiveView, setSele
                 let prompt: string;
 
                 if (proxySuccess) {
-                    // Proxy başarılı → Gemini sadece içerik üretiyor
+                    // Proxy başarılı → Gemini başlığı düzeltip içerik üretiyor
                     prompt = `Ürün bilgileri:
-- Başlık: "${title}"
+- Ham başlık: "${title}"
 - Fiyat: ${newPrice} TL${oldPrice > 0 ? ` (eski: ${oldPrice} TL)` : ''}
 - Mağaza: ${storeName}
 
+Ham başlık URL slug'dan gelmiş olabilir (küçük harf, tekrar eden kelimeler). Düzelt.
 SADECE aşağıdaki JSON döndür (başka hiçbir şey yazma):
 {
-  "cleanTitle": "kısa başlık (max 50 karakter)",
+  "title": "Düzgün ürün başlığı, Türkçe, Title Case, max 80 karakter, tekrar eden kelimeler temizlenmiş",
+  "cleanTitle": "Kısa başlık, max 50 karakter",
   "category": "Teknoloji/Giyim/Ev & Yaşam/Market/Kozmetik/Anne & Bebek/Spor/Kitap/Sağlık/Pet/Otomotiv/Diğer",
   "description": "2-3 cümle etkileyici Türkçe, FOMO içerecek, şimdi neden almalısın",
   "aiFomoScore": 1-10
@@ -313,13 +315,15 @@ SADECE aşağıdaki JSON döndür (başka hiçbir şey yazma):
                         const jsonMatch = aiText.match(/\{[\s\S]*\}/);
                         if (jsonMatch) {
                             const result = JSON.parse(jsonMatch[0]);
+                            // Her durumda Gemini'nin düzelttiği başlığı kullan
+                            if (result.title) title = result.title;
                             cleanTitle = result.cleanTitle || title;
                             category = result.category || 'Diğer';
                             description = result.description || '';
                             aiFomoScore = result.aiFomoScore || 5;
-                            // Proxy başarısız olduysa AI'ın fiyat/başlık verilerini al
+                            // Proxy başarısız olduysa AI'ın fiyat verilerini de al
                             if (!proxySuccess) {
-                                title = result.title || title || 'Ürün';
+                                if (!title) title = result.title || 'Ürün';
                                 newPrice = parseFloat(String(result.newPrice || 0)) || 0;
                                 oldPrice = parseFloat(String(result.oldPrice || 0)) || 0;
                                 discountPercent = result.discountPercent || 0;

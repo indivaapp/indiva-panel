@@ -548,7 +548,10 @@ function extractProductNameFromUrl(productUrl: string): string {
             const dpIdx = pathParts.indexOf('dp');
             rawName = dpIdx > 0 ? pathParts[dpIdx - 1] : lastPart;
         }
-        return rawName.replace(/-/g, ' ').trim();
+        const spaced = rawName.replace(/-/g, ' ').trim();
+        // Title Case + ardışık tekrar eden kelimeleri temizle
+        const titled = spaced.replace(/\b\w/g, c => c.toUpperCase());
+        return titled.replace(/\b(\w+)\b(?:\s+\1)+/gi, '$1').trim();
     } catch { return ''; }
 }
 
