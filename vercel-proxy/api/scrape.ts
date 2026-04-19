@@ -641,6 +641,32 @@ async function searchPriceViaPerplexity(productUrl: string): Promise<{
     }
 }
 
+async function searchImageViaBing(title: string): Promise<string> {
+    try {
+        const query = title.split(/\s+/).slice(0, 6).join(' ');
+        const bingUrl = `https://www.bing.com/images/search?q=${encodeURIComponent(query)}&first=1&count=1&mkt=tr-TR`;
+        const resp = await fetch(bingUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                'Accept': 'text/html',
+                'Accept-Language': 'tr-TR,tr;q=0.9',
+            },
+            signal: AbortSignal.timeout(10000),
+        });
+        if (!resp.ok) return '';
+        const html = await resp.text();
+        const $b = cheerio.load(html);
+        const mAttr = $b('a.iusc').first().attr('m');
+        if (mAttr) {
+            const m = JSON.parse(mAttr);
+            return m.murl || '';
+        }
+        return $b('meta[property="og:image"]').attr('content') || '';
+    } catch {
+        return '';
+    }
+}
+
 /**
  * Engellenen mağazalar için Bing arama ile fiyat bul.
  * Bing, cloud/AI altyapısından erişilebilir (Copilot/ChatGPT da kullanır).
@@ -850,6 +876,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     console.log('HTML çekilemedi, Akakce fallback deneniyor...');
                     const akResult = await searchPriceViaDDG(targetUrl);
                     if (akResult.newPrice > 0) {
+                        // Görsel yoksa Bing image search dene
+                        let fallbackImage = akResult.imageUrl;
+                        if (!fallbackImage && akResult.title) {
+                            fallbackImage = await searchImageViaBing(akResult.title);
+                        }
                         res.status(200).json({
                             success: true,
                             product: {
@@ -857,7 +888,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                                 brand: akResult.brand,
                                 newPrice: akResult.newPrice,
                                 oldPrice: Math.round(akResult.newPrice * 1.25),
-                                imageUrl: akResult.imageUrl,
+                                imageUrl: fallbackImage,
                                 resolvedUrl: targetUrl,
                                 aiPriceFallback: true,
                             }
@@ -1296,10 +1327,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     if (akResult.newPrice > 0) {
                         newPrice = akResult.newPrice;
                         if (!title) title = akResult.title;
-                        if (!imageUrl) imageUrl = akResult.imageUrl;
                         if (!brand) brand = akResult.brand;
                         aiPriceFallback = true;
                         console.log(`Akakce fallback başarılı: price=${newPrice}`);
+                    }
+                    // Görsel hâlâ yoksa Bing image search dene
+                    if (!imageUrl && title) {
+                        imageUrl = await searchImageViaBing(title);
                     }
                 }
 
