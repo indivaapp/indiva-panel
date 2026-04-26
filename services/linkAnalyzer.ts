@@ -1,6 +1,6 @@
 import { CATEGORIES } from '../constants/categories';
 
-const PROXY_URL = 'https://indiva-proxy.vercel.app/api/scrape';
+const AI_SCRAPE_URL = 'https://indiva-proxy.vercel.app/api/ai-scrape';
 
 export interface AnalyzedProduct {
     title: string;
@@ -69,29 +69,23 @@ interface ProxyProduct {
     oldPrice: number;
     imageUrl: string;
     resolvedUrl: string;
+    category?: string;
     aiPriceFallback?: boolean;
     priceNotFound?: boolean;
 }
 
 async function fetchProductFromProxy(url: string): Promise<ProxyProduct> {
-    const endpoint = `${PROXY_URL}?action=product&url=${encodeURIComponent(url)}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
-
-    try {
-        const res = await fetch(endpoint, { signal: controller.signal });
-        clearTimeout(timeout);
-        if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
-        const json = await res.json();
-        if (!json.success) throw new Error(json.error || 'Proxy hatası');
-        return json.product as ProxyProduct;
-    } catch (err: unknown) {
-        clearTimeout(timeout);
-        if (err instanceof Error && err.name === 'AbortError') {
-            throw new Error('Bağlantı zaman aşımına uğradı (30s)');
-        }
-        throw err;
-    }
+    const geminiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+    const res = await fetch(AI_SCRAPE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, geminiKey }),
+        signal: AbortSignal.timeout(60000),
+    });
+    if (!res.ok) throw new Error(`AI Scrape HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error || 'AI Scrape hatası');
+    return json.product as ProxyProduct;
 }
 
 // ─── Ana Fonksiyon ────────────────────────────────────────────────────────────
@@ -111,11 +105,11 @@ export async function analyzeProductLink(link: string): Promise<AnalyzedProduct>
         ? Math.round(((oldPrice - newPrice) / oldPrice) * 100)
         : 0;
 
-    const category = detectCategory(product.title || '', product.brand || '');
+    const category = product.category || detectCategory(product.title || '', product.brand || '');
 
     return {
         title: product.title || '',
-        brand: product.brand || storeName,
+        brand: storeName,
         store: storeName,
         category,
         newPrice,
