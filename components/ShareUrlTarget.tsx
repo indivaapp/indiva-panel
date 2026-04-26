@@ -62,170 +62,57 @@ const ShareUrlTarget: React.FC<Props> = ({ url, onClose }) => {
 
     const run = useCallback(async () => {
         try {
-            const GEMINI_KEY = (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
             const storeName  = detectStore(url);
+            const GEMINI_KEY = (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
 
-            // ── 1. Vercel proxy → yapılandırılmış veri ────────────────────────
+            // ── 1. AI Scrape (Jina + Gemini, server-side) ─────────────────────
             setStage('reading');
             let title = '', imageUrl = '', newPrice = 0, oldPrice = 0, brand = '';
-            let proxyHasTitle = false;
-            let proxySuccess  = false;
 
-            try {
-                const res = await fetch(
-                    `https://indiva-proxy.vercel.app/api/scrape?action=product&url=${encodeURIComponent(url)}`,
-                    { signal: AbortSignal.timeout(35000) }
-                );
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.success && data.product) {
-                        const p = data.product;
-                        title    = p.title    || '';
-                        imageUrl = p.imageUrl || '';
-                        newPrice = p.newPrice || 0;
-                        oldPrice = p.oldPrice || 0;
-                        brand        = p.brand || storeName;
-                        proxyHasTitle = !!title;
-                        proxySuccess  = !!(title && newPrice > 0);
-                    }
+            const aiRes = await fetch('https://indiva-proxy.vercel.app/api/ai-scrape', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url, geminiKey: GEMINI_KEY }),
+                signal: AbortSignal.timeout(60000),
+            });
+
+            let category = 'Diğer';
+            if (aiRes.ok) {
+                const data = await aiRes.json();
+                if (data.success && data.product) {
+                    const p = data.product;
+                    title    = p.title    || '';
+                    imageUrl = p.imageUrl || '';
+                    newPrice = p.newPrice || 0;
+                    oldPrice = p.oldPrice || 0;
+                    brand    = p.brand    || storeName;
+                    category = p.category || 'Diğer';
                 }
-            } catch (e) { console.warn('Proxy hatası:', e); }
-
-            // ── 2. Görsel yoksa Jina dene ─────────────────────────────────────
-            if (!imageUrl) {
-                try {
-                    const r = await fetch(`https://r.jina.ai/${url}`, {
-                        headers: { Accept: 'application/json' },
-                        signal: AbortSignal.timeout(8000),
-                    });
-                    if (r.ok) {
-                        const j = await r.json();
-                        imageUrl = j?.data?.ogImage || j?.data?.image || '';
-                    }
-                } catch {}
             }
 
-            // ── 3. Gemini → içerik zenginleştir / fallback ────────────────────
+            if (!title && !newPrice) throw new Error('Ürün bilgisi alınamadı. Lütfen tekrar deneyin.');
+
+            // ── 2. Fiyat hesapla ──────────────────────────────────────────────
             setStage('analyzing');
-            let cleanTitle = title, category = 'Diğer', description = '', aiFomoScore = 5;
-            let discountPercent = oldPrice > newPrice && newPrice > 0
-                ? Math.round(((oldPrice - newPrice) / oldPrice) * 100) : 0;
-
-            if (GEMINI_KEY) {
-                let prompt: string;
-                // Her durumda Jina'dan sayfa içeriği çek
-                let pageContent = '';
-                try {
-                    const r = await fetch(`https://r.jina.ai/${url}`, {
-                        headers: { Accept: 'text/plain' },
-                        signal: AbortSignal.timeout(20000),
-                    });
-                    if (r.ok) pageContent = (await r.text()).substring(0, 8000);
-                } catch {}
-
-                if (proxySuccess) {
-                    prompt = `E-ticaret ürünü:
-- Ham başlık: "${title}"
-- Fiyat: ${newPrice} TL${oldPrice > 0 ? ` (eski: ${oldPrice} TL)` : ''}
-- Mağaza: ${storeName}
-SAYFA İÇERİĞİ: ${pageContent.substring(0, 3000)}
-Ham başlık URL slug'dan gelmiş olabilir. Düzelt.
-SADECE JSON döndür:
-{
-  "title": "Düzgün ürün başlığı, Title Case, max 80 karakter",
-  "cleanTitle": "Kısa başlık, max 50 karakter",
-  "category": "Teknoloji/Giyim/Ev & Yaşam/Market/Kozmetik/Anne & Bebek/Spor/Kitap/Sağlık/Pet/Otomotiv/Diğer",
-  "description": "2-3 cümle etkileyici Türkçe, FOMO içerecek",
-  "aiFomoScore": 1-10
-}`;
-                } else if (proxyHasTitle) {
-                    prompt = `E-ticaret ürünü:
-- Ürün adı: "${title}"
-- Mağaza: ${storeName}
-SAYFA İÇERİĞİ: ${pageContent}
-Sayfadan güncel fiyatı çıkar.
-SADECE JSON döndür:
-{
-  "title": "Düzgün ürün başlığı, Title Case, max 80 karakter",
-  "cleanTitle": "Kısa başlık, max 50 karakter",
-  "newPrice": güncel fiyat (TL, sadece rakam, sayfada yoksa 0),
-  "oldPrice": orijinal fiyat (TL, yoksa 0),
-  "category": "Teknoloji/Giyim/Ev & Yaşam/Market/Kozmetik/Anne & Bebek/Spor/Kitap/Sağlık/Pet/Otomotiv/Diğer",
-  "description": "2-3 cümle etkileyici Türkçe, FOMO içerecek",
-  "aiFomoScore": 1-10
-}`;
-                } else {
-                    prompt = `E-ticaret ürün sayfasını analiz et:
-URL: ${url}
-Mağaza: ${storeName}
-SAYFA İÇERİĞİ: ${pageContent}
-SADECE JSON döndür:
-{
-  "title": "ürün başlığı, Title Case, max 80 karakter",
-  "cleanTitle": "kısa başlık, max 50 karakter",
-  "newPrice": güncel fiyat (TL, sadece rakam, sayfada yoksa 0),
-  "oldPrice": orijinal fiyat (TL, yoksa 0),
-  "category": "Teknoloji/Giyim/Ev & Yaşam/Market/Kozmetik/Anne & Bebek/Spor/Kitap/Sağlık/Pet/Otomotiv/Diğer",
-  "description": "2-3 cümle etkileyici Türkçe, FOMO içerecek",
-  "aiFomoScore": 1-10
-}`;
-                }
-
-                try {
-                    const r = await fetch(
-                        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + GEMINI_KEY,
-                        {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                                generationConfig: { temperature: 0.2, responseMimeType: 'application/json' },
-                            }),
-                        }
-                    );
-                    if (r.ok) {
-                        const data = await r.json();
-                        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-                        const m    = text.match(/\{[\s\S]*\}/);
-                        if (m) {
-                            const ai = JSON.parse(m[0]);
-                            if (ai.title) title = ai.title;
-                            cleanTitle      = ai.cleanTitle || title;
-                            category        = ai.category   || 'Diğer';
-                            description     = ai.description || '';
-                            aiFomoScore     = ai.aiFomoScore || 5;
-                            if (!proxySuccess) {
-                                newPrice        = parseFloat(String(ai.newPrice || 0)) || 0;
-                                oldPrice        = parseFloat(String(ai.oldPrice || 0)) || 0;
-                                discountPercent = ai.discountPercent || 0;
-                            }
-                        }
-                    }
-                } catch (e) { console.warn('Gemini hatası:', e); }
-            }
-
-            if (!title && !newPrice) throw new Error('Ürün bilgisi alınamadı.');
-
+            let discountPercent = 0;
             if (oldPrice === 0 && newPrice > 0) oldPrice = Math.round(newPrice * 1.3);
-            if (discountPercent === 0 && oldPrice > newPrice && newPrice > 0)
+            if (oldPrice > newPrice && newPrice > 0)
                 discountPercent = Math.round(((oldPrice - newPrice) / oldPrice) * 100);
 
-            // ── 4. Firebase ───────────────────────────────────────────────────
+            // ── 3. Firebase ───────────────────────────────────────────────────
             setStage('publishing');
             await addDoc(collection(db, 'discounts'), {
                 title:           title || 'Ürün',
-                cleanTitle:      cleanTitle || title || 'Ürün',
+                cleanTitle:      title || 'Ürün',
                 newPrice,
                 oldPrice,
                 discountPercent,
                 category,
-                description,
-                aiFomoScore,
                 imageUrl,
                 link:            url,
                 originalStoreLink: url,
                 storeName,
-                brand:           storeName,  // INDIVA'da mağaza adı olarak gösterilir
+                brand:           storeName,
                 status:          'aktif',
                 source:          'share_target',
                 createdAt:       serverTimestamp(),
