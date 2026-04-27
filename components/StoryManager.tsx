@@ -81,7 +81,15 @@ const StoryManager: React.FC<StoryManagerProps> = () => {
 
         try {
             // ── 1. Story yayınla ──────────────────────────────────────────────
-            await addInfluencerStory(productImage, affiliateLink.trim(), discountCode.trim() || undefined);
+            const expiresAt = new Date();
+            expiresAt.setHours(expiresAt.getHours() + 24);
+            await addInfluencerStory({
+                imageUrl: productImage,
+                affiliateLink: affiliateLink.trim(),
+                discountCode: discountCode.trim() || '',
+                isActive: true,
+                expiresAt,
+            });
 
             // ── 2. Onay kutucuğu işaretliyse → AI ile indirim ilanı da ekle ──
             if (alsoPublishDiscount) {
@@ -320,7 +328,7 @@ const StoryManager: React.FC<StoryManagerProps> = () => {
                             >
                                 <div className="relative">
                                     <img
-                                        src={story.productImage}
+                                        src={story.imageUrl}
                                         alt="Story görseli"
                                         className="w-full aspect-square object-cover"
                                     />

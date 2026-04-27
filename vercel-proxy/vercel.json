@@ -2,6 +2,9 @@
     "functions": {
         "api/scrape.ts": {
             "maxDuration": 60
+        },
+        "api/ai-scrape.ts": {
+            "maxDuration": 60
         }
     },
     "headers": [

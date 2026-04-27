@@ -131,5 +131,6 @@ export interface InfluencerStory {
     affiliateLink: string;
     discountCode?: string;
     isActive: boolean;
+    expiresAt?: any;
     createdAt: FirestoreTimestamp;
 }
