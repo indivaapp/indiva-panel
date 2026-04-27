@@ -503,3 +503,26 @@ export const deleteScheduledNotification = async (id: string) => {
     const docRef = doc(db, 'scheduled_notifications', id);
     await deleteDoc(docRef);
 };
+
+// ─── Influencer Stories ───────────────────────────────────────────────────────
+
+export const getInfluencerStories = async () => {
+    const q = query(collection(db, 'influencer_stories'), orderBy('createdAt', 'desc'));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+};
+
+export const addInfluencerStory = async (data: Omit<any, 'id' | 'createdAt'>) => {
+    return await addDoc(collection(db, 'influencer_stories'), {
+        ...data,
+        createdAt: serverTimestamp(),
+    });
+};
+
+export const updateInfluencerStory = async (id: string, data: Partial<any>) => {
+    await updateDoc(doc(db, 'influencer_stories', id), data);
+};
+
+export const deleteInfluencerStory = async (id: string) => {
+    await deleteDoc(doc(db, 'influencer_stories', id));
+};

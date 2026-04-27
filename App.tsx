@@ -28,6 +28,7 @@ import AutoDiscoveryPanel from './components/AutoDiscoveryPanel';
 import Dashboard from './components/Dashboard';
 import AddDiscountForm from './components/AddDiscountForm';
 import AffiliateBot from './src/components/AffiliateBot';
+import StoryManager from './components/StoryManager';
 import ShareTarget from './components/ShareTarget';
 import ShareUrlTarget from './components/ShareUrlTarget';
 import { ensureAnonymousAuth, onAuthReady } from './services/auth';
@@ -254,6 +255,8 @@ const App: React.FC = () => {
                 return <AddDiscountForm setActiveView={setActiveView} isAdmin={isAdmin} />;
             case 'affiliateBot':
                 return <AffiliateBot isAdmin={isAdmin} />;
+            case 'stories':
+                return <StoryManager isAdmin={isAdmin} />;
             default:
                 return <DiscountManager setActiveView={setActiveView} isAdmin={isAdmin} />;
         }
@@ -264,6 +267,7 @@ const App: React.FC = () => {
         addDiscount: 'Yeni İlan Ekle', manageDiscounts: 'Yönet', brochures: 'Aktüel', submissions: 'Onay',
         ads: 'Reklam', notifications: 'Bildirim', editDeal: 'Düzenle',
         affiliateLinks: 'Affiliate', autoDiscovery: 'Keşif', affiliateBot: 'Affiliate Bot',
+        stories: 'Story Yönetimi',
     };
 
     return (

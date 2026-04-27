@@ -7,6 +7,12 @@ import {
 } from '../services/firebase';
 import { Clipboard } from '@capacitor/clipboard';
 import { App as CapApp } from '@capacitor/app';
+import {
+    generateAffiliateLink,
+    isTrendyolUrl,
+    saveTrendyolCookies,
+    hasTrendyolCookies,
+} from '../services/trendyolAffiliate';
 import type { ViewType, Discount } from '../types';
 
 interface AffiliateLinkManagerProps {
@@ -49,6 +55,16 @@ const AffiliateLinkManager: React.FC<AffiliateLinkManagerProps> = ({ isAdmin, sh
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
     // Bot state
+    // Cookie ayarları
+    const [showCookieSettings, setShowCookieSettings] = useState(false);
+    const [cookieEntrance, setCookieEntrance]         = useState('');
+    const [cookieAnonym, setCookieAnonym]             = useState('');
+    const [cookiesConfigured, setCookiesConfigured]   = useState(hasTrendyolCookies);
+
+    // Otomatik üretme
+    const [autoGenerating, setAutoGenerating] = useState(false);
+    const [autoProgress, setAutoProgress]     = useState({ done: 0, total: 0 });
+
     const [botActive, setBotActive] = useState(false);
     const [botStatus, setBotStatus] = useState<'waiting' | 'detected' | 'saving'>('waiting');
     const lastSavedRef = useRef('');
@@ -72,6 +88,42 @@ const AffiliateLinkManager: React.FC<AffiliateLinkManagerProps> = ({ isAdmin, sh
         const h = Math.floor(diff / 60);
         if (h < 24) return `${h} sa önce`;
         return created.toLocaleDateString('tr-TR');
+    };
+
+    const handleSaveCookies = () => {
+        if (!cookieEntrance.trim() || !cookieAnonym.trim()) return;
+        saveTrendyolCookies(cookieEntrance.trim(), cookieAnonym.trim());
+        setCookiesConfigured(true);
+        setShowCookieSettings(false);
+        setCookieEntrance('');
+        setCookieAnonym('');
+        setSuccessMessage('✅ Cookie\'ler kaydedildi!');
+        setTimeout(() => setSuccessMessage(null), 3000);
+    };
+
+    const handleAutoGenerateAll = async () => {
+        const trendyolDeals = pendingDeals.filter(d => isTrendyolUrl(d.originalStoreLink || d.link));
+        if (trendyolDeals.length === 0) {
+            setError('Bekleyen Trendyol ürünü yok.');
+            return;
+        }
+        setAutoGenerating(true);
+        setAutoProgress({ done: 0, total: trendyolDeals.length });
+        let done = 0;
+        for (const deal of trendyolDeals) {
+            try {
+                const link = await generateAffiliateLink(deal.originalStoreLink || deal.link);
+                if (link.includes('ty.gl')) {
+                    await updateAffiliateLink(deal.id, link);
+                }
+            } catch { /* devam et */ }
+            done++;
+            setAutoProgress({ done, total: trendyolDeals.length });
+        }
+        setAutoGenerating(false);
+        setSuccessMessage(`🎉 ${done} Trendyol ürünü otomatik güncellendi!`);
+        setTimeout(() => setSuccessMessage(null), 4000);
+        await loadPending();
     };
 
     const loadPending = async () => {
@@ -257,6 +309,76 @@ const AffiliateLinkManager: React.FC<AffiliateLinkManagerProps> = ({ isAdmin, sh
 
     return (
         <div className="max-w-2xl mx-auto px-4 py-6 pb-20">
+
+            {/* Cookie Ayarları */}
+            <div className="mb-4 bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+                <button
+                    onClick={() => setShowCookieSettings(v => !v)}
+                    className="w-full flex items-center justify-between px-4 py-3 text-sm"
+                >
+                    <span className="flex items-center gap-2">
+                        <span>{cookiesConfigured ? '🟢' : '🔴'}</span>
+                        <span className="text-gray-300 font-medium">Trendyol Cookie Ayarları</span>
+                        {cookiesConfigured && <span className="text-green-400 text-xs">Ayarlı</span>}
+                    </span>
+                    <span className="text-gray-500">{showCookieSettings ? '▲' : '▼'}</span>
+                </button>
+                {showCookieSettings && (
+                    <div className="px-4 pb-4 space-y-3 border-t border-gray-700">
+                        <p className="text-xs text-gray-500 pt-3">
+                            Trendyol.com → F12 → Uygulama → Çerezler'den alın
+                        </p>
+                        <div>
+                            <label className="text-xs text-gray-400 block mb-1">COOKIE_TY.Entrance değeri</label>
+                            <textarea
+                                value={cookieEntrance}
+                                onChange={e => setCookieEntrance(e.target.value)}
+                                placeholder="x=17000813&pp=..."
+                                rows={2}
+                                className="w-full text-xs p-2 bg-gray-900 border border-gray-600 rounded-lg text-white font-mono"
+                            />
+                        </div>
+                        <div>
+                            <label className="text-xs text-gray-400 block mb-1">COOKIE_TY.Anonym değeri</label>
+                            <textarea
+                                value={cookieAnonym}
+                                onChange={e => setCookieAnonym(e.target.value)}
+                                placeholder="tx=eyJhbGci..."
+                                rows={2}
+                                className="w-full text-xs p-2 bg-gray-900 border border-gray-600 rounded-lg text-white font-mono"
+                            />
+                        </div>
+                        <button
+                            onClick={handleSaveCookies}
+                            disabled={!cookieEntrance.trim() || !cookieAnonym.trim()}
+                            className="w-full py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white text-sm font-bold rounded-lg"
+                        >
+                            Kaydet
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            {/* Otomatik Üretme Butonu */}
+            {cookiesConfigured && pendingDeals.length > 0 && (
+                <button
+                    onClick={handleAutoGenerateAll}
+                    disabled={autoGenerating}
+                    className="w-full mb-4 py-3 bg-gradient-to-r from-green-700 to-teal-700 hover:from-green-600 hover:to-teal-600 disabled:from-gray-700 disabled:to-gray-700 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-all"
+                >
+                    {autoGenerating ? (
+                        <>
+                            <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            <span>Oluşturuluyor... {autoProgress.done}/{autoProgress.total}</span>
+                        </>
+                    ) : (
+                        <>
+                            <span>⚡</span>
+                            <span>Trendyol Linklerini Otomatik Oluştur</span>
+                        </>
+                    )}
+                </button>
+            )}
 
             {/* Mesajlar */}
             {error && (

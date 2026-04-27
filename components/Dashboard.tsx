@@ -340,6 +340,20 @@ const Dashboard: React.FC<DashboardProps> = ({ setActiveView }) => {
                 </div>
             </button>
 
+            {/* Hızlı Erişim */}
+            <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => setActiveView('affiliateBot')} className="bg-gray-800 border border-gray-700 rounded-xl p-4 text-left hover:border-purple-500 transition-colors">
+                    <span className="text-2xl">🤖</span>
+                    <p className="text-white text-sm font-semibold mt-1">Affiliate Bot</p>
+                    <p className="text-gray-500 text-xs">Otomatik link yönetimi</p>
+                </button>
+                <button onClick={() => setActiveView('stories')} className="bg-gray-800 border border-gray-700 rounded-xl p-4 text-left hover:border-pink-500 transition-colors">
+                    <span className="text-2xl">🎬</span>
+                    <p className="text-white text-sm font-semibold mt-1">Story Yönetimi</p>
+                    <p className="text-gray-500 text-xs">Influencer story ekle</p>
+                </button>
+            </div>
+
             {/* Affiliate Widget */}
             <AffiliateWidget />
 

@@ -123,3 +123,13 @@ export interface ScheduledNotification {
     isActive: boolean;
     createdAt: FirestoreTimestamp;
 }
+
+export interface InfluencerStory {
+    id: string;
+    imageUrl: string;
+    imageDeleteUrl?: string;
+    affiliateLink: string;
+    discountCode?: string;
+    isActive: boolean;
+    createdAt: FirestoreTimestamp;
+}
