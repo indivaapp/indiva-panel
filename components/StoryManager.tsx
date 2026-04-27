@@ -84,7 +84,7 @@ const StoryManager: React.FC<StoryManagerProps> = () => {
             const expiresAt = new Date();
             expiresAt.setHours(expiresAt.getHours() + 24);
             await addInfluencerStory({
-                imageUrl: productImage,
+                productImage,
                 affiliateLink: affiliateLink.trim(),
                 discountCode: discountCode.trim() || '',
                 isActive: true,
@@ -141,7 +141,8 @@ const StoryManager: React.FC<StoryManagerProps> = () => {
             resetForm();
             await fetchStories();
         } catch (err: any) {
-            setError(`Hata: ${err?.message || 'Bilinmeyen hata'}`);
+            console.error('Story kaydetme hatası:', err?.code, err?.message, err);
+            setError(`Hata: ${err?.code ? err.code + ' — ' : ''}${err?.message || 'Bilinmeyen hata'}`);
         } finally {
             setIsSubmitting(false);
         }

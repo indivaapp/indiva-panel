@@ -126,8 +126,7 @@ export interface ScheduledNotification {
 
 export interface InfluencerStory {
     id: string;
-    imageUrl: string;
-    imageDeleteUrl?: string;
+    productImage: string;
     affiliateLink: string;
     discountCode?: string;
     isActive: boolean;
