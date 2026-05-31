@@ -110,7 +110,8 @@ export const sendDirectPushNotification = async (
     body: string,
     imageUrl?: string,
     url?: string,
-    discountId?: string
+    discountId?: string,
+    storyId?: string,
 ): Promise<{ success: boolean; messageId?: string; error?: string }> => {
     if (!title || !body) {
         throw new Error('Başlık ve mesaj zorunludur.');
@@ -130,14 +131,17 @@ export const sendDirectPushNotification = async (
                 data: {
                     url: url || '',
                     click_action: 'OPEN_APP',
-                    ...(discountId && { discountId })
+                    ...(discountId && { discountId }),
+                    ...(storyId && { storyId }),
                 },
                 android: {
                     priority: 'high' as const,
                     notification: {
-                        channel_id: 'indiva_notifications',
+                        channel_id: 'indiva_default_channel',
                         sound: 'default',
-                        default_sound: true
+                        default_sound: true,
+                        // Android BigPicture — raw FCM v1 REST'te alan adı 'image'
+                        ...(imageUrl && { image: imageUrl }),
                     }
                 }
             }

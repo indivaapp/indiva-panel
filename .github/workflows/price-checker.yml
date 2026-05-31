@@ -2,7 +2,9 @@ name: Auto Price Checker
 
 on:
   schedule:
-    - cron: '*/10 * * * *'  # Her 10 dakikada bir çalışır
+    # Türkiye 08:00–02:00 penceresi (UTC+3, DST yok) → UTC 05:00–22:59.
+    # Her 10 dakikada bir. Kesin sınır (02:00'da durma) script içinde de korunur.
+    - cron: '*/10 5-22 * * *'
   workflow_dispatch:
 
 jobs:

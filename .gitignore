@@ -26,6 +26,10 @@ dist-ssr
 .vercel
 firebase-service-account.json
 .env
+# Güvenlik: imza anahtarları asla commit edilmez
+*.keystore
+*.jks
+build_output.txt
 .DS_Store
 *.zip
 logs.zip

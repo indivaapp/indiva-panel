@@ -106,42 +106,69 @@ async function sendSilentExpiredNotification(discountId, title) {
 // ─── HTML Tabanlı Doğrulama (AI olmadan) ─────────────────────────────────────
 // AI_ENABLED=true değilse bu fonksiyon kullanılır. Sayfa HTML'ini tarayarak
 // stok durumu ve fiyat değişikliğini tespit eder.
+/**
+ * Fiyat metnini güvenli biçimde sayıya çevirir.
+ * Türk ("1.299,90") ve ABD ("1,299.90" / "1299.90") formatlarını ayırt eder.
+ * Eski kod her zaman TR formatı varsayıyordu → "1299.90" gibi değerleri yanlış
+ * okuyup (129990) yanlış "fiyat arttı" tetikliyordu. Bu, yanlış-pozitif kaynağıydı.
+ */
+function normalizePrice(raw) {
+    if (!raw && raw !== 0) return 0;
+    let s = String(raw).replace(/[^\d.,]/g, '');
+    if (!s) return 0;
+    const hasDot = s.includes('.');
+    const hasComma = s.includes(',');
+    if (hasDot && hasComma) {
+        // En sağdaki ayraç ondalıktır
+        if (s.lastIndexOf(',') > s.lastIndexOf('.')) s = s.replace(/\./g, '').replace(',', '.'); // 1.299,90
+        else s = s.replace(/,/g, ''); // 1,299.90
+    } else if (hasComma) {
+        const after = s.length - s.lastIndexOf(',') - 1;
+        s = (after === 1 || after === 2) ? s.replace(',', '.') : s.replace(/,/g, '');
+    } else if (hasDot) {
+        const after = s.length - s.lastIndexOf('.') - 1;
+        if (!(after === 1 || after === 2)) s = s.replace(/\./g, ''); // binlik nokta (1.299)
+    }
+    const n = parseFloat(s);
+    return isNaN(n) ? 0 : n;
+}
+
 function verifyWithHTML(product, html) {
     const lower = html.toLowerCase();
 
-    // Stok bitti / ürün kaldırıldı sinyalleri
-    // ÖNEMLİ: includes() yerine daha spesifik kontrol — Trendyol/Amazon gibi sayfalarda
-    // diğer ürünlerin "tükendi" badge'leri false-positive üretmesin.
-    // Sadece özellikle yazılmış tam cümleleri veya yapısal sinyalleri kabul et.
+    // Stok bitti / ürün kaldırıldı — SADECE spesifik, güvenilir sinyaller.
+    // Diğer ürünlerin "tükendi" rozeti false-positive üretmesin diye tam cümle /
+    // yapısal (JSON-LD availability) sinyallere bakılır.
     const stockPhrases = [
         'bu ürün artık satılmıyor',
         'bu ürün mevcut değil',
         'bu fırsat sonlandı',
         'kampanya sona erdi',
         'ürün kaldırıldı',
-        '"out of stock"',         // JSON-LD availability
         '"discontinued"',
         'availability":"outofstock',
-        'availability: "outofstock',
+        'availability": "outofstock',
+        'availability":"http://schema.org/outofstock',
+        'availability":"https://schema.org/outofstock',
     ];
     const isOutOfStock = stockPhrases.some(kw => lower.includes(kw));
     if (isOutOfStock) {
-        return { expired: true, reason: 'Stok tükendi (HTML kontrolü)' };
+        return { expired: true, reason: 'Stok tükendi (yapısal sinyal)' };
     }
 
-    // Fiyat çıkarma: sayfadan basit regex ile mevcut fiyatı bul
-    const pricePatterns = [
-        /"price"\s*:\s*"?([\d.,]+)"?/i,
-        /itemprop="price"[^>]*content="([\d.,]+)"/i,
-        /"priceAmount"\s*:\s*([\d.,]+)/i,
-        /<span[^>]*class="[^"]*price[^"]*"[^>]*>([\d.,\s]+)\s*TL/i,
+    // Fiyat: SADECE güvenilir/yapısal kaynaklardan al.
+    // Gevşek <span class="price"> metni güvenilmezdir (üstü çizili eski fiyat veya
+    // başka ürün olabilir) → karara dahil EDİLMEZ.
+    const reliablePatterns = [
+        /"price"\s*:\s*"?([\d.,]+)"?/i,                              // JSON-LD / JSON offers.price
+        /itemprop=["']price["'][^>]*content=["']([\d.,]+)["']/i,    // microdata content
+        /"priceAmount"\s*:\s*([\d.,]+)/i,                            // bazı SPA payload'ları
     ];
     let currentPrice = 0;
-    for (const pattern of pricePatterns) {
+    for (const pattern of reliablePatterns) {
         const match = html.match(pattern);
         if (match) {
-            const raw = match[1].replace(/\./g, '').replace(',', '.');
-            const parsed = parseFloat(raw);
+            const parsed = normalizePrice(match[1]);
             if (parsed > 0 && parsed < 1000000) { currentPrice = parsed; break; }
         }
     }
@@ -149,7 +176,7 @@ function verifyWithHTML(product, html) {
     const savedPrice = product.newPrice || 0;
     if (currentPrice > 0 && savedPrice > 0) {
         const ratio = (currentPrice - savedPrice) / savedPrice;
-        if (ratio > 0.15) {
+        if (ratio > 0.25) {
             return {
                 expired: true,
                 currentPrice,
@@ -159,7 +186,8 @@ function verifyWithHTML(product, html) {
         return { expired: false, currentPrice, reason: 'Aktif' };
     }
 
-    return { expired: false, reason: 'HTML kontrolü: aktif görünüyor' };
+    // Güvenilir fiyat okunamadı → SİLME (belirsizlik = güvenli taraf).
+    return { expired: false, reason: 'Güvenilir fiyat okunamadı, aktif kabul edildi' };
 }
 
 // ─── AI Verification (Gemini 2.5 Flash) ───────────────────────────────────────
@@ -186,7 +214,7 @@ GÖREV: Sayfa içeriğine göre aşağıdakileri belirle ve SADECE JSON döndür
 2. "inStock": stokta var mı? (true/false)
 3. "expired": İndirim bitti mi? Kurallar:
    - Stok yoksa ("tükendi", "satışta değil", "out of stock"): true
-   - Mevcut fiyat ${originalPrice} TL'den %15+ artmışsa: true
+   - Mevcut fiyat ${originalPrice} TL'den %25+ artmışsa: true
    - Ürün sayfası 404 veya ürün kaldırılmışsa: true
    - Aksi halde: false
 4. "reason": kısa Türkçe açıklama (max 50 karakter)
@@ -218,10 +246,10 @@ YALNIZCA JSON: {"currentPrice": 0, "inStock": true, "expired": false, "reason": 
         if (!jsonMatch) return { expired: false, reason: 'AI JSON döndürmedi' };
         const result = JSON.parse(jsonMatch[0]);
 
-        // Ek kontrol: Fiyat artışı %15'ten fazla ise zorla expired=true
+        // Ek kontrol: Fiyat artışı %25'ten fazla ise zorla expired=true
         if (result.currentPrice > 0 && originalPrice > 0) {
             const ratio = (result.currentPrice - originalPrice) / originalPrice;
-            if (ratio > 0.15) {
+            if (ratio > 0.25) {
                 result.expired = true;
                 result.reason = `Fiyat: ${originalPrice}₺ → ${result.currentPrice}₺ (+%${Math.round(ratio * 100)})`;
             }
@@ -243,6 +271,18 @@ YALNIZCA JSON: {"currentPrice": 0, "inStock": true, "expired": false, "reason": 
 async function checkPrices() {
     process.stdout.write('\x1Bc'); // Terminali temizle
     console.log(`\n🚀 INDIVA AKILLI TAKİP SİSTEMİ: ${new Date().toLocaleString('tr-TR')}`);
+
+    // ── Çalışma penceresi: Türkiye 08:00–02:00 (UTC+3, DST yok) ──────────────────
+    // Zamanlanmış (cron) çalıştırmada pencere dışındaysa atla. Manuel tetikleme
+    // (workflow_dispatch — paneldeki "Şimdi Kontrol Et") her zaman çalışır.
+    const isManual = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch';
+    const turkeyHour = (new Date().getUTCHours() + 3) % 24;
+    const inWindow = turkeyHour >= 8 || turkeyHour < 2; // 08:00–01:59 aktif, 02:00'da durur
+    if (!isManual && !inWindow) {
+        console.log(`⏸️  Çalışma penceresi dışında (TR ~${turkeyHour}:00, aktif 08:00–02:00). Atlanıyor.`);
+        return;
+    }
+
     const db = initFirebase();
 
     try {
@@ -359,7 +399,25 @@ async function checkPrices() {
                     : verifyWithHTML(deal, html);
 
                 if (aiResult.expired) {
-                    console.log(`   🚩 İNDİRİM BİTTİ: ${aiResult.reason} (${id})`);
+                    const prevStrike = typeof deal.expireStrike === 'number' ? deal.expireStrike : 0;
+
+                    if (prevStrike < 1) {
+                        // ── 1. VURUŞ: henüz SİLME. Şüpheli işaretle; sonraki turda da
+                        // "bitti" derse kesinleşir. Anlık bot-engeli/parse hatası kaynaklı
+                        // yanlış-pozitifleri (aktif ürünü silme) eler.
+                        console.log(`   ⚠️  1. UYARI (silinmedi, 2. onay bekleniyor): ${aiResult.reason} (${id})`);
+                        await doc.ref.update({
+                            expireStrike: 1,
+                            lastStrikeReason: aiResult.reason,
+                            lastStrikeAt: FieldValue.serverTimestamp(),
+                            lastCheckedPrice: aiResult.currentPrice || 0,
+                            lastPriceCheck: FieldValue.serverTimestamp(),
+                        });
+                        return;
+                    }
+
+                    // ── 2. ARDIŞIK VURUŞ: KESİNLEŞTİR ──
+                    console.log(`   🚩 İNDİRİM BİTTİ (2. onay): ${aiResult.reason} (${id})`);
                     const deleteDate = new Date(Date.now() + 60 * 60 * 1000);
 
                     const updateData = {
@@ -369,7 +427,8 @@ async function checkPrices() {
                         deleteAt: deleteDate,
                         lastCheckedPrice: aiResult.currentPrice || 0,
                         lastPriceCheck: FieldValue.serverTimestamp(),
-                        errorReason: aiResult.reason
+                        errorReason: aiResult.reason,
+                        expireStrike: 2,
                     };
                     await doc.ref.update(updateData);
                     // Mobil uygulamaı gerçek zamanlı bilgilendirmek için sessiz FCM gönder
@@ -390,7 +449,8 @@ async function checkPrices() {
                     await doc.ref.update({
                         lastPriceCheck: FieldValue.serverTimestamp(),
                         lastCheckedPrice: aiResult.currentPrice || deal.newPrice,
-                        status: 'aktif'
+                        status: 'aktif',
+                        expireStrike: 0, // aktif çıktı → şüphe işaretini sıfırla
                     });
                 }
             } catch (e) {
