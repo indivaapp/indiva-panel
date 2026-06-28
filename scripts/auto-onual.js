@@ -41,7 +41,7 @@ if (fs.existsSync(envPath)) {
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-const ONUAL_URL = 'https://onual.com/fiyat/';
+const ONUAL_URL = 'https://www.onual.com';
 const MAX_NEW_PRODUCTS = 15; // Biraz artırılabilir, artık daha verimli
 const REQUEST_DELAY_MS = 1000; // İstekler arası bekleme (ms)
 
@@ -500,7 +500,7 @@ async function fetchProductDetails(product) {
 
         // Eğer burada /git/ path'i varsa tam URL'ye çevir
         if (intermediateLink && !intermediateLink.startsWith('http')) {
-            intermediateLink = `https://onual.com${intermediateLink}`;
+            intermediateLink = `https://www.onual.com${intermediateLink}`;
         }
 
         return {

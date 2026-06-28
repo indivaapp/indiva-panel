@@ -132,75 +132,87 @@ export async function resolveUrl(url, timeout = 10000) {
 
 /**
  * Online alışveriş sitesinden ilanları parse et
- * api/scrape.ts → parseOnualHtml() ile aynı mantığa sahip
+ * Yeni onual.com yapısı (2025+): <a class="product-card group" data-share-id="...">
  */
 export function parseDeals(html) {
     const $ = cheerio.load(html);
     const deals = [];
     const seenIds = new Set();
 
-    // article.post kart yapısını parse et (OnuAl'nın gerçek HTML yapısı)
-    $('article.post').each((_, card) => {
+    // Yeni yapı: data-share-id attribute'u olan kart linkleri
+    $('[data-share-id]').each((_, card) => {
         const $card = $(card);
-        const titleLink = $card.find('h3.entry-title a, h3 a').first();
-        const href = titleLink.attr('href') || '';
-        const title = titleLink.text().trim();
 
-        if (!title || title.length < 5) return;
-
-        // Onual ürün ID'si URL'den al
-        const idMatch = href.match(/-p-(\d+)/);
-        if (!idMatch) return;
-        const productId = idMatch[1];
-        if (seenIds.has(productId)) return;
+        const productId = $card.attr('data-share-id');
+        if (!productId || seenIds.has(productId)) return;
         seenIds.add(productId);
 
-        // Fiyat
+        // Başlık: title attribute daha temiz (HTML entity yok), text() fallback
+        const title = ($card.find('.product-title').attr('title') || $card.find('.product-title').text()).trim();
+        if (!title || title.length < 3) return;
+
+        // Fiyat: ".product-price" içindeki "52 TL" → 52
         let newPrice = 0;
-        const priceText = $card.find('h4').first().text();
-        const priceMatch = priceText.match(/(\d[\d.,]*)\s*TL/i);
+        const priceText = $card.find('.product-price').first().text().trim();
+        const priceMatch = priceText.match(/([\d.]+(?:,\d+)?)\s*TL/i);
         if (priceMatch) {
-            newPrice = parseFloat(priceMatch[1].replace('.', '').replace(',', '.')) || 0;
+            newPrice = parseFloat(priceMatch[1].replace(/\./g, '').replace(',', '.')) || 0;
         }
-        // URL'den fiyat fallback
+        // Fallback: URL fragment'taki #fiyat= değeri
         if (!newPrice) {
+            const href = $card.attr('href') || '';
             const hashMatch = href.match(/fiyat=(\d+)/);
-            if (hashMatch) newPrice = parseInt(hashMatch[1], 10);
+            if (hashMatch) {
+                const raw = parseInt(hashMatch[1], 10);
+                newPrice = raw > 10000 ? Math.round(raw / 100) : raw; // kuruş → TL
+            }
         }
 
-        // Thumbnail (varsa — detay sayfasında OG image ile üzerine yazılacak)
-        const img = $card.find('figure.post-thumbnail img, .post-thumbnail img, img').first();
-        const thumbnailUrl = img.attr('src') || img.attr('data-src') || '';
+        const thumbnailUrl = $card.find('.product-image').attr('src') || '';
+        const storeName = $card.find('.product-store-logo-badge').attr('title') || '';
+        const discountNote = $card.find('.product-note-tooltip').text().trim();
 
-        const fullLink = href.startsWith('http') ? href : `https://onual.com${href}`;
+        const href = ($card.attr('href') || '').split('#')[0];
+        const fullLink = href.startsWith('http')
+            ? href
+            : `https://www.onual.com/${href.replace(/^\//, '')}`;
 
         deals.push({
             id: productId,
             title: title.replace(/\s+/g, ' ').trim(),
-            url: fullLink.split('#')[0],
+            url: fullLink,
             newPrice,
-            thumbnailUrl
+            thumbnailUrl,
+            storeName,
+            discountNote,
         });
     });
 
-    // Fallback: article.post bulunamazsa eski yöntemi dene
+    // Fallback: eski article.post yapısı
     if (deals.length === 0) {
-        $('a[href*="/fiyat/"]').each((_, el) => {
-            const href = $(el).attr('href');
-            if (!href || !href.match(/\/fiyat\/[^/]+-p-\d+\.html/i)) return;
-            const title = $(el).text().trim();
-            if (!title || title.length < 3) return;
-            const idMatch = href.match(/-p-(\d+)\.html/);
-            const productId = idMatch ? idMatch[1] : null;
-            if (!productId || seenIds.has(productId)) return;
+        $('article.post').each((_, card) => {
+            const $card = $(card);
+            const titleLink = $card.find('h3.entry-title a, h3 a').first();
+            const href = titleLink.attr('href') || '';
+            const title = titleLink.text().trim();
+            if (!title || title.length < 5) return;
+            const idMatch = href.match(/-p-(\d+)/);
+            if (!idMatch) return;
+            const productId = idMatch[1];
+            if (seenIds.has(productId)) return;
             seenIds.add(productId);
-            deals.push({
-                id: productId,
-                title,
-                url: href.startsWith('http') ? href : `https://onual.com${href}`,
-                newPrice: 0,
-                thumbnailUrl: ''
-            });
+            let newPrice = 0;
+            const priceText = $card.find('h4').first().text();
+            const priceMatch = priceText.match(/(\d[\d.,]*)\s*TL/i);
+            if (priceMatch) newPrice = parseFloat(priceMatch[1].replace('.', '').replace(',', '.')) || 0;
+            if (!newPrice) {
+                const hashMatch = href.match(/fiyat=(\d+)/);
+                if (hashMatch) newPrice = parseInt(hashMatch[1], 10);
+            }
+            const img = $card.find('figure.post-thumbnail img, .post-thumbnail img, img').first();
+            const thumbnailUrl = img.attr('src') || img.attr('data-src') || '';
+            const fullLink = href.startsWith('http') ? href : `https://www.onual.com${href}`;
+            deals.push({ id: productId, title: title.replace(/\s+/g, ' ').trim(), url: fullLink.split('#')[0], newPrice, thumbnailUrl });
         });
     }
 
