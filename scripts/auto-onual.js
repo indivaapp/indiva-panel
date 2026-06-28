@@ -828,6 +828,7 @@ async function main() {
                 autoPublishedAt: FieldValue.serverTimestamp(),
                 createdAt: FieldValue.serverTimestamp(),
                 aiFomoScore: aiData.aiFomoScore || 5, // AI Fırsat Puanını veritabanına kaydet
+                expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000), // 12 saat sonra TTL
             };
 
             await docRef.set(discountData);
