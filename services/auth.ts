@@ -1,7 +1,16 @@
 
 import { auth } from "../firebaseConfig";
 // Fix: Import `signOut` to implement the required `logout` function.
-import { signInAnonymously, onAuthStateChanged, User, signOut } from "firebase/auth";
+import { signInAnonymously, signInWithEmailAndPassword, onAuthStateChanged, User, signOut } from "firebase/auth";
+
+/** Yönetici hesabıyla (e-posta/şifre) giriş yapar. Firebase oturumu kalıcıdır. */
+export const signInWithEmail = async (email: string, password: string): Promise<User> => {
+  const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+  return cred.user;
+};
+
+/** Mevcut auth durumunu (kullanıcı var/yok) dinler. */
+export const watchUser = (cb: (user: User | null) => void) => onAuthStateChanged(auth, cb);
 
 /** UI göstermeden anonim oturum açar. */
 export const ensureAnonymousAuth = async (): Promise<User | null> => {

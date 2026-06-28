@@ -8,9 +8,18 @@ import type { ScrapedDeal } from './services/dealFinder';
 declare global {
     interface Window {
         AndroidShareHandler?: {
-            getSharedText: () => Promise<string> | string;
+            getSharedText:   () => string;
+            getSharedImage:  () => string;
+            getClipboardUrl: () => string;
+            finishActivity:  () => void;
         };
+        INDIVAShareMode?: { isShareMode: () => boolean };
     }
+}
+
+interface SharedStoryData {
+    imageBase64: string;   // sıkıştırılmış JPEG base64
+    clipboardLink: string; // pano'daki URL (boş olabilir)
 }
 
 import Sidebar from './components/Sidebar';
@@ -25,21 +34,28 @@ import ManageDiscounts from './components/ManageDiscounts';
 import EditDealPage from './components/EditDealPage';
 import AffiliateLinkManager from './components/AffiliateLinkManager';
 import AutoDiscoveryPanel from './components/AutoDiscoveryPanel';
+import TrendyolScraper from './components/TrendyolScraper';
 import Dashboard from './components/Dashboard';
 import AddDiscountForm from './components/AddDiscountForm';
-import AffiliateBot from './src/components/AffiliateBot';
 import StoryManager from './components/StoryManager';
 import ShareTarget from './components/ShareTarget';
 import ShareUrlTarget from './components/ShareUrlTarget';
-import { ensureAnonymousAuth, onAuthReady } from './services/auth';
+import QuickShareOverlay from './components/QuickShareOverlay';
+import { watchUser } from './services/auth';
+import Login from './components/Login';
 import { getPendingAffiliateCount, getPendingAdRequestCount, getPendingDiscountCount } from './services/firebase';
 
 const SYSTEM_KEY = 'indiva_system_active';
 
+// ShareActivity tarafından yüklendiyse: sadece QuickShareOverlay göster
+// INDIVAShareMode interface'i ShareActivity.java tarafından inject edilir
+const IS_SHARE_MODE = typeof (window as any).INDIVAShareMode !== 'undefined';
+
 const App: React.FC = () => {
     const [activeView, setActiveView] = useState<ViewType>('dashboard');
-    const [authReady, setAuthReady] = useState(false);
-    const [authError, setAuthError] = useState<string | null>(null);
+    const [user, setUser] = useState<import('firebase/auth').User | null>(null);
+    const [authChecked, setAuthChecked] = useState(false);
+    const authReady = !!user;
     const isAdmin = true;
 
     // Sistem toggle — tek kaynak, localStorage tabanlı
@@ -60,7 +76,8 @@ const App: React.FC = () => {
     const [pendingDiscountCount, setPendingDiscountCount] = useState(0);
     const [dealQueue, setDealQueue] = useState<ScrapedDeal[]>([]);
     const [currentQueueIndex, setCurrentQueueIndex] = useState(0);
-    const [sharedLink, setSharedLink] = useState<string | null>(null);
+    const [sharedLink, setSharedLink]           = useState<string | null>(null);
+    const [sharedStoryData, setSharedStoryData] = useState<SharedStoryData | null>(null);
 
     // ── PWA Share Target overlay ───────────────────────────────────────────────
     // ?share=1 parametresi Service Worker'dan yönlendirme sonucu gelir
@@ -98,40 +115,62 @@ const App: React.FC = () => {
         setActiveView('dealFinder');
     }, []);
 
+    // ShareActivity modunda tüm auth/subscriptions atlanır
     useEffect(() => {
-        let authUnsubscribe: (() => void) | undefined;
-        const initializeAuth = async () => {
-            try {
-                await ensureAnonymousAuth();
-                authUnsubscribe = onAuthReady(() => setAuthReady(true));
-            } catch (err: any) {
-                setAuthError(err.message || 'Kimlik doğrulama hatası');
-            }
-        };
-        initializeAuth();
-        return () => { if (authUnsubscribe) authUnsubscribe(); };
+        if (IS_SHARE_MODE) return;
+        // Yönetici oturumunu dinle. Oturum kalıcı; bir kez giriş yetince hatırlanır.
+        const unsub = watchUser((u) => {
+            setUser(u);
+            setAuthChecked(true);
+        });
+        return () => unsub();
     }, []);
 
     // ── Service Worker kaydı + Share Target mesaj dinleyicisi ─────────────────
     useEffect(() => {
-        // SW Kaydet
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker
-                .register('/sw.js', { scope: '/' })
-                .then(reg => console.log('[App] SW kayıt:', reg.scope))
-                .catch(err => console.warn('[App] SW kayıt hatası:', err));
+        if (!('serviceWorker' in navigator)) return;
 
-            // SW'dan gelen "SHARE_RECEIVED" mesajını dinle
-            const handleSwMessage = (event: MessageEvent) => {
-                if (event.data?.type === 'SHARE_RECEIVED') {
+        navigator.serviceWorker
+            .register('/sw.js', { scope: '/' })
+            .then(reg => console.log('[App] SW kayıt:', reg.scope))
+            .catch(err => console.warn('[App] SW kayıt hatası:', err));
+
+        // SW'dan gelen "SHARE_RECEIVED" mesajını dinle
+        const handleSwMessage = (event: MessageEvent) => {
+            if (event.data?.type === 'SHARE_RECEIVED') {
+                setShowShareTarget(true);
+            }
+        };
+        navigator.serviceWorker.addEventListener('message', handleSwMessage);
+
+        // Fallback: sekme öne geldiğinde cache'de taze share verisi var mı kontrol et
+        // (SW mesajının kaybolduğu warm-start senaryosu için)
+        const checkShareCache = async () => {
+            if (!('caches' in window)) return;
+            try {
+                const cache = await caches.open('indiva-share-v1');
+                const metaResp = await cache.match('/share-meta');
+                if (!metaResp) return;
+                const meta = JSON.parse(await metaResp.text());
+                const age = Date.now() - (meta.timestamp || 0);
+                if (age < 60000) { // 60 saniyeden taze
                     setShowShareTarget(true);
                 }
-            };
-            navigator.serviceWorker.addEventListener('message', handleSwMessage);
-            return () => {
-                navigator.serviceWorker.removeEventListener('message', handleSwMessage);
-            };
-        }
+            } catch {}
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+                checkShareCache();
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        return () => {
+            navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
     }, []);
 
     // ── Share overlay kapandığında URL'den ?share=1 parametresini temizle ─────
@@ -161,13 +200,34 @@ const App: React.FC = () => {
         const urlListener = CapacitorApp.addListener('appUrlOpen', (event) => {
             if (event.url) processSharedUrl(event.url);
         });
+        // Görsel paylaşımını işle (warm start — detail:'ready' gelince interface'i çağır)
+        const handleSharedImage = async (_event: Event) => {
+            try {
+                const base64 = await window.AndroidShareHandler?.getSharedImage?.();
+                if (!base64) return;
+                const clipboardLink = (await window.AndroidShareHandler?.getClipboardUrl?.()) || '';
+                setSharedStoryData({ imageBase64: base64, clipboardLink });
+                setActiveView('stories');
+            } catch {}
+        };
+
         const checkAndroidIntent = async () => {
             try {
+                // Cold-start: URL kontrolü
                 if (window.AndroidShareHandler?.getSharedText) {
                     const sharedText = await window.AndroidShareHandler.getSharedText();
                     if (sharedText) {
                         const urlMatch = sharedText.match(/https?:\/\/[^\s]+/);
-                        if (urlMatch) { setSharedLink(urlMatch[0]); }
+                        if (urlMatch) { setSharedLink(urlMatch[0]); return; }
+                    }
+                }
+                // Cold-start: Görsel kontrolü
+                if (window.AndroidShareHandler?.getSharedImage) {
+                    const base64 = await window.AndroidShareHandler.getSharedImage();
+                    if (base64) {
+                        const clipboardLink = (await window.AndroidShareHandler?.getClipboardUrl?.()) || '';
+                        setSharedStoryData({ imageBase64: base64, clipboardLink });
+                        setActiveView('stories');
                     }
                 }
             } catch {}
@@ -177,9 +237,12 @@ const App: React.FC = () => {
         const handleSharedUrl = (event: CustomEvent<string>) => {
             if (event.detail) { setSharedLink(event.detail); }
         };
+        // Warm-start: Görsel paylaşımı
+        window.addEventListener('sharedImage', handleSharedImage as EventListener);
         window.addEventListener('sharedUrl', handleSharedUrl as EventListener);
         return () => {
             urlListener.then(listener => listener.remove());
+            window.removeEventListener('sharedImage', handleSharedImage as EventListener);
             window.removeEventListener('sharedUrl', handleSharedUrl as EventListener);
         };
     }, []);
@@ -196,21 +259,13 @@ const App: React.FC = () => {
         return () => clearInterval(interval);
     }, [authReady]);
 
-    if (authError) {
-        return (
-            <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white p-6">
-                <div className="max-w-md w-full bg-gray-800 p-6 rounded-lg border border-red-700">
-                    <p className="text-red-400 font-semibold mb-2">Bağlantı Hatası</p>
-                    <p className="text-gray-300 text-sm mb-4">{authError}</p>
-                    <button onClick={() => window.location.reload()} className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-500">
-                        Tekrar Dene
-                    </button>
-                </div>
-            </div>
-        );
+    // ShareActivity: sadece QuickShareOverlay göster, tüm app'i atla
+    if (IS_SHARE_MODE) {
+        return <QuickShareOverlay />;
     }
 
-    if (!authReady) {
+    // Auth durumu henüz belirlenmediyse kısa bir yükleme göster
+    if (!authChecked) {
         return (
             <div className="flex items-center justify-center min-h-screen bg-gray-900">
                 <div className="w-6 h-6 border-2 border-gray-600 border-t-blue-500 rounded-full animate-spin" />
@@ -218,10 +273,15 @@ const App: React.FC = () => {
         );
     }
 
+    // Giriş yapılmamışsa yönetici giriş ekranı
+    if (!user) {
+        return <Login />;
+    }
+
     const renderContent = () => {
         switch (activeView) {
             case 'dashboard':
-                return <Dashboard setActiveView={setActiveView} isAdmin={isAdmin} />;
+                return <Dashboard setActiveView={setActiveView} isAdmin={isAdmin} pendingAffiliateCount={pendingAffiliateCount} />;
             case 'discounts':
                 return <DiscountManager setActiveView={setActiveView} isAdmin={isAdmin} />;
             case 'manageDiscounts':
@@ -251,23 +311,22 @@ const App: React.FC = () => {
                 ) : <DealFinder isAdmin={isAdmin} setActiveView={setActiveView} setSelectedDeal={setSelectedDeal} startDealQueue={startDealQueue} />;
             case 'autoDiscovery':
                 return <AutoDiscoveryPanel isAdmin={isAdmin} setActiveView={setActiveView} />;
+            case 'trendyolScraper':
+                return <TrendyolScraper />;
             case 'addDiscount':
                 return <AddDiscountForm setActiveView={setActiveView} isAdmin={isAdmin} />;
-            case 'affiliateBot':
-                return <AffiliateBot isAdmin={isAdmin} />;
             case 'stories':
-                return <StoryManager isAdmin={isAdmin} />;
+                return (
+                    <StoryManager
+                        isAdmin={isAdmin}
+                        initialImageBase64={sharedStoryData?.imageBase64}
+                        initialLink={sharedStoryData?.clipboardLink}
+                        onSharedDataConsumed={() => setSharedStoryData(null)}
+                    />
+                );
             default:
                 return <DiscountManager setActiveView={setActiveView} isAdmin={isAdmin} />;
         }
-    };
-
-    const viewLabels: Record<string, string> = {
-        dashboard: 'Ana Sayfa', dealFinder: 'Fırsat Bul', discounts: 'Düzenle',
-        addDiscount: 'Yeni İlan Ekle', manageDiscounts: 'Yönet', brochures: 'Aktüel', submissions: 'Onay',
-        ads: 'Reklam', notifications: 'Bildirim', editDeal: 'Düzenle',
-        affiliateLinks: 'Affiliate', autoDiscovery: 'Keşif', affiliateBot: 'Affiliate Bot',
-        stories: 'Story Yönetimi',
     };
 
     return (
@@ -298,11 +357,6 @@ const App: React.FC = () => {
                 />
 
                 <div className="flex-1 flex flex-col overflow-hidden">
-                    {/* Mobil Header — sabit kalır, scroll olmaz */}
-                    <div className="md:hidden flex items-center px-4 py-3 border-b border-gray-800 shrink-0">
-                        <span className="text-white font-semibold">{viewLabels[activeView] ?? activeView}</span>
-                    </div>
-
                     {/* Sistem Kapalı Uyarısı */}
                     {!systemEnabled && (
                         <div className="mx-4 mt-3 flex items-center justify-between gap-2 rounded-md bg-red-950 border border-red-800 px-3 py-2 text-sm text-red-300 shrink-0">

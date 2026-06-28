@@ -11,8 +11,8 @@ interface BottomNavProps {
 
 const navItems: { id: ViewType; label: string; emoji: string }[] = [
     { id: 'dashboard',      label: 'Ana Sayfa',  emoji: '🏠' },
+    { id: 'brochures',      label: 'Aktüel',     emoji: '📋' },
     { id: 'discounts',      label: 'Düzenle',    emoji: '✏️' },
-    { id: 'affiliateBot',   label: 'Bot',        emoji: '🤖' },
     { id: 'submissions',    label: 'Onay',       emoji: '✅' },
     { id: 'notifications',  label: 'Bildirim',   emoji: '🔔' },
 ];

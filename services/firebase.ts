@@ -4,6 +4,8 @@ import {
     collection,
     addDoc,
     getDocs,
+    getDoc,
+    setDoc,
     doc,
     updateDoc,
     deleteDoc,
@@ -14,7 +16,7 @@ import {
     Timestamp,
     writeBatch
 } from 'firebase/firestore';
-import type { Discount, Brochure, Advertisement, PendingDiscount, AdRequest, ScheduledNotification } from '../types';
+import type { Discount, Brochure, Advertisement, PendingDiscount, AdRequest, ScheduledNotification, StagingProduct } from '../types';
 import { deleteFromImgbb } from './imgbb';
 
 const ALLOWED_AFFILIATE_STORES = ['Trendyol', 'Hepsiburada', 'Amazon', 'Pazarama'];
@@ -280,12 +282,28 @@ export const getBrochures = async (marketName: string): Promise<Brochure[]> => {
             createdAt: data.createdAt,
         } as Brochure;
     })
-        // Client-side sorting as a safety measure for missing fields or consistency
-        .sort((a, b) => {
-            const dateA = a.publishDate?.seconds ?? a.createdAt?.seconds ?? 0;
-            const dateB = b.publishDate?.seconds ?? b.createdAt?.seconds ?? 0;
+        .sort((a: any, b: any) => {
+            // Manuel sıralama varsa ona göre, yoksa createdAt'e göre sırala
+            const aHasOrder = a.order !== undefined && a.order !== null;
+            const bHasOrder = b.order !== undefined && b.order !== null;
+            if (aHasOrder && bHasOrder) return (a.order as number) - (b.order as number);
+            if (aHasOrder) return -1;
+            if (bHasOrder) return 1;
+            const dateA = (a as any).publishDate?.seconds ?? (a as any).createdAt?.seconds ?? 0;
+            const dateB = (b as any).publishDate?.seconds ?? (b as any).createdAt?.seconds ?? 0;
             return dateB - dateA;
         });
+};
+
+/** Aktüel görsellerinin sırasını Firestore'a toplu yazar (order: 0, 1, 2, ...) */
+export const updateBrochureOrder = async (marketName: string, orderedIds: string[]) => {
+    const marketKey = formatMarketKey(marketName);
+    const batch = writeBatch(db);
+    orderedIds.forEach((id, index) => {
+        const docRef = doc(db, 'circulars', marketKey, 'brochures', id);
+        batch.update(docRef, { order: index });
+    });
+    await batch.commit();
 };
 
 export const deleteBrochure = async (id: string, marketName: string, deleteUrl?: string) => {
@@ -461,17 +479,24 @@ export const getPendingDiscountCount = async (): Promise<number> => {
 // --- Notifications (Instant) ---
 
 // Updated to match Android App expectation: title, body, url, image
-export const sendNotification = async (title: string, message: string, imageUrl?: string, link?: string) => {
+export const sendNotification = async (
+    title: string,
+    message: string,
+    imageUrl?: string,
+    link?: string,
+    discountId?: string,
+    storyId?: string,
+) => {
     if (!title || !message) {
         throw new Error("Title and message are required for notifications.");
     }
-
-    // The payload must match exactly what the Android Cloud Function expects.
     await addDoc(collection(db, 'notifications'), {
-        title: title,
+        title,
         body: message,
-        url: link || null,     // Maps 'link' input to 'url' field in DB
-        image: imageUrl || null, // Maps 'imageUrl' input to 'image' field in DB
+        url: link || null,
+        image: imageUrl || null,
+        discountId: discountId || null,
+        storyId: storyId || null,
         target: 'all',
         status: 'pending',
         createdAt: serverTimestamp(),
@@ -525,4 +550,142 @@ export const updateInfluencerStory = async (id: string, data: Partial<any>) => {
 
 export const deleteInfluencerStory = async (id: string) => {
     await deleteDoc(doc(db, 'influencerStories', id));
+};
+
+// --- Trendyol Staging ---
+
+export const getStagingProducts = async (): Promise<StagingProduct[]> => {
+    const q = query(
+        collection(db, 'trendyol_staging'),
+        where('status', '==', 'pending'),
+        orderBy('importedAt', 'desc')
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as StagingProduct));
+};
+
+export const publishStagingProducts = async (products: StagingProduct[]): Promise<number> => {
+    if (products.length === 0) return 0;
+    const CHUNK = 200; // her ürün 2 op: set + delete
+    let published = 0;
+
+    for (let i = 0; i < products.length; i += CHUNK) {
+        const batch = writeBatch(db);
+        const chunk = products.slice(i, i + CHUNK);
+        for (const p of chunk) {
+            const discountRef = doc(collection(db, 'discounts'));
+            batch.set(discountRef, {
+                title: p.title,
+                brand: p.brand,
+                category: p.category,
+                newPrice: p.newPrice,
+                oldPrice: p.oldPrice,
+                imageUrl: p.imageUrl,
+                link: p.link,
+                deleteUrl: '',
+                submittedBy: 'trendyol-scraper',
+                storeName: p.storeName,
+                originalSource: p.originalSource,
+                reviewCount: p.reviewCount || '',
+                affiliateLinkUpdated: false,
+                importedAt: p.importedAt,
+                createdAt: serverTimestamp(),
+            });
+            batch.delete(doc(db, 'trendyol_staging', p.id));
+            published++;
+        }
+        await batch.commit();
+    }
+    return published;
+};
+
+export const clearStagingProducts = async (site?: string): Promise<void> => {
+    const q = query(collection(db, 'trendyol_staging'), where('status', '==', 'pending'));
+    const snap = await getDocs(q);
+    // site verilirse yalnızca o sitenin ürünleri silinir (client-side filtre → index gerekmez)
+    const docs = site ? snap.docs.filter(d => (d.data().site || 'trendyol') === site) : snap.docs;
+    if (!docs.length) return;
+    const CHUNK = 450;
+    for (let i = 0; i < docs.length; i += CHUNK) {
+        const batch = writeBatch(db);
+        docs.slice(i, i + CHUNK).forEach(d => batch.delete(d.ref));
+        await batch.commit();
+    }
+};
+
+// --- Scraper Kontrol (GitHub Actions) ---
+// Scraper artık GitHub Actions'ta çalışır; durumu ve config'i Firestore üzerinden okur/yazar.
+
+export interface ScraperStatusDoc {
+    isRunning?: boolean;
+    lastRunTime?: Timestamp;
+    lastRunCount?: number;
+    lastError?: string | null;
+    startedAt?: Timestamp;
+}
+
+export interface ScraperConfigDoc {
+    sources: {
+        id: string;
+        site?: string;
+        label: string;
+        description: string;
+        pages: number;
+        enabled: boolean;
+    }[];
+    sites?: { id: string; label: string }[];
+}
+
+export const getScraperStatus = async (): Promise<ScraperStatusDoc | null> => {
+    const snap = await getDoc(doc(db, 'scraper_control', 'status'));
+    return snap.exists() ? (snap.data() as ScraperStatusDoc) : null;
+};
+
+export const getScraperConfig = async (): Promise<ScraperConfigDoc | null> => {
+    const snap = await getDoc(doc(db, 'scraper_control', 'config'));
+    return snap.exists() ? (snap.data() as ScraperConfigDoc) : null;
+};
+
+export const toggleScraperSource = async (sourceId: string): Promise<void> => {
+    const ref = doc(db, 'scraper_control', 'config');
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return;
+    const cfg = snap.data() as ScraperConfigDoc;
+    const sources = cfg.sources.map(s =>
+        s.id === sourceId ? { ...s, enabled: !s.enabled } : s
+    );
+    await setDoc(ref, { sources }, { merge: true });
+};
+
+// Telefon/panel "Veri Çek" → PC'deki dinleyici bunu görüp taramayı başlatır.
+// site verilirse yalnızca o site taranır ('trendyol' | 'cimri'); yoksa tümü.
+export const triggerScrape = async (site?: string): Promise<void> => {
+    await setDoc(
+        doc(db, 'scraper_control', 'trigger'),
+        { requestedAt: serverTimestamp(), source: 'panel', site: site || null },
+        { merge: true }
+    );
+};
+
+// Çöz & Yayınla: seçilen ürünleri PC'ye gönderir. Cimri ürünlerinde PC gerçek
+// mağaza linkini çözüp discounts'a yayınlar (panel doğrudan yapamaz).
+export interface PublishRequestDoc {
+    status?: string;
+    total?: number;
+    done?: number;
+    failed?: number;
+}
+
+// interval (dakika): 0 = hemen hepsi; >0 = her N dakikada bir ürün (PC kuyruğu işler)
+export const requestResolvePublish = async (ids: string[], interval = 0): Promise<void> => {
+    await setDoc(
+        doc(db, 'scraper_control', 'publish_request'),
+        { requestedAt: serverTimestamp(), ids, interval, status: 'processing', total: ids.length, done: 0, failed: 0, nextAt: 0 },
+        { merge: true }
+    );
+};
+
+export const getPublishStatus = async (): Promise<PublishRequestDoc | null> => {
+    const snap = await getDoc(doc(db, 'scraper_control', 'publish_request'));
+    return snap.exists() ? (snap.data() as PublishRequestDoc) : null;
 };

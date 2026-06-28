@@ -16,9 +16,10 @@ export type ViewType =
     | 'editDeal'          // Fırsat düzenleme sayfası
     | 'affiliateLinks'    // Affiliate link yönetim sayfası
     | 'autoDiscovery'     // Otomatik keşif sayfası (Tinder-style)
+    | 'trendyolScraper'  // Trendyol otomatik veri çekici
     | 'shareCapture'      // Ekran görüntüsü paylaşım overlay'i
     | 'addDiscount'       // Yeni indirim ekleme formu
-    | 'affiliateBot';     // Affiliate link otomasyon botu
+    | 'stories';          // Story yönetimi
 
 // Using the actual Firestore Timestamp type for better integration
 export type FirestoreTimestamp = Timestamp;
@@ -122,6 +123,35 @@ export interface ScheduledNotification {
     url?: string; // Field name updated to match FCM guide
     isActive: boolean;
     createdAt: FirestoreTimestamp;
+}
+
+export interface StagingProduct {
+    id: string;
+    title: string;
+    brand: string;
+    category: string;
+    newPrice: number;
+    oldPrice: number;
+    imageUrl: string;
+    link: string;
+    reviewCount?: string;
+    storeName: string;
+    originalSource: string;
+    site?: string;
+    sourceId?: string;
+    sourceName?: string;
+    status: 'pending' | 'approved' | 'rejected';
+    importedAt: FirestoreTimestamp;
+    createdAt: FirestoreTimestamp;
+}
+
+export interface ScraperSource {
+    id: string;
+    site?: string;
+    label: string;
+    description: string;
+    pages: number;
+    enabled: boolean;
 }
 
 export interface InfluencerStory {

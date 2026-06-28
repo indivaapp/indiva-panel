@@ -3,8 +3,126 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { getDiscounts, deleteDiscount, deleteExpiredDiscountsBatch } from '../services/firebase';
 import type { Discount, ViewType } from '../types';
 import EditDiscountModal from './EditDiscountModal';
-import DeleteImgButton from './DeleteImgButton';
 import { useToast } from './ToastProvider';
+
+// ─── Admin Kart Bileşeni ──────────────────────────────────────────────────────
+interface DiscountAdminCardProps {
+    discount: Discount;
+    onEdit: () => void;
+    onDelete: () => void;
+}
+
+const DiscountAdminCard: React.FC<DiscountAdminCardProps> = ({ discount, onEdit, onDelete }) => {
+    const [isDeleting, setIsDeleting] = useState(false);
+
+    const handleDelete = async (e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (isDeleting) return;
+        setIsDeleting(true);
+        try {
+            await onDelete();
+        } catch {
+            setIsDeleting(false);
+        }
+    };
+
+    const formatPrice = (price: number) =>
+        Math.floor(price).toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+
+    return (
+        <div className={`bg-gray-800 rounded-xl overflow-hidden border flex flex-col ${discount.isAd ? 'border-yellow-500/40' : 'border-gray-700'} ${isDeleting ? 'opacity-40 pointer-events-none' : ''}`}>
+            {/* Görsel */}
+            <div className="relative aspect-square w-full bg-gray-900">
+                <img
+                    src={discount.imageUrl}
+                    alt={discount.title}
+                    className="absolute inset-0 w-full h-full object-cover"
+                    loading="lazy"
+                />
+                {/* Üst rozetler */}
+                {discount.isAd && (
+                    <span className="absolute top-1.5 left-1.5 bg-yellow-400 text-yellow-900 text-[9px] font-extrabold px-1.5 py-0.5 rounded uppercase">
+                        REKLAM
+                    </span>
+                )}
+                {discount.status === 'İndirim Bitti' && (
+                    <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center gap-1">
+                        <span className="text-red-400 text-[10px] font-bold uppercase">İndirim Bitti</span>
+                        <CountdownTimer expiredAt={discount.expiredAt} />
+                    </div>
+                )}
+                {discount.screenshotUrl && (
+                    <span className="absolute bottom-1.5 left-1.5 bg-green-600/90 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
+                        ✔ Kanıtlı
+                    </span>
+                )}
+                <div className="absolute top-1.5 right-1.5">
+                    <ExpiryBadge createdAt={discount.createdAt} />
+                </div>
+            </div>
+
+            {/* İçerik */}
+            <div className="p-2.5 flex flex-col flex-1 gap-1">
+                {(discount.category || discount.brand) && (
+                    <p className="text-[10px] text-orange-400 font-bold uppercase tracking-wide truncate">
+                        {[discount.category, discount.brand].filter(Boolean).join(' · ')}
+                    </p>
+                )}
+                <p className="text-sm font-semibold text-white leading-tight line-clamp-2 flex-1">
+                    {discount.title}
+                </p>
+                {/* Fiyat */}
+                <div className="flex items-center gap-1.5 mt-1">
+                    {discount.isAd ? (
+                        <span className="text-xs text-gray-400 italic">Sponsorlu</span>
+                    ) : discount.newPrice > 0 ? (
+                        <>
+                            {discount.oldPrice > 0 && (
+                                <span className="text-xs text-gray-500 line-through">{formatPrice(discount.oldPrice)}₺</span>
+                            )}
+                            <span className="text-sm font-extrabold text-orange-400">{formatPrice(discount.newPrice)}₺</span>
+                            {discount.oldPrice > 0 && discount.newPrice > 0 && (
+                                <span className="ml-auto text-[10px] bg-orange-500 text-white font-bold px-1.5 py-0.5 rounded">
+                                    %{Math.round(((discount.oldPrice - discount.newPrice) / discount.oldPrice) * 100)}
+                                </span>
+                            )}
+                        </>
+                    ) : null}
+                </div>
+            </div>
+
+            {/* Aksiyon butonları */}
+            <div className="flex border-t border-gray-700">
+                <button
+                    type="button"
+                    onClick={onEdit}
+                    className="flex-1 py-2 text-xs font-bold text-indigo-400 hover:bg-indigo-900/30 hover:text-indigo-300 transition-colors flex items-center justify-center gap-1"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                    Düzenle
+                </button>
+                <div className="w-px bg-gray-700" />
+                <button
+                    type="button"
+                    onClick={handleDelete}
+                    disabled={isDeleting}
+                    className="flex-1 py-2 text-xs font-bold text-red-400 hover:bg-red-900/30 hover:text-red-300 transition-colors flex items-center justify-center gap-1 disabled:opacity-50"
+                >
+                    {isDeleting ? (
+                        <div className="w-3.5 h-3.5 border-2 border-red-400/30 border-t-red-400 rounded-full animate-spin" />
+                    ) : (
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                    )}
+                    Sil
+                </button>
+            </div>
+        </div>
+    );
+};
 
 // Geri sayım bileşeni
 const CountdownTimer: React.FC<{ expiredAt: any }> = ({ expiredAt }) => {
@@ -190,7 +308,6 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
             <div className="flex justify-between items-center mb-6">
                 <h2 className="text-3xl font-bold text-white">İlanları Yönet</h2>
                 <div className="flex items-center gap-3">
-                    {/* Toplu Silme Butonu - Sadece Bitenler filtresinde göster */}
                     {activeFilter === 'expired' && expiredCount > 0 && (
                         <button
                             onClick={() => setShowBulkConfirm(true)}
@@ -254,7 +371,6 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
             {/* Arama ve Filtreler */}
             {!isLoading && discounts.length > 0 && (
                 <div className="mb-5 space-y-3">
-                    {/* Arama Çubuğu */}
                     <div className="relative">
                         <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -267,36 +383,25 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
                             className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg pl-10 pr-10 py-2.5 focus:outline-none focus:border-blue-500 transition-colors placeholder-gray-500"
                         />
                         {searchQuery && (
-                            <button
-                                onClick={() => setSearchQuery('')}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
-                            >
-                                ✕
-                            </button>
+                            <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white">✕</button>
                         )}
                     </div>
 
-                    {/* Filtre Butonları */}
                     <div className="flex gap-2 flex-wrap">
                         {filterButtons.map(btn => (
                             <button
                                 key={btn.id}
                                 onClick={() => setActiveFilter(btn.id)}
-                                className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors flex items-center gap-1.5 ${activeFilter === btn.id
-                                    ? 'bg-blue-600 text-white'
-                                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                                    }`}
+                                className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors flex items-center gap-1.5 ${activeFilter === btn.id ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
                             >
                                 {btn.label}
-                                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${activeFilter === btn.id ? 'bg-blue-500' : 'bg-gray-600'
-                                    }`}>
+                                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${activeFilter === btn.id ? 'bg-blue-500' : 'bg-gray-600'}`}>
                                     {btn.count}
                                 </span>
                             </button>
                         ))}
                     </div>
 
-                    {/* Sonuç sayısı */}
                     <p className="text-sm text-gray-400">
                         {filteredDiscounts.length === discounts.length
                             ? `Toplam ${discounts.length} ilan`
@@ -325,124 +430,15 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
                     </button>
                 </div>
             ) : (
-                <div className="bg-gray-800 rounded-lg shadow-lg">
-                    {/* Desktop: Table view */}
-                    <div className="hidden md:block overflow-x-auto">
-                        <table className="min-w-full">
-                            <thead className="bg-gray-700">
-                                <tr>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Görsel</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Başlık / Marka</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Fiyat</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">İşlemler</th>
-                                </tr>
-                            </thead>
-                            <tbody className="bg-gray-800 divide-y divide-gray-700">
-                                {filteredDiscounts.map(discount => (
-                                    <tr key={discount.id} className={discount.isAd ? "bg-yellow-900/10" : ""}>
-                                        <td className="px-6 py-4 whitespace-nowrap">
-                                            <div className="relative w-16 h-16">
-                                                <img src={discount.imageUrl} alt={discount.title} className="w-16 h-16 object-cover rounded-md" />
-                                                <DeleteImgButton
-                                                    onDelete={() => handleDeleteItem(discount.id, discount.deleteUrl, discount.screenshotDeleteUrl)}
-                                                />
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap">
-                                            <div className="flex items-center flex-wrap gap-1">
-                                                <div className="text-sm font-medium text-white">{discount.title}</div>
-                                                <ExpiryBadge createdAt={discount.createdAt} />
-                                                {discount.isAd && <span className="px-2 py-0.5 text-xs bg-yellow-600 text-black font-bold rounded">REKLAM</span>}
-                                                {discount.affiliateLinkUpdated === false && <span className="px-2 py-0.5 text-xs bg-orange-600 text-white font-bold rounded">AFF. BEKL.</span>}
-                                                {discount.status === 'İndirim Bitti' && (
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="px-2 py-0.5 text-xs bg-red-600 text-white font-bold rounded">İNDİRİM BİTTİ</span>
-                                                        <CountdownTimer expiredAt={discount.expiredAt} />
-                                                    </div>
-                                                )}
-                                            </div>
-                                            <div className="text-sm text-gray-400">{discount.brand}</div>
-                                            {discount.screenshotUrl && <div className="text-xs text-green-500 mt-1">Kanıtlı İlan</div>}
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap">
-                                            {discount.isAd ? (
-                                                <span className="text-xs text-gray-400 italic">Sponsorlu</span>
-                                            ) : (
-                                                <>
-                                                    <div className="text-sm text-green-400 font-semibold">{discount.newPrice} TL</div>
-                                                    {discount.oldPrice > 0 && <div className="text-xs text-gray-500 line-through">{discount.oldPrice} TL</div>}
-                                                </>
-                                            )}
-                                        </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                            <div className="flex items-center space-x-4">
-                                                <button type="button" onClick={() => setEditingDiscount(discount)} className="text-indigo-400 hover:text-indigo-300">Düzenle</button>
-                                                <DeleteImgButton
-                                                    onDelete={() => handleDeleteItem(discount.id, discount.deleteUrl, discount.screenshotDeleteUrl)}
-                                                    isTextButton={true}
-                                                />
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                    {/* Mobile: Card list view */}
-                    <div className="md:hidden divide-y divide-gray-700">
-                        {filteredDiscounts.map(discount => (
-                            <div key={discount.id} className={`p-4 flex space-x-4 ${discount.isAd ? 'bg-yellow-900/10' : ''}`}>
-                                <div className="relative w-24 h-24 flex-shrink-0">
-                                    <img src={discount.imageUrl} alt={discount.title} className="w-full h-full object-cover rounded-md" />
-                                    <DeleteImgButton
-                                        onDelete={() => handleDeleteItem(discount.id, discount.deleteUrl, discount.screenshotDeleteUrl)}
-                                    />
-                                </div>
-                                <div className="flex-1 flex flex-col justify-between">
-                                    <div>
-                                        <div className="flex items-start justify-between flex-wrap gap-1">
-                                            <div className="flex flex-col gap-1">
-                                                <p className="font-bold text-white leading-tight">{discount.title}</p>
-                                                <div className="flex gap-2 items-center">
-                                                    <ExpiryBadge createdAt={discount.createdAt} />
-                                                    {discount.screenshotUrl && <p className="text-[10px] text-green-500 italic">✔ Kanıtlı</p>}
-                                                </div>
-                                            </div>
-                                            <div className="flex gap-1 flex-wrap items-center">
-                                                {discount.isAd && <span className="px-2 py-0.5 text-xs bg-yellow-600 text-black font-bold rounded">REKLAM</span>}
-                                                {discount.affiliateLinkUpdated === false && <span className="px-2 py-0.5 text-xs bg-orange-600 text-white font-bold rounded">AFF.</span>}
-                                                {discount.status === 'İndirim Bitti' && (
-                                                    <>
-                                                        <span className="px-2 py-0.5 text-xs bg-red-600 text-white font-bold rounded">BİTTİ</span>
-                                                        <CountdownTimer expiredAt={discount.expiredAt} />
-                                                    </>
-                                                )}
-                                            </div>
-                                        </div>
-                                        <p className="text-sm text-gray-400">{discount.brand}</p>
-                                        {discount.screenshotUrl && <p className="text-xs text-green-500 mt-1">✔ Kanıtlı İlan</p>}
-                                        <div className="mt-2">
-                                            {discount.isAd ? (
-                                                <p className="text-sm text-gray-400 italic">Sponsorlu İçerik</p>
-                                            ) : (
-                                                <>
-                                                    <p className="text-lg font-semibold text-green-400">{discount.newPrice} TL</p>
-                                                    {discount.oldPrice > 0 && <p className="text-xs text-gray-500 line-through">{discount.oldPrice} TL</p>}
-                                                </>
-                                            )}
-                                        </div>
-                                    </div>
-                                    <div className="flex items-center space-x-4 pt-2">
-                                        <button type="button" onClick={() => setEditingDiscount(discount)} className="text-indigo-400 hover:text-indigo-300 text-sm font-medium">Düzenle</button>
-                                        <DeleteImgButton
-                                            onDelete={() => handleDeleteItem(discount.id, discount.deleteUrl, discount.screenshotDeleteUrl)}
-                                            isTextButton={true}
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                    {filteredDiscounts.map(discount => (
+                        <DiscountAdminCard
+                            key={discount.id}
+                            discount={discount}
+                            onEdit={() => setEditingDiscount(discount)}
+                            onDelete={() => handleDeleteItem(discount.id, discount.deleteUrl, discount.screenshotDeleteUrl)}
+                        />
+                    ))}
                 </div>
             )}
 

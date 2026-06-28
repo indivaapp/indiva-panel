@@ -6,8 +6,7 @@
  */
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebaseConfig';
+import { addDiscount } from '../services/firebase';
 
 // ─── Tipler ───────────────────────────────────────────────────────────────────
 
@@ -101,21 +100,19 @@ const ShareUrlTarget: React.FC<Props> = ({ url, onClose }) => {
 
             // ── 3. Firebase ───────────────────────────────────────────────────
             setStage('publishing');
-            await addDoc(collection(db, 'discounts'), {
-                title:           title || 'Ürün',
-                cleanTitle:      title || 'Ürün',
+            await addDiscount({
+                title:               title || 'Ürün',
+                brand:               brand || storeName,
+                category,
                 newPrice,
                 oldPrice,
-                discountPercent,
-                category,
                 imageUrl,
-                link:            url,
-                originalStoreLink: url,
+                deleteUrl:           '',
+                link:                url,
+                originalStoreLink:   url,
                 storeName,
-                brand:           storeName,
-                status:          'aktif',
-                source:          'share_target',
-                createdAt:       serverTimestamp(),
+                submittedBy:         'panel-share',
+                affiliateLinkUpdated: false,
             });
 
             setResult({ title, newPrice, oldPrice, discountPercent, category, storeName, imageUrl });
@@ -139,19 +136,14 @@ const ShareUrlTarget: React.FC<Props> = ({ url, onClose }) => {
 
     return (
         <div
-            className="fixed inset-0 z-50 flex items-end justify-center px-4 pb-8"
-            style={{ backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(4px)' }}
+            className="fixed inset-0 z-50 flex items-center justify-center px-5"
+            style={{ backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(6px)' }}
         >
             <div
                 className="w-full max-w-sm bg-gray-800 rounded-2xl shadow-2xl border border-gray-700 overflow-hidden"
-                style={{ animation: 'slideUp 0.35s cubic-bezier(0.34,1.56,0.64,1)' }}
+                style={{ animation: 'popIn 0.3s cubic-bezier(0.34,1.56,0.64,1)' }}
             >
-                {/* Drag handle */}
-                <div className="flex justify-center pt-3 pb-1">
-                    <div className="w-10 h-1 bg-gray-600 rounded-full" />
-                </div>
-
-                <div className="px-5 pt-3 pb-6 space-y-4">
+                <div className="px-5 pt-5 pb-6 space-y-4">
                     {/* Başlık */}
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-purple-600 rounded-xl flex items-center justify-center text-lg shadow">
@@ -215,9 +207,9 @@ const ShareUrlTarget: React.FC<Props> = ({ url, onClose }) => {
                             )}
                             <p className="text-white text-sm font-medium leading-snug line-clamp-2">{result.title}</p>
                             <div className="flex gap-3 items-center flex-wrap">
-                                <span className="text-green-400 font-bold text-lg">{result.newPrice.toLocaleString('tr-TR')} TL</span>
+                                <span className="text-green-400 font-bold text-lg">{Math.floor(result.newPrice).toLocaleString('tr-TR')} TL</span>
                                 {result.oldPrice > result.newPrice && (
-                                    <span className="text-gray-500 text-sm line-through">{result.oldPrice.toLocaleString('tr-TR')} TL</span>
+                                    <span className="text-gray-500 text-sm line-through">{Math.floor(result.oldPrice).toLocaleString('tr-TR')} TL</span>
                                 )}
                                 {result.discountPercent > 0 && (
                                     <span className="bg-orange-600 text-white text-xs px-2 py-0.5 rounded-full font-bold">%{result.discountPercent} İNDİRİM</span>
@@ -259,9 +251,9 @@ const ShareUrlTarget: React.FC<Props> = ({ url, onClose }) => {
             </div>
 
             <style>{`
-                @keyframes slideUp {
-                    from { transform: translateY(120px); opacity: 0; }
-                    to   { transform: translateY(0);     opacity: 1; }
+                @keyframes popIn {
+                    from { transform: scale(0.88); opacity: 0; }
+                    to   { transform: scale(1);    opacity: 1; }
                 }
             `}</style>
         </div>

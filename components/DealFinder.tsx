@@ -470,8 +470,8 @@ SADECE JSON döndür:
                                 <div className="flex-1 min-w-0">
                                     <p className="text-white font-medium text-sm line-clamp-2">{deal.title}</p>
                                     <div className="flex items-center gap-2 mt-1 text-sm">
-                                        <span className="text-orange-400 font-bold">{deal.newPrice > 0 ? `${deal.newPrice.toLocaleString('tr-TR')}₺` : '—'}</span>
-                                        {deal.oldPrice > 0 && <span className="text-gray-500 line-through">{deal.oldPrice.toLocaleString('tr-TR')}₺</span>}
+                                        <span className="text-orange-400 font-bold">{deal.newPrice > 0 ? `${Math.floor(deal.newPrice).toLocaleString('tr-TR')}₺` : '—'}</span>
+                                        {deal.oldPrice > 0 && <span className="text-gray-500 line-through">{Math.floor(deal.oldPrice).toLocaleString('tr-TR')}₺</span>}
                                         <span className="text-gray-600">· {deal.storeName}</span>
                                     </div>
                                 </div>

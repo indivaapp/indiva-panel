@@ -1,5 +1,5 @@
 
-const functions = require('firebase-functions');
+const functions = require('firebase-functions/v1');
 const admin = require('firebase-admin');
 const https = require('https');
 const http = require('http');
@@ -234,114 +234,78 @@ exports.sendPushNotification = functions.firestore
     .document('notifications/{docId}')
     .onCreate(async (snap, context) => {
         const data = snap.data();
-        
-        // 1. Get all tokens
-        // Note: In a production app with >1000 users, you should fetch in batches or use topics.
+        console.log(`[sendPushNotification] Tetiklendi. title="${data.title}"`);
+
+        // 1. Token'ları al
         const tokensSnap = await admin.firestore().collection('fcmTokens').get();
-        
-        // Assuming document ID is the token string as per user description
-        const tokens = tokensSnap.docs.map(doc => doc.id);
+        const tokens = tokensSnap.docs.map(doc => doc.id).filter(t => !!t);
+
+        console.log(`[sendPushNotification] Bulunan token sayısı: ${tokens.length}`);
 
         if (tokens.length === 0) {
-            console.log('No tokens found. Aborting.');
-            return;
+            console.warn('[sendPushNotification] fcmTokens koleksiyonu boş. Bildirim gönderilemedi.');
+            return snap.ref.update({ status: 'failed', error: 'No tokens found' });
         }
 
-        // 2. Construct FCM Payload
-        const payload = {
+        // 2. Mesajları tek tek oluştur (firebase-admin v12 sendEachForMulticast)
+        const message = {
             notification: {
                 title: data.title,
                 body: data.body,
-                image: data.image || "" // Some SDKs display this in the system tray
+                ...(data.image ? { imageUrl: data.image } : {}),
             },
             data: {
-                // Custom data for the Android app to handle deep linking and large images
-                url: data.url || "",
-                image: data.image || "",
-                click_action: "FLUTTER_NOTIFICATION_CLICK" // Common for cross-platform, or handle in onResume
+                url: data.url || '',
+                image: data.image || '',
+                discountId: data.discountId || '',
+                storyId: data.storyId || '',
             },
             android: {
+                priority: 'high',
                 notification: {
-                    channelId: "fcm_default_channel", // Critical: Must match Android manifest
-                    priority: "high",
-                    defaultSound: true,
-                }
+                    channelId: 'indiva_default_channel',
+                    sound: 'default',
+                    ...(data.image ? { imageUrl: data.image } : {}),
+                },
             },
-            tokens: tokens // Send to all tokens found
+            tokens,
         };
 
         try {
-            // 3. Send Multicast
-            const response = await admin.messaging().sendMulticast(payload);
-            
-            // 4. Log results
-            console.log(`Successfully sent ${response.successCount} messages.`);
+            // 3. Gönder (v12 uyumlu)
+            const response = await admin.messaging().sendEachForMulticast(message);
+
+            console.log(`[sendPushNotification] Başarılı: ${response.successCount}, Başarısız: ${response.failureCount}`);
+
+            // 4. Geçersiz token'ları temizle
             if (response.failureCount > 0) {
-                const failedTokens = [];
+                const invalidTokens = [];
                 response.responses.forEach((resp, idx) => {
                     if (!resp.success) {
-                        failedTokens.push(tokens[idx]);
+                        const code = resp.error?.code || '';
+                        console.warn(`Token başarısız [${code}]: ${tokens[idx].substring(0, 20)}...`);
+                        if (
+                            code === 'messaging/invalid-registration-token' ||
+                            code === 'messaging/registration-token-not-registered'
+                        ) {
+                            invalidTokens.push(tokens[idx]);
+                        }
                     }
                 });
-                console.log('List of tokens that caused failures: ' + failedTokens);
-                // Optional: Delete invalid tokens here
+                if (invalidTokens.length > 0) {
+                    const batch = admin.firestore().batch();
+                    invalidTokens.forEach(t => batch.delete(admin.firestore().collection('fcmTokens').doc(t)));
+                    await batch.commit();
+                    console.log(`${invalidTokens.length} geçersiz token silindi.`);
+                }
             }
-            
-            // 5. Update status in Firestore
+
             return snap.ref.update({ status: 'sent', sentAt: admin.firestore.FieldValue.serverTimestamp() });
 
         } catch (error) {
-            console.error('Error sending notification:', error);
+            console.error('[sendPushNotification] Hata:', error);
             return snap.ref.update({ status: 'failed', error: error.message });
         }
     });
 
 
-/**
- * Trigger: Scheduled (Cron) function running every minute.
- * Action: Checks 'scheduled_notifications' for items matching current time and creates a 'notification' doc.
- */
-exports.checkScheduledNotifications = functions.pubsub.schedule('every 1 minutes').onRun(async (context) => {
-    const now = new Date();
-    // Format time as HH:mm in Turkey timezone (UTC+3)
-    const timeString = now.toLocaleTimeString('tr-TR', { 
-        timeZone: 'Europe/Istanbul', 
-        hour: '2-digit', 
-        minute: '2-digit', 
-        hour12: false 
-    });
-
-    console.log(`Checking schedule for time: ${timeString}`);
-
-    const snapshot = await admin.firestore().collection('scheduled_notifications')
-        .where('isActive', '==', true)
-        .where('time', '==', timeString)
-        .get();
-
-    if (snapshot.empty) {
-        console.log('No scheduled notifications for this time.');
-        return null;
-    }
-
-    const batch = admin.firestore().batch();
-    const notificationsRef = admin.firestore().collection('notifications');
-
-    snapshot.forEach(doc => {
-        const data = doc.data();
-        const newNotifRef = notificationsRef.doc();
-        batch.set(newNotifRef, {
-            title: data.title,
-            body: data.message,
-            url: data.url || null,
-            image: data.image || null,
-            target: 'all',
-            status: 'pending',
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            scheduledSourceId: doc.id // Tracking
-        });
-    });
-
-    await batch.commit();
-    console.log(`Triggered ${snapshot.size} scheduled notifications.`);
-    return null;
-});

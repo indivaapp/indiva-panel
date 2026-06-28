@@ -1,14 +1,19 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
     getScheduledNotifications,
     addScheduledNotification,
     toggleScheduledNotification,
-    deleteScheduledNotification
+    deleteScheduledNotification,
+    sendNotification,
+    getDiscounts,
+    getInfluencerStories,
 } from '../services/firebase';
 import { sendDirectPushNotification } from '../services/fcmService';
 import { uploadToImgbb } from '../services/imgbb';
-import type { ScheduledNotification } from '../types';
+import type { ScheduledNotification, Discount } from '../types';
+
+type TargetType = 'none' | 'discount' | 'story';
 
 interface NotificationSenderProps {
     isAdmin: boolean;
@@ -20,13 +25,56 @@ const NotificationSender: React.FC<NotificationSenderProps> = ({ isAdmin }) => {
     // --- Instant Notification State ---
     const [title, setTitle] = useState('');
     const [message, setMessage] = useState('');
-    const [link, setLink] = useState('');
     const [imageFile, setImageFile] = useState<File | null>(null);
-    const [imageUrl, setImageUrl] = useState<string | null>(null); // For preview
+    const [imageUrl, setImageUrl] = useState<string | null>(null);
     const [isUploading, setIsUploading] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
+
+    // --- Hedef Seçici ---
+    const [targetType, setTargetType] = useState<TargetType>('none');
+    const [pickerItems, setPickerItems] = useState<any[]>([]);
+    const [pickerLoading, setPickerLoading] = useState(false);
+    const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [selectedLabel, setSelectedLabel] = useState<string>('');
+    const [selectedThumb, setSelectedThumb] = useState<string>('');
+
+    const loadPickerItems = useCallback(async (type: TargetType) => {
+        if (type === 'none') { setPickerItems([]); return; }
+        setPickerLoading(true);
+        setPickerItems([]);
+        setSelectedId(null);
+        setSelectedLabel('');
+        setSelectedThumb('');
+        try {
+            if (type === 'discount') {
+                const discounts = await getDiscounts();
+                setPickerItems(discounts.slice(0, 60));
+            } else {
+                const stories = await getInfluencerStories();
+                setPickerItems((stories as any[]).filter((s: any) => s.isActive));
+            }
+        } catch { /* sessiz */ } finally {
+            setPickerLoading(false);
+        }
+    }, []);
+
+    const handleTargetTypeChange = (type: TargetType) => {
+        setTargetType(type);
+        loadPickerItems(type);
+    };
+
+    const handleSelectItem = (item: any) => {
+        setSelectedId(item.id);
+        if (targetType === 'discount') {
+            setSelectedLabel(item.title || item.brand);
+            setSelectedThumb(item.imageUrl || '');
+        } else {
+            setSelectedLabel(item.affiliateLink || 'Story');
+            setSelectedThumb(item.productImage || '');
+        }
+    };
 
     // --- Scheduled Notification State ---
     const [schedules, setSchedules] = useState<ScheduledNotification[]>([]);
@@ -89,24 +137,45 @@ const NotificationSender: React.FC<NotificationSenderProps> = ({ isAdmin }) => {
                 setIsUploading(false);
             }
 
-            // Send directly via FCM HTTP API (no Cloud Functions needed)
-            const result = await sendDirectPushNotification(
+            const discountId = targetType === 'discount' ? (selectedId ?? undefined) : undefined;
+            const storyId    = targetType === 'story'    ? (selectedId ?? undefined) : undefined;
+
+            // 1) FCM v1 API ile direkt gönder (all_users topic)
+            console.log('[FCM] Gönderiliyor...', { title, discountId, storyId });
+            const fcmResult = await sendDirectPushNotification(
                 title,
                 message,
                 finalImageUrl || undefined,
-                link || undefined
+                undefined,
+                discountId,
+                storyId,
+            );
+            console.log('[FCM] Sonuç:', fcmResult);
+
+            if (!fcmResult.success) {
+                throw new Error(fcmResult.error || 'FCM bildirimi gönderilemedi.');
+            }
+
+            // 2) Firestore'a kayıt bırak (geçmiş / log için)
+            await sendNotification(
+                title,
+                message,
+                finalImageUrl || undefined,
+                undefined,
+                discountId,
+                targetType === 'story' ? (selectedId ?? undefined) : undefined,
             );
 
-            if (result.success) {
-                setSuccess('Bildirim başarıyla tüm kullanıcılara gönderildi! ✅');
-                setTitle('');
-                setMessage('');
-                setLink('');
-                setImageFile(null);
-                setImageUrl(null);
-            } else {
-                throw new Error(result.error);
-            }
+            setSuccess('Bildirim tüm kullanıcılara gönderildi! ✅');
+            setTitle('');
+            setMessage('');
+            setImageFile(null);
+            setImageUrl(null);
+            setTargetType('none');
+            setSelectedId(null);
+            setSelectedLabel('');
+            setSelectedThumb('');
+            setPickerItems([]);
         } catch (err: any) {
             setIsUploading(false);
             setError(err.message || 'Bildirim gönderilemedi.');
@@ -244,31 +313,101 @@ const NotificationSender: React.FC<NotificationSenderProps> = ({ isAdmin }) => {
                             ></textarea>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                            <div>
-                                <label className="block text-sm font-bold text-gray-300 mb-1">Hedef URL (Deep Link)</label>
-                                <div className="relative">
-                                    <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400">
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
-                                    </span>
-                                    <input
-                                        type="text"
-                                        placeholder="Örn: /product/123 veya https://..."
-                                        value={link}
-                                        onChange={e => setLink(e.target.value)}
-                                        className="w-full p-3 pl-10 bg-gray-700 rounded-lg border border-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent text-white"
-                                    />
+                        {/* ── Hedef Seçici ─────────────────────────────────── */}
+                        <div>
+                            <label className="block text-sm font-bold text-gray-300 mb-2">Bildirime Tıklayınca Nereye Gitsin?</label>
+                            <div className="flex gap-2 mb-3">
+                                {(['none', 'discount', 'story'] as TargetType[]).map(t => (
+                                    <button
+                                        key={t}
+                                        type="button"
+                                        onClick={() => handleTargetTypeChange(t)}
+                                        className={`flex-1 py-2 rounded-lg text-sm font-bold transition-colors border ${
+                                            targetType === t
+                                                ? 'bg-blue-600 border-blue-500 text-white'
+                                                : 'bg-gray-700 border-gray-600 text-gray-400 hover:text-white'
+                                        }`}
+                                    >
+                                        {t === 'none' ? '🚫 Yok' : t === 'discount' ? '🏷️ İndirim İlanı' : '🎬 Story'}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* Seçili hedef özeti */}
+                            {selectedId && (
+                                <div className="flex items-center gap-3 p-3 bg-blue-900/30 border border-blue-500/40 rounded-lg mb-3">
+                                    {selectedThumb && (
+                                        <img src={selectedThumb} alt="" className="w-12 h-12 object-cover rounded-lg shrink-0" />
+                                    )}
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-xs text-blue-400 font-bold uppercase mb-0.5">
+                                            {targetType === 'discount' ? 'Seçili İlan' : 'Seçili Story'}
+                                        </p>
+                                        <p className="text-white text-sm truncate">{selectedLabel}</p>
+                                        <p className="text-gray-500 text-[10px] font-mono mt-0.5">{selectedId}</p>
+                                    </div>
+                                    <button type="button" onClick={() => { setSelectedId(null); setSelectedLabel(''); setSelectedThumb(''); }}
+                                        className="text-gray-500 hover:text-red-400 text-lg shrink-0">✕</button>
                                 </div>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-bold text-gray-300 mb-1">Büyük Resim URL (Opsiyonel)</label>
-                                <input
-                                    type="file"
-                                    onChange={handleImageChange}
-                                    accept="image/*"
-                                    className="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700"
-                                />
-                            </div>
+                            )}
+
+                            {/* Picker galerisi */}
+                            {targetType !== 'none' && (
+                                <div className="border border-gray-700 rounded-xl overflow-hidden">
+                                    <div className="bg-gray-900/60 px-3 py-2 text-xs text-gray-500 font-bold uppercase tracking-wider border-b border-gray-700">
+                                        {pickerLoading ? 'Yükleniyor...' : `${pickerItems.length} öğe — birini seç`}
+                                    </div>
+                                    {pickerLoading ? (
+                                        <div className="flex justify-center py-8">
+                                            <div className="w-6 h-6 border-2 border-gray-600 border-t-blue-500 rounded-full animate-spin" />
+                                        </div>
+                                    ) : (
+                                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-1 p-2 max-h-64 overflow-y-auto">
+                                            {pickerItems.map(item => {
+                                                const thumb = targetType === 'discount' ? item.imageUrl : item.productImage;
+                                                const label = targetType === 'discount' ? item.title : item.affiliateLink;
+                                                const isSelected = selectedId === item.id;
+                                                return (
+                                                    <button
+                                                        key={item.id}
+                                                        type="button"
+                                                        onClick={() => handleSelectItem(item)}
+                                                        className={`relative rounded-lg overflow-hidden aspect-square border-2 transition-all ${
+                                                            isSelected ? 'border-blue-500 scale-95' : 'border-transparent hover:border-gray-500'
+                                                        }`}
+                                                    >
+                                                        {thumb ? (
+                                                            <img src={thumb} alt="" className="w-full h-full object-cover" />
+                                                        ) : (
+                                                            <div className="w-full h-full bg-gray-700 flex items-center justify-center text-2xl">
+                                                                {targetType === 'story' ? '🎬' : '🏷️'}
+                                                            </div>
+                                                        )}
+                                                        {isSelected && (
+                                                            <div className="absolute inset-0 bg-blue-500/30 flex items-center justify-center">
+                                                                <span className="text-2xl">✓</span>
+                                                            </div>
+                                                        )}
+                                                        <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
+                                                            <p className="text-[9px] text-white truncate">{label}</p>
+                                                        </div>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-bold text-gray-300 mb-1">Bildirim Görseli (Opsiyonel)</label>
+                            <input
+                                type="file"
+                                onChange={handleImageChange}
+                                accept="image/*"
+                                className="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700"
+                            />
                         </div>
 
                         {imageUrl && (

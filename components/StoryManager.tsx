@@ -12,11 +12,18 @@ import type { InfluencerStory } from '../types';
 
 interface StoryManagerProps {
     isAdmin: boolean;
+    initialImageBase64?: string;   // Android'den paylaşılan görsel (base64 JPEG)
+    initialLink?: string;          // Pano'dan alınan affiliate link
+    onSharedDataConsumed?: () => void;
 }
 
 const GEMINI_KEY = (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
 
-const StoryManager: React.FC<StoryManagerProps> = () => {
+const StoryManager: React.FC<StoryManagerProps> = ({
+    initialImageBase64,
+    initialLink,
+    onSharedDataConsumed,
+}) => {
     const [stories, setStories]           = useState<InfluencerStory[]>([]);
     const [isLoading, setIsLoading]       = useState(true);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -29,11 +36,24 @@ const StoryManager: React.FC<StoryManagerProps> = () => {
     const [discountCode, setDiscountCode]   = useState('');
     const [uploadError, setUploadError]     = useState<string | null>(null);
     const [alsoPublishDiscount, setAlsoPublishDiscount] = useState(false);
+    const [sharedImageStatus, setSharedImageStatus] = useState<'idle' | 'uploading' | 'done' | 'error'>('idle');
 
     const fetchStories = useCallback(async () => {
         setIsLoading(true);
         try {
-            setStories(await getInfluencerStories());
+            const all = await getInfluencerStories();
+
+            // Süresi dolmuş storyleri Firestore'dan sil
+            const now = new Date();
+            const expired = all.filter(s => {
+                if (!s.expiresAt) return false;
+                const d = s.expiresAt.toDate ? s.expiresAt.toDate() : new Date(s.expiresAt.seconds * 1000);
+                return d < now;
+            });
+            await Promise.all(expired.map(s => deleteInfluencerStory(s.id)));
+
+            // Sadece aktif (süresi dolmamış) storyleri göster
+            setStories(all.filter(s => !expired.find(e => e.id === s.id)));
         } catch {
             setError('Story\'ler yüklenemedi.');
         } finally {
@@ -42,6 +62,41 @@ const StoryManager: React.FC<StoryManagerProps> = () => {
     }, []);
 
     useEffect(() => { fetchStories(); }, [fetchStories]);
+
+    // Paylaşılan görsel geldiğinde otomatik yükle
+    useEffect(() => {
+        if (!initialImageBase64 || sharedImageStatus !== 'idle') return;
+
+        const uploadSharedImage = async () => {
+            setSharedImageStatus('uploading');
+            setIsUploading(true);
+            setUploadError(null);
+            try {
+                // base64 → Blob → File
+                const byteChars  = atob(initialImageBase64);
+                const byteNums   = new Array(byteChars.length).fill(0).map((_, i) => byteChars.charCodeAt(i));
+                const byteArray  = new Uint8Array(byteNums);
+                const blob       = new Blob([byteArray], { type: 'image/jpeg' });
+                const file       = new File([blob], 'shared-image.jpg', { type: 'image/jpeg' });
+
+                const { downloadURL } = await uploadToImgbb(file);
+                setProductImage(downloadURL);
+                setSharedImageStatus('done');
+            } catch {
+                setUploadError('Paylaşılan görsel yüklenemedi.');
+                setSharedImageStatus('error');
+            } finally {
+                setIsUploading(false);
+                onSharedDataConsumed?.();
+            }
+        };
+
+        // Pano linki varsa doldur
+        if (initialLink) setAffiliateLink(initialLink);
+
+        uploadSharedImage();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [initialImageBase64]);
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -178,11 +233,7 @@ const StoryManager: React.FC<StoryManagerProps> = () => {
         });
     };
 
-    const isExpired = (ts: any) => {
-        if (!ts) return false;
-        const date = ts.toDate ? ts.toDate() : new Date(ts.seconds * 1000);
-        return date < new Date();
-    };
+
 
     return (
         <div>
@@ -214,8 +265,14 @@ const StoryManager: React.FC<StoryManagerProps> = () => {
                         {isUploading && (
                             <p className="text-blue-400 text-xs mt-2 flex items-center gap-1">
                                 <span className="inline-block w-3 h-3 border border-blue-400 border-t-transparent rounded-full animate-spin" />
-                                Görsel yükleniyor...
+                                {sharedImageStatus === 'uploading' ? 'Paylaşılan görsel yükleniyor...' : 'Görsel yükleniyor...'}
                             </p>
+                        )}
+                        {sharedImageStatus === 'uploading' && (
+                            <div className="mt-2 flex items-center gap-2 bg-purple-900/30 border border-purple-700/40 rounded-lg px-3 py-2">
+                                <span className="text-lg">📲</span>
+                                <span className="text-purple-300 text-xs">Paylaşılan görsel alınıyor ve yükleniyor...</span>
+                            </div>
                         )}
                         {uploadError && <p className="text-red-400 text-xs mt-1">{uploadError}</p>}
                         {productImage && !isUploading && (
@@ -317,27 +374,23 @@ const StoryManager: React.FC<StoryManagerProps> = () => {
                 </div>
             ) : (
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {stories.map(story => {
-                        const expired = isExpired(story.expiresAt);
-                        return (
+                    {stories.map(story => (
                             <div
                                 key={story.id}
                                 className={`bg-gray-800 rounded-xl overflow-hidden border transition-all ${
-                                    expired ? 'border-red-800/50 opacity-60' :
                                     story.isActive ? 'border-purple-600/40' : 'border-gray-700 opacity-70'
                                 }`}
                             >
                                 <div className="relative">
                                     <img
-                                        src={story.imageUrl}
+                                        src={story.productImage}
                                         alt="Story görseli"
                                         className="w-full aspect-square object-cover"
                                     />
                                     <span className={`absolute top-2 right-2 text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                        expired ? 'bg-red-600 text-white' :
                                         story.isActive ? 'bg-green-500 text-white' : 'bg-gray-600 text-gray-300'
                                     }`}>
-                                        {expired ? 'Süresi Doldu' : story.isActive ? 'Aktif' : 'Pasif'}
+                                        {story.isActive ? 'Aktif' : 'Pasif'}
                                     </span>
                                 </div>
 
@@ -361,14 +414,12 @@ const StoryManager: React.FC<StoryManagerProps> = () => {
                                 </div>
 
                                 <div className="flex border-t border-gray-700">
-                                    {!expired && (
-                                        <button
-                                            onClick={() => handleToggleActive(story)}
-                                            className="flex-1 py-2 text-xs font-semibold text-gray-300 hover:bg-gray-700 transition-colors"
-                                        >
-                                            {story.isActive ? 'Pasife Al' : 'Aktif Et'}
-                                        </button>
-                                    )}
+                                    <button
+                                        onClick={() => handleToggleActive(story)}
+                                        className="flex-1 py-2 text-xs font-semibold text-gray-300 hover:bg-gray-700 transition-colors"
+                                    >
+                                        {story.isActive ? 'Pasife Al' : 'Aktif Et'}
+                                    </button>
                                     <button
                                         onClick={() => handleDelete(story.id)}
                                         className="flex-1 py-2 text-xs font-semibold text-red-400 hover:bg-gray-700 transition-colors border-l border-gray-700"
@@ -377,8 +428,7 @@ const StoryManager: React.FC<StoryManagerProps> = () => {
                                     </button>
                                 </div>
                             </div>
-                        );
-                    })}
+                    ))}
                 </div>
             )}
         </div>

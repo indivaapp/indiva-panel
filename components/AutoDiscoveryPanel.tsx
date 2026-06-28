@@ -251,7 +251,7 @@ const AutoDiscoveryPanel: React.FC<AutoDiscoveryPanelProps> = ({ isAdmin }) => {
 
                     <div className="flex items-center gap-4 mb-4">
                         <span className="text-2xl font-bold text-green-400">
-                            {currentDeal.price ? `${currentDeal.price.toLocaleString('tr-TR')}₺` : 'Fiyat bilgisi yok'}
+                            {currentDeal.price ? `${Math.floor(currentDeal.price).toLocaleString('tr-TR')}₺` : 'Fiyat bilgisi yok'}
                         </span>
                         <span className="bg-blue-600 px-3 py-1 rounded-full text-sm font-bold">
                             🏪 {currentDeal.source}

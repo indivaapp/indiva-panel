@@ -99,14 +99,31 @@ async function handleShareTarget(request) {
             new Response(meta, { headers: { 'Content-Type': 'application/json' } })
         );
 
-        // 3. Açık sekmelere (client) bildirim gönder
+        // 3. Açık sekmelere bildirim gönder + var olan tab'ı navigate et
         const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+
+        let navigated = false;
         for (const client of allClients) {
             client.postMessage({ type: 'SHARE_RECEIVED', hasImage: true, title, url, text });
+            if (!navigated) {
+                try {
+                    await client.focus();
+                    await client.navigate('/?share=1');
+                    navigated = true;
+                    console.log('[SW] Mevcut sekme navigate edildi: /?share=1');
+                } catch {
+                    // client.navigate desteklenmiyorsa redirect'e düş
+                }
+            }
         }
 
-        // 4. Ana sayfaya yönlendir, ?share=1 parametresiyle ShareTarget overlay'ini tetikle
-        return Response.redirect('/?share=1', 303);
+        // 4. Açık client yoksa veya navigate başarısız olduysa redirect yap
+        if (!navigated) {
+            return Response.redirect('/?share=1', 303);
+        }
+
+        // navigate başarılıysa tarayıcı redirect'e gerek yok — 204 dön
+        return new Response(null, { status: 204 });
 
     } catch (err) {
         console.error('[SW] Share target hatası:', err);

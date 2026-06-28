@@ -1,20 +1,29 @@
 /**
  * auto-brochures.js — INDIVA Aktüel Afiş Otomasyonu
- * 
- * aktuelbul.com üzerinden BİM, A101 ve ŞOK aktüel afişlerini çeker.
- * Gemini 3 Flash ile analiz ederek kategori, başlık ve geçerlilik tarihini belirler.
- * Firestore'daki ilgili market koleksiyonlarına kaydeder.
+ *
+ * aktuel-urunler.com üzerinden BİM, A101 ve ŞOK aktüel katalog sayfalarını
+ * otomatik olarak Firestore circulars/{market}/brochures koleksiyonuna kaydeder.
+ *
+ * Kaynak: aktuel-urunler.com (WordPress, Cloudflare yok — doğrudan HTML erişim)
+ * Çalışma sıklığı: Her 6 saatte bir (GitHub Actions)
+ * Mükerrer kontrol: imageUrl alanına göre
  */
-import { GoogleGenAI } from '@google/genai';
+
+import * as cheerio from 'cheerio';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
+import { initializeApp, getApps, cert } from 'firebase-admin/app';
+import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore';
 
-// ─── .env Yükle ─────────────────────────────────────────────────────────────
-const ROOT_DIR = process.cwd();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT_DIR = path.join(__dirname, '..');
+
+// .env dosyasından environment variables yükle (lokal çalıştırma için)
 const envPath = path.join(ROOT_DIR, '.env');
 if (fs.existsSync(envPath)) {
-    const envContent = fs.readFileSync(envPath, 'utf8');
-    for (const line of envContent.split('\n')) {
+    const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+    for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith('#')) continue;
         const eqIdx = trimmed.indexOf('=');
@@ -25,192 +34,278 @@ if (fs.existsSync(envPath)) {
     }
 }
 
-const AI_API_KEY = process.env.GEMINI_API_KEY;
-const MODEL = 'gemini-2.5-flash-lite';
-
-// ─── Firebase ────────────────────────────────────────────────────────────────
+// Firebase Admin başlat
 function initFirebase() {
     if (getApps().length > 0) return getFirestore();
     let serviceAccount;
     const envJson = process.env.FIREBASE_SERVICE_ACCOUNT;
-    if (envJson) {
-        serviceAccount = JSON.parse(envJson);
-    } else {
-        const localPath = path.join(ROOT_DIR, 'firebase-service-account.json');
-        if (fs.existsSync(localPath)) {
-            serviceAccount = JSON.parse(fs.readFileSync(localPath, 'utf8'));
-        } else {
-            throw new Error('Firebase service account bulunamadı.');
-        }
+
+    // Env var'ı kullan; geçersiz/truncated JSON ise dosyaya düş
+    if (envJson && envJson.includes('private_key')) {
+        try { serviceAccount = JSON.parse(envJson); } catch { /* geçersiz JSON */ }
     }
+
+    if (!serviceAccount) {
+        const localPath = path.join(ROOT_DIR, 'firebase-service-account.json');
+        if (!fs.existsSync(localPath)) {
+            throw new Error('Firebase credentials bulunamadı. FIREBASE_SERVICE_ACCOUNT env veya firebase-service-account.json gerekli.');
+        }
+        serviceAccount = JSON.parse(fs.readFileSync(localPath, 'utf8'));
+    }
+    // JSON'dan okunan private_key'deki \\n escape'lerini gerçek satır başlarına çevir
+    if (serviceAccount?.private_key) {
+        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n').replace(/\n\n/g, '\n');
+    }
+
     initializeApp({ credential: cert(serviceAccount) });
     return getFirestore();
 }
 
-// ─── HTTP Utilities ──────────────────────────────────────────────────────────
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
+// ─── HTTP ───────────────────────────────────────────────────────────────────
 
-async function fetchHtml(url, timeoutMs = 15000) {
+const HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+};
+
+async function fetchHtml(url) {
     try {
-        const res = await fetch(url, {
-            headers: { 'User-Agent': USER_AGENT },
-            signal: AbortSignal.timeout(timeoutMs)
-        });
-        if (!res.ok) return null;
+        const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(20000) });
+        if (!res.ok) {
+            console.log(`   ⚠️  HTTP ${res.status}: ${url}`);
+            return null;
+        }
         return await res.text();
     } catch (e) {
-        console.error(`   ⚠️ Fetch Hatası (${url}): ${e.message}`);
+        console.log(`   ⚠️  Fetch hatası: ${e.message}`);
         return null;
     }
 }
 
-// ─── AI Analiz ──────────────────────────────────────────────────────────────
-async function analyzeBrochureWithAI(pageTitle, pageContent) {
-    if (!AI_API_KEY) return null;
+// ─── Parsing ────────────────────────────────────────────────────────────────
 
-    const genAI = new GoogleGenAI({ apiKey: AI_API_KEY });
+// Türkçe ay adları — URL'lerde ASCII versiyonları kullanılır
+const TR_MONTHS = {
+    ocak: 0, subat: 1, mart: 2, nisan: 3, mayis: 4, haziran: 5,
+    temmuz: 6, agustos: 7, eylul: 8, ekim: 9, kasim: 10, aralik: 11,
+    // Olası diacritics versiyonları
+    şubat: 1, mayıs: 4, ağustos: 7, eylül: 8, kasım: 10, aralık: 11,
+};
 
-    const systemInstruction = `Sen bir aktüel ürünler uzmanısın. Sana sunulan bir web sayfasının başlığını ve içeriğini analiz ederek, bu sayfanın hangi markaya (BİM, A101, ŞOK) ait olduğunu, katalog başlığını ve geçerlilik tarihini belirleyeceksin.
-    
-GÜNCEL TARİH: ${new Date().toLocaleDateString('tr-TR')}
+// Türkçe ay adları — görüntü için (büyük harf ilk harf)
+const MONTH_DISPLAY = [
+    'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
+    'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'
+];
 
-KURALLAR:
-1. Sadece GÜNCEL veya GELECEK tarihli katalogları belirle.
-2. "validityDate" formatı gün/ay/yıl bazlı anlaşılır olmalı (Örn: "27 Şubat - 6 Mart 2026").
-3. Eğer katalog 2 haftadan daha eskiyse (geçmişte kalmışsa), bunu analiz sonucunda belirtme veya storeName'i null döndür.
-4. SADECE JSON formatında yanıt ver.`;
+/**
+ * URL slug'ından başlık ve tarih üret.
+ * e.g. "bim-3-temmuz-2026-aktuel-urunler-katalogu"
+ *   → { title: "BİM 3 Temmuz 2026 Aktüel", date: Date(2026,6,3) }
+ */
+function parseSlug(slug, storeName) {
+    // Suffix'i kaldır
+    const clean = slug
+        .replace(/-aktuel-urunler-katalogu.*/, '')
+        .replace(/-aktuel-urunler.*/, '')
+        .replace(/-aktuel-katalogu.*/, '');
 
-    const prompt = `Sayfa Başlığı: ${pageTitle}\n\nSayfa İçeriği Önizleme: ${pageContent.substring(0, 1500)}`;
+    // Market prefix'ini kaldır (bim-, a101-, sok-)
+    const marketRe = /^(bim|a101|sok)-/;
+    const withoutMarket = clean.replace(marketRe, '');
 
-    try {
-        const response = await genAI.models.generateContent({
-            model: MODEL,
-            contents: [{ role: 'user', parts: [{ text: `${systemInstruction}\n\n${prompt}` }] }],
-            config: {
-                temperature: 0.1
-            }
-        });
+    // Parçalara böl: {day}-{month}-{year} veya {day}-{month}-{year}-ek
+    const parts = withoutMarket.split('-');
+    const yearIdx = parts.findIndex(p => /^\d{4}$/.test(p));
 
-        const text = response.text || '';
-        const match = text.match(/\{[\s\S]*\}/);
-        return JSON.parse(match ? match[0] : text);
-    } catch (e) {
-        console.error('   ⚠️ AI Analiz Hatası:', e.message);
-        return null;
+    let date = null;
+    let displayTitle = '';
+
+    if (yearIdx >= 2) {
+        const year = parseInt(parts[yearIdx]);
+        const monthStr = parts[yearIdx - 1]?.toLowerCase();
+        const month = TR_MONTHS[monthStr];
+        const day = parseInt(parts[yearIdx - 2]);
+
+        if (month !== undefined && !isNaN(day) && day >= 1 && day <= 31) {
+            date = new Date(year, month, day);
+            displayTitle = `${storeName} ${day} ${MONTH_DISPLAY[month]} ${year} Aktüel`;
+        }
     }
+
+    if (!displayTitle) {
+        // Fallback: slug'ı okunabilir hale getir
+        const readable = parts.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+        displayTitle = `${storeName} ${readable} Aktüel`;
+    }
+
+    return { title: displayTitle, date };
 }
 
-// ─── Main Logic ──────────────────────────────────────────────────────────────
-
-async function autoCollectBrochures() {
-    console.log(`\n🚀 Aktüel Afiş Otomasyonu Başlatıldı: ${new Date().toLocaleString('tr-TR')}`);
-    const db = initFirebase();
-    const BASE_URL = 'https://www.aktuelbul.com/';
-
-    const html = await fetchHtml(BASE_URL);
-    if (!html) {
-        console.error('❌ Ana sayfa yüklenemedi.');
-        return;
-    }
-
+/**
+ * Liste sayfasındaki katalog linklerini topla.
+ * Pattern: /bim-3-temmuz-2026-aktuel-urunler-katalogu/
+ */
+function extractCatalogLinks(html) {
     const $ = cheerio.load(html);
-    const catalogLinks = [];
-    const currentYear = new Date().getFullYear();
-    const currentMonth = new Date().getMonth() + 1; // 1-12
+    const seen = new Set();
+    const links = [];
 
-    // Ana sayfadaki son katalog linklerini topla (BİM, A101, ŞOK olanlar)
-    $('a').each((_, el) => {
-        const link = $(el).attr('href');
-        const text = $(el).text().toUpperCase();
-
-        if (link && (text.includes('BİM') || text.includes('A101') || text.includes('ŞOK')) && text.includes('KATALOĞU')) {
-            // Basit Tarih Filtresi: Başlıkta geçen ayı kontrol et (Sadece bu ay veya geçen ayın son 2 haftası gibi)
-            // Daha garanti olması için link listesini AI analizinden önce çok kısıtlamıyoruz ama aşırı eski yılları eliyoruz
-            if (text.includes(String(currentYear)) || text.includes(String(currentYear - 1))) {
-                if (!catalogLinks.includes(link)) {
-                    catalogLinks.push(link);
-                }
+    $('a[href]').each((_, el) => {
+        const href = $(el).attr('href') || '';
+        // Katalog URL deseni: /{market}-{sayı}-{ay}-{yıl}-aktuel
+        if (/\/(bim|a101|sok)-\d+-[a-z]+-\d{4}-aktuel/.test(href)) {
+            const fullUrl = href.startsWith('http')
+                ? href
+                : `https://aktuel-urunler.com${href}`;
+            if (!seen.has(fullUrl)) {
+                seen.add(fullUrl);
+                links.push(fullUrl);
             }
         }
     });
 
-    console.log(`📊 Toplam ${catalogLinks.length} potansiyel katalog linki bulundu.`);
-
-    for (const link of catalogLinks.slice(0, 8)) { // Biraz daha geniş bir yelpazeye bakıp AI ile eleyeceğiz
-        console.log(`\n📄 İnceleniyor: ${link}`);
-        const pageHtml = await fetchHtml(link);
-        if (!pageHtml) continue;
-
-        const $p = cheerio.load(pageHtml);
-        const title = $p('h1').first().text().trim();
-        const contentText = $p('article').text().trim() || $p('body').text().trim();
-
-        // 1. AI ile Analiz Et
-        const aiInfo = await analyzeBrochureWithAI(title, contentText);
-
-        // KRİTİK: Tarih Kontrolü ve Geçersizlik Filtresi
-        if (!aiInfo || !aiInfo.storeName || aiInfo.isExpired) {
-            console.log('   ⏭️ Atlanıyor: AI bu kataloğun eski veya geçersiz olduğuna karar verdi.');
-            continue;
-        }
-
-        console.log(`   🔸 Market: ${aiInfo.storeName.toUpperCase()} | Başlık: ${aiInfo.title}`);
-
-        // 2. Görselleri Çek (Sayfadaki ana katalog görsellerini bul)
-        const images = [];
-        $p('img').each((_, img) => {
-            const src = $(img).attr('src');
-            // Afiş görselleri genellikle daha büyük ve katalog kelimesini barındıran isimlere sahiptir
-            if (src && (src.includes('bim') || src.includes('a101') || src.includes('sok') || src.includes('aktuel')) && (src.endsWith('.jpg') || src.endsWith('.webp') || src.endsWith('.png'))) {
-                const fullSrc = src.startsWith('http') ? src : new URL(src, BASE_URL).href;
-                if (!images.includes(fullSrc) && !fullSrc.includes('logo') && !fullSrc.includes('banner')) {
-                    images.push(fullSrc);
-                }
-            }
-        });
-
-        if (images.length === 0) {
-            console.log('   ⚠️ Görsel bulunamadı, atlanıyor.');
-            continue;
-        }
-
-        console.log(`   📸 ${images.length} adet görsel bulundu.`);
-
-        // 3. Firestore'a Kaydet (Mükerrer kontrolü ile)
-        const storeKey = aiInfo.storeName.toLowerCase();
-        const collectionPath = `circulars/${storeKey}/brochures`;
-
-        for (const imageUrl of images) {
-            // Görsel URL'sine göre mükerrer kontrolü
-            const existing = await db.collection(collectionPath).where('imageUrl', '==', imageUrl).limit(1).get();
-
-            if (existing.empty) {
-                const brochureData = {
-                    storeName: storeKey,
-                    marketName: storeKey,
-                    title: aiInfo.title,
-                    validityDate: aiInfo.validityDate,
-                    publishDate: aiInfo.startDate ? new Date(aiInfo.startDate) : FieldValue.serverTimestamp(),
-                    imageUrl: imageUrl,
-                    deleteUrl: '',
-                    createdAt: FieldValue.serverTimestamp()
-                };
-
-                await db.collection(collectionPath).add(brochureData);
-                console.log(`   ✅ Yeni afiş eklendi: ${aiInfo.title} (${imageUrl.substring(imageUrl.lastIndexOf('/') + 1)})`);
-            } else {
-                console.log(`   ⏭️ Afiş zaten mevcut: ${imageUrl.substring(imageUrl.lastIndexOf('/') + 1)}`);
-            }
-        }
-
-        // Sunucu yormamak için kısa bekleme
-        await new Promise(r => setTimeout(r, 1000));
-    }
-
-    console.log('\n✨ İşlem tamamlandı.');
+    return links;
 }
 
-autoCollectBrochures().catch(err => {
-    console.error(`💥 KRİTİK HATA: ${err.message}`);
+/**
+ * Katalog detay sayfasındaki tam boyutlu görsel URL'lerini çıkar.
+ * Thumbnail versiyonları (-200x300, -1280x720 vs.) tam boyuta dönüştürür.
+ */
+function extractPageImages(html) {
+    const $ = cheerio.load(html);
+    const images = [];
+
+    $('img[src*="uploads"]').each((_, el) => {
+        const src = $(el).attr('src') || '';
+        if (src.includes('/story/')) return; // Sidebar story bannerları atla
+        // Thumbnail dimensions'ı kaldır: -200x300.webp → .webp
+        const fullSrc = src.replace(/-\d+x\d+(\.\w+)$/, '$1');
+        if (!images.includes(fullSrc)) {
+            images.push(fullSrc);
+        }
+    });
+
+    return images;
+}
+
+// ─── Firestore ───────────────────────────────────────────────────────────────
+
+async function imageExists(db, marketKey, imageUrl) {
+    const col = db.collection('circulars').doc(marketKey).collection('brochures');
+    const snap = await col.where('imageUrl', '==', imageUrl).limit(1).get();
+    return !snap.empty;
+}
+
+async function saveBrochure(db, marketKey, storeName, imageUrl, title, publishDate) {
+    const col = db.collection('circulars').doc(marketKey).collection('brochures');
+    await col.add({
+        storeName,
+        marketName: storeName,
+        title,
+        imageUrl,
+        validityDate: '',
+        publishDate: publishDate ? Timestamp.fromDate(publishDate) : FieldValue.serverTimestamp(),
+        deleteUrl: '',
+        createdAt: FieldValue.serverTimestamp(),
+    });
+}
+
+// ─── Market Yapılandırması ───────────────────────────────────────────────────
+
+const MARKETS = [
+    { name: 'BİM',  key: 'bim',  listUrl: 'https://aktuel-urunler.com/bim-aktuel/' },
+    { name: 'A101', key: 'a101', listUrl: 'https://aktuel-urunler.com/a101-aktuel/' },
+    { name: 'ŞOK',  key: 'sok',  listUrl: 'https://aktuel-urunler.com/sok-aktuel/' },
+];
+
+// ─── Ana Akış ────────────────────────────────────────────────────────────────
+
+async function main() {
+    console.log(`\n🚀 Aktüel Afiş Otomasyonu başlatıldı: ${new Date().toLocaleString('tr-TR')}`);
+
+    const db = initFirebase();
+    let totalAdded = 0;
+    let totalSkipped = 0;
+
+    for (const market of MARKETS) {
+        console.log(`\n━━━ ${market.name} ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+
+        const listHtml = await fetchHtml(market.listUrl);
+        if (!listHtml) {
+            console.log(`  ❌ Liste sayfası yüklenemedi, atlanıyor.`);
+            continue;
+        }
+
+        const catalogUrls = extractCatalogLinks(listHtml);
+        console.log(`  ${catalogUrls.length} katalog linki bulundu`);
+
+        if (catalogUrls.length === 0) {
+            console.log(`  ⚠️  Katalog linki bulunamadı.`);
+            continue;
+        }
+
+        // En yeni 3 kataloğu işle — eskiler zaten Firestore'da olur
+        const toProcess = catalogUrls.slice(0, 3);
+
+        for (const catalogUrl of toProcess) {
+            const slug = catalogUrl.split('/').filter(Boolean).pop() || '';
+            const { title, date } = parseSlug(slug, market.name);
+
+            console.log(`\n  📋 ${title}`);
+            if (date) {
+                console.log(`     Tarih: ${date.toLocaleDateString('tr-TR')}`);
+            }
+
+            const detailHtml = await fetchHtml(catalogUrl);
+            if (!detailHtml) {
+                console.log(`     ❌ Detay sayfası yüklenemedi`);
+                continue;
+            }
+
+            const pageImages = extractPageImages(detailHtml);
+            console.log(`     ${pageImages.length} sayfa görseli`);
+
+            if (pageImages.length === 0) {
+                console.log(`     ⚠️  Görsel bulunamadı`);
+                continue;
+            }
+
+            let added = 0;
+            let skipped = 0;
+
+            for (const imageUrl of pageImages) {
+                const exists = await imageExists(db, market.key, imageUrl);
+                if (exists) {
+                    skipped++;
+                    continue;
+                }
+                await saveBrochure(db, market.key, market.name, imageUrl, title, date);
+                added++;
+                totalAdded++;
+            }
+
+            totalSkipped += skipped;
+
+            if (added > 0) {
+                console.log(`     ✅ ${added} yeni sayfa kaydedildi`);
+            } else {
+                console.log(`     ⏭️  Tümü zaten mevcut (${skipped} atlandı)`);
+            }
+
+            await new Promise(r => setTimeout(r, 800)); // sunucuya nazik ol
+        }
+    }
+
+    console.log(`\n✨ Tamamlandı! ${totalAdded} yeni afiş eklendi, ${totalSkipped} tekrar atlandı.`);
+}
+
+main().catch(err => {
+    console.error(`\n💥 KRİTİK HATA: ${err.message}`);
+    console.error(err.stack);
     process.exit(1);
 });

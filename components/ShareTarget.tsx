@@ -376,7 +376,7 @@ const SuccessCard: React.FC<{ result: VisualProductData; affiliateUrl: string }>
                         <div className="text-center">
                             <p className="text-gray-500 text-[10px]">Eski</p>
                             <p className="text-gray-400 text-xs line-through">
-                                {result.oldPrice.toLocaleString('tr-TR')} TL
+                                {Math.floor(result.oldPrice).toLocaleString('tr-TR')} TL
                             </p>
                         </div>
                     )}
@@ -385,7 +385,7 @@ const SuccessCard: React.FC<{ result: VisualProductData; affiliateUrl: string }>
                     <div className="text-center">
                         <p className="text-gray-400 text-[10px]">Yeni</p>
                         <p className="text-green-400 font-bold text-sm">
-                            {result.newPrice.toLocaleString('tr-TR')} TL
+                            {Math.floor(result.newPrice).toLocaleString('tr-TR')} TL
                         </p>
                     </div>
 

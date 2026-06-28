@@ -2,31 +2,22 @@ import React, { useState, useEffect } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import type { Discount } from '../types';
 import { updateDiscount, sendNotification } from '../services/firebase';
-import { sendDirectPushNotification } from '../services/fcmService';
 import { uploadToImgbb, deleteFromImgbb } from '../services/imgbb';
 import { CATEGORIES } from '../constants/categories';
 
-const BADGE_PRESETS = ['Sponsorlu', 'İşbirliği', 'Genç Girişimci', 'Kadın Girişimci', 'Yerli Üretim'];
+const NOTIF_TITLES = [
+    '🔥 Fırsatı kaçırma! İNDİVA\'da süper indirim!',
+    '⚡ Şimdi bak! Anlık indirim yakalandı',
+    '💰 Cebinde kalsın! Harika bir fırsat seni bekliyor',
+    '🎯 Tam zamanında! İşte bugünün en iyi fırsatı',
+    '🛍️ İndirim avcıları buraya! Fırsat kapında',
+    '🚨 Dikkat! Stoklar tükenmeden incele',
+    '✨ Kaçırmak istemezsin! İNDİVA\'da özel fırsat',
+    '📢 Fırsat alarmı! Bu fiyatı başka yerde bulamazsın',
+    '🏷️ İnanılmaz indirim! Hemen İNDİVA\'ya gir',
+    '💎 Bugünün fırsatı! İNDİVA topluluğu için özel',
+];
 
-const pad = (n: number) => String(n).padStart(2, '0');
-
-/** Firestore Timestamp veya Date → "YYYY-MM-DD" */
-function toDatePart(val?: any): string {
-    if (!val) return '';
-    try {
-        const d: Date = typeof val.toDate === 'function' ? val.toDate() : new Date(val);
-        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-    } catch { return ''; }
-}
-
-/** Firestore Timestamp veya Date → "HH:MM" (yerel saat) */
-function toTimePart(val?: any): string {
-    if (!val) return '23:59';
-    try {
-        const d: Date = typeof val.toDate === 'function' ? val.toDate() : new Date(val);
-        return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    } catch { return '23:59'; }
-}
 
 interface EditDiscountModalProps {
     discount: Discount;
@@ -47,21 +38,16 @@ const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose
     const [newScreenshotFile, setNewScreenshotFile] = useState<File | null>(null);
     const [screenshotPreview, setScreenshotPreview] = useState<string | undefined>(discount.screenshotUrl);
 
-    // Sponsorlu ilan alanları
-    const [isAd, setIsAd] = useState<boolean>(discount.isAd ?? false);
-    const [adBadge, setAdBadge] = useState<string>(discount.adBadge ?? '');
-    const [description, setDescription] = useState<string>(discount.description ?? '');
-    const [expiresDate, setExpiresDate] = useState<string>(toDatePart(discount.expiresAt));
-    const [expiresTime, setExpiresTime] = useState<string>(toTimePart(discount.expiresAt));
-
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    // Notification states — serbest başlık + açıklama
-    const [notifTitle, setNotifTitle] = useState('');
-    const [notifBody, setNotifBody]   = useState('');
+    // Notification states
+    const CUSTOM_IDX = NOTIF_TITLES.length; // Özel başlık pozisyonu
+    const [notifTitleIdx, setNotifTitleIdx] = useState(() => Math.floor(Math.random() * NOTIF_TITLES.length));
+    const [customTitle, setCustomTitle]     = useState('');
     const [isSendingNotif, setIsSendingNotif] = useState(false);
     const [notifResult, setNotifResult] = useState<{ ok: boolean; msg: string } | null>(null);
+    const activeTitle = notifTitleIdx === CUSTOM_IDX ? customTitle : NOTIF_TITLES[notifTitleIdx];
 
     useEffect(() => {
         setFormData({
@@ -76,11 +62,6 @@ const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose
         setScreenshotPreview(discount.screenshotUrl);
         setNewImageFile(null);
         setNewScreenshotFile(null);
-        setIsAd(discount.isAd ?? false);
-        setAdBadge(discount.adBadge ?? '');
-        setDescription(discount.description ?? '');
-        setExpiresDate(toDatePart(discount.expiresAt));
-        setExpiresTime(toTimePart(discount.expiresAt));
     }, [discount]);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -119,23 +100,11 @@ const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose
         setIsLoading(true);
         setError(null);
 
-        if (isAd && !adBadge.trim()) {
-            setError('Sponsorlu ilan için rozet metni zorunludur.');
-            setIsLoading(false);
-            return;
-        }
-
         try {
             const dataToUpdate: Partial<Omit<Discount, 'id'>> = {
                 ...formData,
                 oldPrice: parseFloat(String(formData.oldPrice)) || 0,
                 newPrice: parseFloat(String(formData.newPrice)) || 0,
-                // Sponsorlu ilan alanları
-                isAd,
-                adBadge: isAd ? adBadge.trim() : '',
-                ...(isAd && description.trim() && { description: description.trim() }),
-                ...(!isAd && { description: '' }),
-                ...(isAd && expiresDate && { expiresAt: new Date(`${expiresDate}T${expiresTime || '23:59'}`) }),
             };
 
             // 1. Handle Main Image Update
@@ -241,121 +210,6 @@ const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose
                             </div>
                         </div>
 
-                        {/* ── İlan Türü ─────────────────────────────────────── */}
-                        <div className="border border-gray-600 rounded-xl p-4 space-y-3">
-                            <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">İlan Türü</p>
-
-                            <div className="grid grid-cols-2 gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => { setIsAd(false); setAdBadge(''); setDescription(''); setExpiresDate(''); setExpiresTime('23:59'); }}
-                                    className={`py-2.5 rounded-lg text-sm font-semibold transition-all ${!isAd ? 'bg-blue-600 text-white shadow-lg' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
-                                >
-                                    📋 Standart İlan
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => { setIsAd(true); if (!adBadge) setAdBadge('Sponsorlu'); }}
-                                    className={`py-2.5 rounded-lg text-sm font-semibold transition-all ${isAd ? 'bg-yellow-400 text-yellow-900 shadow-lg' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
-                                >
-                                    ⭐ Sponsorlu / Reklam
-                                </button>
-                            </div>
-
-                            {isAd && (
-                                <div className="space-y-3 pt-1">
-                                    <div>
-                                        <p className="text-xs text-gray-400 mb-1.5">Hızlı Seç:</p>
-                                        <div className="flex flex-wrap gap-1.5">
-                                            {BADGE_PRESETS.map(p => (
-                                                <button
-                                                    key={p}
-                                                    type="button"
-                                                    onClick={() => setAdBadge(p)}
-                                                    className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all ${
-                                                        adBadge === p
-                                                            ? 'bg-yellow-400 text-yellow-900'
-                                                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                                                    }`}
-                                                >
-                                                    {p}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-xs font-semibold text-gray-400 mb-1">
-                                            Rozet Metni *{' '}
-                                            <span className="font-normal text-gray-500">({adBadge.length}/16)</span>
-                                        </label>
-                                        <input
-                                            type="text"
-                                            className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-yellow-500 text-sm"
-                                            placeholder="Sponsorlu"
-                                            value={adBadge}
-                                            maxLength={16}
-                                            onChange={e => setAdBadge(e.target.value)}
-                                        />
-                                        {adBadge.trim() && (
-                                            <div className="mt-1.5 flex items-center gap-2">
-                                                <span className="text-xs text-gray-400">Önizleme →</span>
-                                                <span className="inline-block bg-yellow-400 text-yellow-900 text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-wide">
-                                                    {adBadge}
-                                                </span>
-                                                <span className="text-xs text-gray-500">sol üst köşede görünür</span>
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-xs font-semibold text-gray-400 mb-1">
-                                            Ürün Açıklaması{' '}
-                                            <span className="font-normal text-gray-500">(opsiyonel — detay sayfasında gösterilir)</span>
-                                        </label>
-                                        <textarea
-                                            className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-yellow-500 text-sm resize-none"
-                                            rows={3}
-                                            placeholder="Ürün hakkında kısa açıklama..."
-                                            value={description}
-                                            maxLength={300}
-                                            onChange={e => setDescription(e.target.value)}
-                                        />
-                                        {description && (
-                                            <p className="text-xs text-gray-500 mt-0.5 text-right">{description.length}/300</p>
-                                        )}
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-xs font-semibold text-gray-400 mb-1">
-                                            Bitiş Tarihi ve Saati{' '}
-                                            <span className="font-normal text-gray-500">(opsiyonel — süre dolunca otomatik kaldırılır)</span>
-                                        </label>
-                                        <div className="flex gap-2">
-                                            <input
-                                                type="date"
-                                                className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-yellow-500 text-sm"
-                                                value={expiresDate}
-                                                min={new Date().toISOString().split('T')[0]}
-                                                onChange={e => setExpiresDate(e.target.value)}
-                                            />
-                                            <input
-                                                type="time"
-                                                className="w-28 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-yellow-500 text-sm"
-                                                value={expiresTime}
-                                                onChange={e => setExpiresTime(e.target.value)}
-                                            />
-                                        </div>
-                                        {expiresDate && (
-                                            <p className="text-xs text-gray-500 mt-1">
-                                                📅 {new Date(`${expiresDate}T${expiresTime}`).toLocaleString('tr-TR')} tarihinde yayından kaldırılır
-                                            </p>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 border-t border-gray-700 pt-4">
                             <div>
                                 <label className="block text-sm text-gray-400 mb-1">Ürün Görseli</label>
@@ -390,30 +244,48 @@ const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose
                                 🔔 Push Bildirim Gönder
                             </p>
 
-                            {/* Başlık */}
-                            <div>
-                                <label className="block text-xs text-gray-400 mb-1">Bildirim Başlığı</label>
-                                <input
-                                    type="text"
-                                    value={notifTitle}
-                                    onChange={e => setNotifTitle(e.target.value)}
-                                    placeholder="Bildirim başlığını yaz..."
-                                    maxLength={80}
-                                    className="w-full bg-gray-900 rounded-xl p-3 text-sm text-white font-medium outline-none placeholder:text-gray-500 border border-gray-700 focus:border-orange-500 transition-colors"
-                                />
+                            {/* Başlık seçici */}
+                            <div className="bg-gray-900 rounded-xl p-3 flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setNotifTitleIdx(i => (i - 1 + CUSTOM_IDX + 1) % (CUSTOM_IDX + 1))}
+                                    className="shrink-0 w-7 h-7 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center text-white transition-colors"
+                                >‹</button>
+
+                                {notifTitleIdx === CUSTOM_IDX ? (
+                                    <input
+                                        type="text"
+                                        value={customTitle}
+                                        onChange={e => setCustomTitle(e.target.value)}
+                                        placeholder="Başlığı buraya yaz..."
+                                        maxLength={80}
+                                        className="flex-1 bg-transparent text-xs text-center text-white font-medium outline-none placeholder:text-gray-500"
+                                    />
+                                ) : (
+                                    <p className="flex-1 text-xs text-center text-white font-medium">{NOTIF_TITLES[notifTitleIdx]}</p>
+                                )}
+
+                                <button
+                                    type="button"
+                                    onClick={() => setNotifTitleIdx(i => (i + 1) % (CUSTOM_IDX + 1))}
+                                    className="shrink-0 w-7 h-7 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center text-white transition-colors"
+                                >›</button>
                             </div>
 
-                            {/* Açıklama */}
-                            <div>
-                                <label className="block text-xs text-gray-400 mb-1">Bildirim Açıklaması</label>
-                                <textarea
-                                    value={notifBody}
-                                    onChange={e => setNotifBody(e.target.value)}
-                                    placeholder="Bildirim açıklamasını yaz..."
-                                    maxLength={180}
-                                    rows={2}
-                                    className="w-full bg-gray-900 rounded-xl p-3 text-sm text-white outline-none placeholder:text-gray-500 border border-gray-700 focus:border-orange-500 transition-colors resize-none"
-                                />
+                            {/* Sayfa göstergesi */}
+                            <div className="flex justify-center gap-1">
+                                {Array.from({ length: CUSTOM_IDX + 1 }).map((_, i) => (
+                                    <button
+                                        key={i}
+                                        type="button"
+                                        onClick={() => setNotifTitleIdx(i)}
+                                        className={`w-1.5 h-1.5 rounded-full transition-colors ${
+                                            i === notifTitleIdx
+                                                ? i === CUSTOM_IDX ? 'bg-purple-400' : 'bg-orange-400'
+                                                : 'bg-gray-600'
+                                        }`}
+                                    />
+                                ))}
                             </div>
 
                             {/* Önizleme */}
@@ -421,11 +293,9 @@ const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose
                                 {imagePreview && <img src={imagePreview} className="w-10 h-10 rounded-lg object-cover shrink-0" />}
                                 <div className="flex-1 min-w-0">
                                     <p className="text-white font-semibold truncate">
-                                        {notifTitle || <span className="text-gray-500 italic">Başlık girilmedi</span>}
+                                        {activeTitle || <span className="text-gray-500 italic">Başlık girilmedi</span>}
                                     </p>
-                                    <p className="truncate mt-0.5">
-                                        {notifBody || <span className="text-gray-500 italic">Açıklama girilmedi</span>}
-                                    </p>
+                                    <p className="truncate mt-0.5">{formData.title || discount.title}</p>
                                 </div>
                             </div>
 
@@ -437,36 +307,20 @@ const EditDiscountModal: React.FC<EditDiscountModalProps> = ({ discount, onClose
 
                             <button
                                 type="button"
-                                disabled={isSendingNotif || !notifTitle.trim() || !notifBody.trim()}
+                                disabled={isSendingNotif || !activeTitle.trim()}
                                 onClick={async () => {
                                     setIsSendingNotif(true);
                                     setNotifResult(null);
                                     try {
-                                        // Push görseli için herkese açık URL gerekir — kaydedilmemiş
-                                        // base64 önizleme değil, ilanın mevcut görsel URL'si kullanılır.
-                                        const pushImage = discount.imageUrl || undefined;
-                                        // 1) FCM v1 ile direkt gönder (all_users topic)
-                                        const fcmResult = await sendDirectPushNotification(
-                                            notifTitle.trim(),
-                                            notifBody.trim(),
-                                            pushImage,
-                                            discount.link || undefined,
-                                            discount.id,
-                                        );
-                                        if (!fcmResult.success) {
-                                            throw new Error(fcmResult.error || 'FCM bildirimi gönderilemedi.');
-                                        }
-                                        // 2) Firestore'a geçmiş kaydı bırak
+                                        const currentImage = newImageFile ? imagePreview : discount.imageUrl;
                                         await sendNotification(
-                                            notifTitle.trim(),
-                                            notifBody.trim(),
-                                            pushImage,
+                                            activeTitle.trim(),
+                                            formData.title || discount.title,
+                                            currentImage || undefined,
                                             discount.link || undefined,
                                             discount.id,
                                         );
                                         setNotifResult({ ok: true, msg: '✅ Bildirim başarıyla gönderildi!' });
-                                        setNotifTitle('');
-                                        setNotifBody('');
                                     } catch {
                                         setNotifResult({ ok: false, msg: '❌ Bildirim gönderilemedi.' });
                                     } finally {

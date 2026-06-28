@@ -22,16 +22,21 @@ interface AffiliateLinkManagerProps {
     onSharedLinkProcessed?: () => void;
 }
 
-// Affiliate link olarak kabul edilecek URL pattern'leri
+// Desteklenen mağazalar: sadece Trendyol ve Hepsiburada
+const isSupportedStore = (url: string): boolean => {
+    if (!url) return false;
+    return (
+        url.includes('trendyol.com') ||
+        url.includes('ty.gl') ||
+        url.includes('hepsiburada.com') ||
+        url.includes('hb.biz')
+    );
+};
+
+// Affiliate link olarak kabul edilecek URL pattern'leri (sadece desteklenen mağazalar)
 const isAffiliateLink = (url: string): boolean => {
     if (!url || !url.startsWith('http')) return false;
-    return (
-        url.includes('ty.gl/') ||
-        url.includes('trendyol.com/') ||
-        url.includes('hepsiburada.com/') ||
-        url.includes('amzn.to/') ||
-        url.includes('amazon.com.tr/')
-    );
+    return isSupportedStore(url);
 };
 
 const readClipboard = async (): Promise<string> => {
@@ -130,7 +135,11 @@ const AffiliateLinkManager: React.FC<AffiliateLinkManagerProps> = ({ isAdmin, sh
         setIsLoadingPending(true);
         try {
             const deals = await getDiscountsNeedingAffiliate();
-            setPendingDeals(deals);
+            // Sadece Trendyol ve Hepsiburada ürünlerini göster
+            const supported = deals.filter(d =>
+                isSupportedStore(d.originalStoreLink || d.link)
+            );
+            setPendingDeals(supported);
             setCurrentIndex(0);
         } catch (err: any) {
             setError('Bekleyen ürünler yüklenemedi: ' + err.message);
@@ -422,7 +431,7 @@ const AffiliateLinkManager: React.FC<AffiliateLinkManagerProps> = ({ isAdmin, sh
                 <div className="bg-gray-800 rounded-2xl p-10 border border-gray-700 text-center">
                     <div className="text-6xl mb-4">🎉</div>
                     <h2 className="text-xl font-bold text-white mb-2">Harikasın!</h2>
-                    <p className="text-gray-400">Tüm ürünlerin affiliate linkleri güncel.</p>
+                    <p className="text-gray-400">Tüm Trendyol ve Hepsiburada ürünlerinin affiliate linkleri güncel.</p>
                     <button onClick={loadPending} className="mt-6 px-6 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600">Yenile</button>
                 </div>
             ) : (
@@ -433,7 +442,13 @@ const AffiliateLinkManager: React.FC<AffiliateLinkManagerProps> = ({ isAdmin, sh
                         <div className="absolute top-2 left-2 bg-black/60 backdrop-blur-md text-white px-3 py-1 rounded-full text-xs font-bold border border-white/20">
                             {currentIndex + 1} / {pendingDeals.length}
                         </div>
-                        <div className="absolute top-2 right-2 bg-blue-600 text-white px-3 py-1 rounded-full text-xs font-bold">
+                        <div className={`absolute top-2 right-2 text-white px-3 py-1 rounded-full text-xs font-bold ${
+                            isSupportedStore(currentDeal.originalStoreLink || currentDeal.link)
+                                ? (currentDeal.storeName?.toLowerCase().includes('hepsiburada') || (currentDeal.originalStoreLink || currentDeal.link).includes('hepsiburada')
+                                    ? 'bg-orange-600'
+                                    : 'bg-blue-600')
+                                : 'bg-gray-600'
+                        }`}>
                             {currentDeal.storeName || currentDeal.brand}
                         </div>
                     </div>

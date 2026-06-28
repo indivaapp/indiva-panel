@@ -14,8 +14,8 @@ interface SidebarProps {
 const navItems: { id: ViewType; label: string }[] = [
     { id: 'dashboard',      label: 'Ana Sayfa' },
     { id: 'autoDiscovery',  label: 'Otomatik Keşif' },
+    { id: 'trendyolScraper', label: '🛒 Trendyol Çekici' },
     { id: 'affiliateLinks', label: 'Affiliate Linkler' },
-    { id: 'affiliateBot',   label: 'Affiliate Bot' },
     { id: 'dealFinder',     label: 'Fırsat Bul' },
     { id: 'discounts',      label: 'İndirim Ekle' },
     { id: 'brochures',      label: 'Aktüel Yönetimi' },
