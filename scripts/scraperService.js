@@ -8,7 +8,25 @@
 import * as cheerio from 'cheerio';
 import { sendAdminAlert } from './alertService.js';
 
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+// Gerçek tarayıcıya benzer tam header seti — Cloudflare/WAF bot tespitini atlatır
+const BROWSER_HEADERS = {
+    'User-Agent': USER_AGENT,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+    'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1',
+};
 
 /**
  * Robust fetch with multiple fallback stages
@@ -24,11 +42,11 @@ export async function fetchWithFallback(url, options = {}) {
         retries = 2
     } = options;
 
-    // Stage 1: Direct Fetch
+    // Stage 1: Direct Fetch (tam tarayıcı header'larıyla)
     try {
         console.log(`📡 [Scraper] Stage 1: Direct fetch for ${url}`);
         const response = await fetch(url, {
-            headers: { 'User-Agent': USER_AGENT },
+            headers: BROWSER_HEADERS,
             signal: AbortSignal.timeout(timeout)
         });
         
@@ -43,19 +61,30 @@ export async function fetchWithFallback(url, options = {}) {
         console.warn(`   ❌ Direct fetch error: ${err.message}`);
     }
 
-    // Stage 2: Jina Reader (Güvenilir Fallback)
+    // Stage 2: Jina Reader (Güvenilir Fallback — onual.com'u residential proxy üzerinden çeker)
     if (useJina) {
         try {
             const jinaUrl = `https://r.jina.ai/${url}`;
             console.log(`📡 [Scraper] Stage 2: Jina Reader → ${jinaUrl}`);
             const response = await fetch(jinaUrl, {
-                headers: { 'Accept': 'text/html' },
-                signal: AbortSignal.timeout(timeout + 5000)
+                headers: {
+                    // Jina'dan HTML formatı iste; varsayılan Markdown'dır ve cheerio parse edemez
+                    'X-Return-Format': 'html',
+                    'Accept': 'text/html',
+                    'X-Locale': 'tr-TR',
+                },
+                signal: AbortSignal.timeout(timeout + 10000)
             });
-            
+
             if (response.ok) {
                 const html = await response.text();
-                return { html, source: 'jina' };
+                if (html && html.length > 500) {
+                    console.log(`   ✅ Jina HTML döndü: ${html.length} byte`);
+                    return { html, source: 'jina' };
+                }
+                console.warn(`   ⚠️ Jina yanıtı çok kısa: ${html.length} byte`);
+            } else {
+                console.warn(`   ⚠️ Jina HTTP ${response.status}`);
             }
         } catch (err) {
             console.warn(`   ❌ Jina fetch error: ${err.message}`);
