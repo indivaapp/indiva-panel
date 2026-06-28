@@ -27,6 +27,7 @@ export const addDiscount = async (discountData: Omit<Discount, 'id' | 'createdAt
     const dataWithTimestamp = {
         ...discountData,
         createdAt: serverTimestamp(),
+        expiresAt: Timestamp.fromDate(new Date(Date.now() + 12 * 60 * 60 * 1000)),
     };
     return await addDoc(collection(db, 'discounts'), dataWithTimestamp);
 };
@@ -111,6 +112,7 @@ export const addDiscountsBatch = async (discounts: Omit<Discount, 'id' | 'create
                 createdAt: serverTimestamp(),
                 importedAt: serverTimestamp(),
                 affiliateLinkUpdated: false,
+                expiresAt: Timestamp.fromDate(new Date(Date.now() + 12 * 60 * 60 * 1000)),
             });
         }
 
@@ -590,6 +592,7 @@ export const publishStagingProducts = async (products: StagingProduct[]): Promis
                 affiliateLinkUpdated: false,
                 importedAt: p.importedAt,
                 createdAt: serverTimestamp(),
+                expiresAt: Timestamp.fromDate(new Date(Date.now() + 12 * 60 * 60 * 1000)),
             });
             batch.delete(doc(db, 'trendyol_staging', p.id));
             published++;
