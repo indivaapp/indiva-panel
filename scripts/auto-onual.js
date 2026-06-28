@@ -409,9 +409,10 @@ Her kart için çıkart:
 - imageUrl: img.product-image elementinin src attribute'u (tam https:// URL)
 - storeName: .product-store-logo-badge elementinin title attribute'u (Amazon, Trendyol vb.)
 - productUrl: <a> kartının href attribute'u. Relative ise https://www.onual.com/ prefix ekle.
+- storeUrl: Kart içinde mağaza sitesine (trendyol.com, amazon.com.tr vb.) giden href linki. Yoksa boş string.
 
 SADECE JSON array döndür, kesinlikle başka metin yok. Maks 20 ürün.
-Örnek: [{"id":"126081","title":"Protex Sabun","newPrice":52,"imageUrl":"https://m.media-amazon.com/...","storeName":"Amazon","productUrl":"https://www.onual.com/urun/..."}]` }]
+Örnek: [{"id":"126081","title":"Protex Sabun","newPrice":52,"imageUrl":"https://m.media-amazon.com/...","storeName":"Amazon","productUrl":"https://www.onual.com/urun/...","storeUrl":"https://www.amazon.com.tr/dp/..."}]` }]
             }],
             config: { tools: [{ urlContext: {} }], temperature: 0 },
         });
@@ -435,6 +436,7 @@ SADECE JSON array döndür, kesinlikle başka metin yok. Maks 20 ürün.
                 newPrice: Number(p.newPrice) || 0,
                 thumbnailUrl: String(p.imageUrl || ''),
                 storeName: String(p.storeName || ''),
+                storeUrl: String(p.storeUrl || ''),
             }));
         console.log(`   ✅ Gemini URL Context → ${result.length} ürün`);
         return result;
@@ -766,10 +768,16 @@ async function main() {
                 }
             }
 
+            // Gemini path'inde direkt storeUrl gelmiş olabilir — fallback olarak kullan
+            if (!storeLink && product.storeUrl) {
+                console.log(`   🔁 storeUrl fallback: ${product.storeUrl.substring(0, 70)}`);
+                storeLink = product.storeUrl;
+            }
+
+            // Son çare: onual.com ürün sayfasını link olarak kullan (kullanıcı oradan mağazaya gider)
             if (!storeLink) {
-                console.warn(`   ⚠️  Mağaza linki çözülemedi → Kaynak: ${details.intermediateLink?.substring(0, 100)}`);
-                failCount++;
-                continue;
+                console.log(`   🔁 onual.com fallback link kullanılıyor`);
+                storeLink = product.url;
             }
 
             const newPrice = details.newPrice || product.newPrice || 0;
