@@ -215,6 +215,54 @@ async function saveBrochure(db, marketKey, storeName, imageUrl, title, publishDa
     });
 }
 
+// ─── Temizlik ────────────────────────────────────────────────────────────────
+
+/**
+ * 15+ günlük broşürleri Firestore'dan siler.
+ * ImgBB'ye yüklenenler (deleteUrl dolu) için ImgBB'den de siler.
+ */
+async function cleanupOldBrochures(db, daysToKeep = 15) {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - daysToKeep);
+    const cutoffTs = Timestamp.fromDate(cutoff);
+
+    console.log(`\n🗑️  Temizlik: ${cutoff.toLocaleDateString('tr-TR')} öncesi afişler siliniyor...`);
+    let totalDeleted = 0;
+
+    for (const market of MARKETS) {
+        const col = db.collection('circulars').doc(market.key).collection('brochures');
+
+        // publishDate varsa onu kullan; yoksa createdAt'e bak
+        const snapByPublish = await col.where('publishDate', '<', cutoffTs).get();
+        const snapByCreated = await col.where('createdAt', '<', cutoffTs).get();
+
+        // İki sorgunun birleşimi (id bazında tekilleştir)
+        const docsMap = new Map();
+        [...snapByPublish.docs, ...snapByCreated.docs].forEach(d => docsMap.set(d.id, d));
+
+        if (docsMap.size === 0) {
+            console.log(`  ${market.name}: silinecek eski afiş yok`);
+            continue;
+        }
+
+        let deleted = 0;
+        for (const doc of docsMap.values()) {
+            const { deleteUrl } = doc.data();
+            // ImgBB'ye yüklenmişse oradan da sil
+            if (deleteUrl) {
+                try { await fetch(deleteUrl); } catch {}
+            }
+            await doc.ref.delete();
+            deleted++;
+        }
+
+        totalDeleted += deleted;
+        console.log(`  ${market.name}: ${deleted} eski afiş silindi`);
+    }
+
+    return totalDeleted;
+}
+
 // ─── Market Yapılandırması ───────────────────────────────────────────────────
 
 const MARKETS = [
@@ -302,6 +350,12 @@ async function main() {
     }
 
     console.log(`\n✨ Tamamlandı! ${totalAdded} yeni afiş eklendi, ${totalSkipped} tekrar atlandı.`);
+
+    // Önce yeni afişleri ekle, sonra eskilerini temizle
+    const totalDeleted = await cleanupOldBrochures(db);
+    if (totalDeleted > 0) {
+        console.log(`🗑️  Toplam ${totalDeleted} eski afiş silindi.`);
+    }
 }
 
 main().catch(err => {
