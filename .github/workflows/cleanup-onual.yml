@@ -2,8 +2,8 @@ name: Auto Cleanup
 
 on:
   schedule:
-    # Her 10 dakikada bir çalışır
-    - cron: '*/10 * * * *'
+    # Her 6 saatte bir çalışır
+    - cron: '0 */6 * * *'
   workflow_dispatch:
 
 jobs:
