@@ -97,14 +97,15 @@ export async function fetchWithFallback(url, options = {}) {
 }
 
 /**
- * Basic HTML validity check to skip captcha/error pages
+ * Basic HTML validity check to skip captcha/error pages and Cloudflare challenges
  */
 function isValidHtml(html) {
     if (!html || html.length < 500) return false;
     const lower = html.toLowerCase();
-    if (lower.includes('captcha') || lower.includes('robot check') || lower.includes('forbidden')) {
-        return false;
-    }
+    if (lower.includes('captcha') || lower.includes('robot check') || lower.includes('forbidden')) return false;
+    // Cloudflare JS challenge sayfası — data center IP'lerinden gelince oluşur
+    // Bu durumda Jina Reader fallback'i devreye girmeli
+    if (html.includes('/cdn-cgi/challenge-platform/') || html.includes('window._cf_chl_opt')) return false;
     return true;
 }
 

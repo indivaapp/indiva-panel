@@ -386,13 +386,34 @@ function sleep(ms) {
 // ─── Onual Parser ────────────────────────────────────────────────────────────
 
 /**
- * onual.com/fiyat/ ana sayfasını parse et
- * REFACTORED to use scraperService.parseDeals
+ * onual.com ana sayfasını parse et
+ * GitHub Actions data center IP'lerinde Cloudflare JS challenge gelirse Jina Reader devreye girer
  */
 async function fetchProductList() {
-    console.log('📡 onual.com/fiyat/ çekiliyor...');
-    const { html } = await fetchWithFallback(ONUAL_URL);
-    return parseDeals(html);
+    console.log('📡 onual.com çekiliyor...');
+    const { html, source } = await fetchWithFallback(ONUAL_URL);
+    const deals = parseDeals(html);
+
+    if (deals.length === 0) {
+        // isValidHtml geçti ama ürün yok → farklı bir CF challenge tipi veya sayfa değişikliği
+        console.warn(`⚠️  ${source} → 0 ürün, Jina Reader ile yeniden deneniyor...`);
+        try {
+            const jinaRes = await fetch(`https://r.jina.ai/${ONUAL_URL}`, {
+                headers: { 'X-Return-Format': 'html', 'Accept': 'text/html', 'X-Locale': 'tr-TR' },
+                signal: AbortSignal.timeout(30000)
+            });
+            if (jinaRes.ok) {
+                const jinaHtml = await jinaRes.text();
+                const jinaDeals = parseDeals(jinaHtml);
+                console.log(`   ✅ Jina → ${jinaDeals.length} ürün`);
+                return jinaDeals;
+            }
+        } catch (err) {
+            console.warn(`   ❌ Jina hatası: ${err.message}`);
+        }
+    }
+
+    return deals;
 }
 
 /**
