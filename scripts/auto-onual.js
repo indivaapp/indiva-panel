@@ -386,34 +386,86 @@ function sleep(ms) {
 // ─── Onual Parser ────────────────────────────────────────────────────────────
 
 /**
- * onual.com ana sayfasını parse et
- * GitHub Actions data center IP'lerinde Cloudflare JS challenge gelirse Jina Reader devreye girer
+ * Cloudflare engeli olduğunda Gemini URL Context ile onual.com ana sayfasını çek.
+ * Google sunucuları Cloudflare'in güven listesinde — challenge sayfası görmezler.
+ */
+async function fetchOnualViaGemini(apiKey) {
+    const { GoogleGenAI } = await import('@google/genai');
+    const genAI = new GoogleGenAI({ apiKey });
+
+    console.log('🤖 Gemini URL Context ile onual.com çekiliyor...');
+    try {
+        const response = await genAI.models.generateContent({
+            model: 'gemini-2.5-flash-lite',
+            contents: [{
+                role: 'user',
+                parts: [{ text: `Visit: https://www.onual.com
+
+Sayfadaki TÜM ürün kartlarını bul. Her kart <a class="product-card group" data-share-id="..."> formatındadır.
+Her kart için çıkart:
+- id: data-share-id değeri (sayı string)
+- title: h3.product-title elementinin title attribute'u veya text içeriği
+- newPrice: .product-price içindeki fiyat (sadece integer, TL)
+- imageUrl: img.product-image elementinin src attribute'u (tam https:// URL)
+- storeName: .product-store-logo-badge elementinin title attribute'u (Amazon, Trendyol vb.)
+- productUrl: <a> kartının href attribute'u. Relative ise https://www.onual.com/ prefix ekle.
+
+SADECE JSON array döndür, kesinlikle başka metin yok. Maks 20 ürün.
+Örnek: [{"id":"126081","title":"Protex Sabun","newPrice":52,"imageUrl":"https://m.media-amazon.com/...","storeName":"Amazon","productUrl":"https://www.onual.com/urun/..."}]` }]
+            }],
+            config: { tools: [{ urlContext: {} }], temperature: 0 },
+        });
+
+        const text = response.text ||
+            (response.candidates?.[0]?.content?.parts || []).filter(p => p.text).map(p => p.text).join('');
+        console.log(`   📝 Gemini yanıtı (ilk 400): ${text.substring(0, 400)}`);
+
+        const match = text.match(/\[[\s\S]*\]/);
+        if (!match) { console.warn('   ⚠️ JSON bulunamadı'); return []; }
+
+        const products = JSON.parse(match[0]);
+        const result = products
+            .filter(p => p.id && String(p.title || '').trim().length > 2)
+            .map(p => ({
+                id: String(p.id),
+                title: String(p.title).trim(),
+                url: String(p.productUrl || '').startsWith('http')
+                    ? p.productUrl
+                    : `https://www.onual.com/${String(p.productUrl || '').replace(/^\//, '')}`,
+                newPrice: Number(p.newPrice) || 0,
+                thumbnailUrl: String(p.imageUrl || ''),
+                storeName: String(p.storeName || ''),
+            }));
+        console.log(`   ✅ Gemini URL Context → ${result.length} ürün`);
+        return result;
+    } catch (err) {
+        console.warn(`   ❌ Gemini URL Context hatası: ${err.message}`);
+        return [];
+    }
+}
+
+/**
+ * onual.com ana sayfasını parse et.
+ * Sıra: 1) Direct fetch+cheerio  2) Gemini URL Context (Cloudflare bypass)
  */
 async function fetchProductList() {
     console.log('📡 onual.com çekiliyor...');
-    const { html, source } = await fetchWithFallback(ONUAL_URL);
-    const deals = parseDeals(html);
-
-    if (deals.length === 0) {
-        // isValidHtml geçti ama ürün yok → farklı bir CF challenge tipi veya sayfa değişikliği
-        console.warn(`⚠️  ${source} → 0 ürün, Jina Reader ile yeniden deneniyor...`);
-        try {
-            const jinaRes = await fetch(`https://r.jina.ai/${ONUAL_URL}`, {
-                headers: { 'X-Return-Format': 'html', 'Accept': 'text/html', 'X-Locale': 'tr-TR' },
-                signal: AbortSignal.timeout(30000)
-            });
-            if (jinaRes.ok) {
-                const jinaHtml = await jinaRes.text();
-                const jinaDeals = parseDeals(jinaHtml);
-                console.log(`   ✅ Jina → ${jinaDeals.length} ürün`);
-                return jinaDeals;
-            }
-        } catch (err) {
-            console.warn(`   ❌ Jina hatası: ${err.message}`);
-        }
+    try {
+        const { html } = await fetchWithFallback(ONUAL_URL);
+        const deals = parseDeals(html);
+        if (deals.length > 0) return deals;
+        console.warn('⚠️  Direct/Jina → 0 ürün (Cloudflare engeli)');
+    } catch (err) {
+        console.warn(`⚠️  fetchWithFallback hatası: ${err.message}`);
     }
 
-    return deals;
+    // Gemini URL Context — Google sunucuları Cloudflare'i aşar
+    const geminiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+    if (!geminiKey) {
+        console.warn('   ❌ GEMINI_API_KEY bulunamadı. Pipeline durdu.');
+        return [];
+    }
+    return await fetchOnualViaGemini(geminiKey);
 }
 
 /**
@@ -689,12 +741,14 @@ async function main() {
                 continue;
             }
 
-            // Görsel yoksa atla
-            if (!details.imageUrl) {
+            // Görsel yoksa homepage'deki thumbnailUrl'i fallback olarak kullan (Gemini/CF path)
+            const imageUrl = details.imageUrl || product.thumbnailUrl || '';
+            if (!imageUrl) {
                 console.warn(`   ⚠️  Görsel bulunamadı, atlanıyor`);
                 failCount++;
                 continue;
             }
+            details.imageUrl = imageUrl;
 
             // Mağaza linkini çöz
             let storeLink = null;
@@ -721,6 +775,10 @@ async function main() {
             const newPrice = details.newPrice || product.newPrice || 0;
             const oldPrice = details.oldPrice || simulateOldPrice(newPrice);
             const store = detectStore(storeLink);
+            // Cloudflare path'inde storeLink onual.com URL'si kalabilir → homepage'deki storeName'i kullan
+            if (store.name === 'Online Mağaza' && product.storeName) {
+                store.name = product.storeName;
+            }
 
             console.log(`   💰 Fiyat: ${oldPrice} TL -> ${newPrice} TL | Mağaza: ${store.name}`);
 
