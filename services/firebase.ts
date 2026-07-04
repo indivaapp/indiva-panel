@@ -16,7 +16,7 @@ import {
     Timestamp,
     writeBatch
 } from 'firebase/firestore';
-import type { Discount, Brochure, Advertisement, PendingDiscount, AdRequest, ScheduledNotification, StagingProduct } from '../types';
+import type { Discount, Brochure, Advertisement, PendingDiscount, AdRequest, ScheduledNotification, StagingProduct, SocialContentItem } from '../types';
 import { deleteFromImgbb } from './imgbb';
 
 const ALLOWED_AFFILIATE_STORES = ['Trendyol', 'Hepsiburada', 'Amazon', 'Pazarama'];
@@ -475,6 +475,28 @@ export const getPendingAdRequestCount = async (): Promise<number> => {
 export const getPendingDiscountCount = async (): Promise<number> => {
     const snap = await getDocs(collection(db, 'pendingDiscounts'));
     return snap.size;
+};
+
+// --- Sosyal Medya İçerik Kuyruğu ---
+// Otomatik pipeline'lar (auto-onual, trendyol-scraper) yüksek puanlı fırsatları
+// buraya yazar. Status client-side filtrelenir (composite index gerektirmesin diye).
+
+export const getSocialContentQueue = async (): Promise<SocialContentItem[]> => {
+    const q = query(collection(db, 'social_content_queue'), orderBy('createdAt', 'desc'));
+    const snap = await getDocs(q);
+    return snap.docs
+        .map(d => ({ id: d.id, ...d.data() } as SocialContentItem))
+        .filter(item => item.status === 'pending');
+};
+
+export const markSocialContentPosted = async (id: string) => {
+    const docRef = doc(db, 'social_content_queue', id);
+    await updateDoc(docRef, { status: 'posted' });
+};
+
+export const getPendingSocialContentCount = async (): Promise<number> => {
+    const items = await getSocialContentQueue();
+    return items.length;
 };
 
 

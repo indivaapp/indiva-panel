@@ -12,6 +12,7 @@ interface DashboardProps {
     setActiveView: (view: ViewType) => void;
     isAdmin: boolean;
     pendingAffiliateCount?: number;
+    pendingSocialContentCount?: number;
 }
 
 // ─── AI Link Analyzer ─────────────────────────────────────────────────────────
@@ -145,7 +146,7 @@ const AIAnalyzer: React.FC = () => {
 
 // ─── Ana Dashboard ────────────────────────────────────────────────────────────
 
-const Dashboard: React.FC<DashboardProps> = ({ setActiveView, pendingAffiliateCount = 0 }) => {
+const Dashboard: React.FC<DashboardProps> = ({ setActiveView, pendingAffiliateCount = 0, pendingSocialContentCount = 0 }) => {
     const now = new Date();
     const hour = now.getHours();
     const greeting = hour < 12 ? 'Günaydın' : hour < 18 ? 'İyi günler' : 'İyi akşamlar';
@@ -249,6 +250,41 @@ const Dashboard: React.FC<DashboardProps> = ({ setActiveView, pendingAffiliateCo
                         <p className="text-white font-bold text-sm">Veri Çekici</p>
                         <p className="text-orange-300/70 text-xs mt-0.5">Trendyol & Cimri'den indirim çek, seç, yayınla</p>
                     </div>
+                    <svg className="w-5 h-5 text-gray-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                </div>
+            </button>
+
+            {/* Sosyal Medya İçeriği */}
+            <button
+                onClick={() => setActiveView('socialContent')}
+                className="w-full relative overflow-hidden rounded-2xl border border-orange-500/20 text-left transition-all active:scale-[0.99]"
+                style={{
+                    background: 'linear-gradient(135deg, rgba(249,115,22,0.12) 0%, rgba(219,39,119,0.06) 100%)',
+                    boxShadow: '0 0 0 1px rgba(249,115,22,0.1), 0 4px 24px rgba(0,0,0,0.25)',
+                }}
+            >
+                <div className="absolute -right-4 -top-4 w-20 h-20 rounded-full bg-orange-500/10 blur-xl pointer-events-none" />
+                <div className="absolute -right-2 top-1/2 -translate-y-1/2 text-5xl opacity-10 pointer-events-none select-none">📱</div>
+
+                <div className="relative px-4 py-4 flex items-center gap-4">
+                    <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-orange-500 to-pink-600 flex items-center justify-center text-xl shadow-lg shadow-orange-900/30 shrink-0">
+                        📱
+                    </div>
+                    <div className="flex-1">
+                        <p className="text-white font-bold text-sm">Sosyal Medya İçeriği</p>
+                        <p className="text-orange-300/70 text-xs mt-0.5">
+                            {pendingSocialContentCount > 0
+                                ? `${pendingSocialContentCount} paylaşıma hazır içerik`
+                                : 'En iyi fırsatlardan otomatik içerik'}
+                        </p>
+                    </div>
+                    {pendingSocialContentCount > 0 && (
+                        <span className="bg-orange-500 text-white text-xs font-bold px-2.5 py-1 rounded-full shadow shadow-orange-900/40">
+                            {pendingSocialContentCount}
+                        </span>
+                    )}
                     <svg className="w-5 h-5 text-gray-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>

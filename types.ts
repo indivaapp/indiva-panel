@@ -19,7 +19,8 @@ export type ViewType =
     | 'trendyolScraper'  // Trendyol otomatik veri çekici
     | 'shareCapture'      // Ekran görüntüsü paylaşım overlay'i
     | 'addDiscount'       // Yeni indirim ekleme formu
-    | 'stories';          // Story yönetimi
+    | 'stories'           // Story yönetimi
+    | 'socialContent';    // Otomatik sosyal medya içeriği kuyruğu
 
 // Using the actual Firestore Timestamp type for better integration
 export type FirestoreTimestamp = Timestamp;
@@ -111,6 +112,23 @@ export interface AdRequest {
     message?: string;
     createdAt: FirestoreTimestamp;
     status: 'pending' | 'reviewed' | 'rejected' | 'archived';
+}
+
+// Otomatik pipeline'ların (auto-onual, trendyol-scraper) yüksek kalite puanlı
+// (9/10+) fırsatlar için kuyruğa attığı, Instagram'a hazır içerik önerisi.
+export interface SocialContentItem {
+    id: string;
+    discountId: string;
+    title: string;
+    imageUrl: string;
+    category: string;
+    storeName: string;
+    newPrice: number;
+    oldPrice: number;
+    score: number;
+    caption: string;
+    status: 'pending' | 'posted';
+    createdAt: FirestoreTimestamp;
 }
 
 export interface ScheduledNotification {

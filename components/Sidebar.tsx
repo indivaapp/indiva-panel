@@ -7,6 +7,7 @@ interface SidebarProps {
     activeView: ViewType;
     setActiveView: (view: ViewType) => void;
     pendingAffiliateCount?: number;
+    pendingSocialContentCount?: number;
     systemEnabled: boolean;
     onToggleSystem: () => void;
 }
@@ -22,9 +23,10 @@ const navItems: { id: ViewType; label: string }[] = [
     { id: 'submissions',    label: 'Gönderi Onayı' },
     { id: 'ads',            label: 'Reklam Yönetimi' },
     { id: 'notifications',  label: 'Bildirimler' },
+    { id: 'socialContent',  label: '📱 Sosyal İçerik' },
 ];
 
-const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, pendingAffiliateCount = 0, systemEnabled, onToggleSystem }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, pendingAffiliateCount = 0, pendingSocialContentCount = 0, systemEnabled, onToggleSystem }) => {
     return (
         <aside className="hidden md:flex w-56 bg-gray-800 text-white flex-col border-r border-gray-700/60">
             {/* Logo */}
@@ -50,6 +52,11 @@ const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, pendingAff
                             {item.id === 'affiliateLinks' && pendingAffiliateCount > 0 && (
                                 <span className="ml-2 bg-orange-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
                                     {pendingAffiliateCount}
+                                </span>
+                            )}
+                            {item.id === 'socialContent' && pendingSocialContentCount > 0 && (
+                                <span className="ml-2 bg-orange-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                                    {pendingSocialContentCount}
                                 </span>
                             )}
                         </button>

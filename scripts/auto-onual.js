@@ -18,6 +18,7 @@ import { fetchWithFallback, resolveUrl, parseDeals } from './scraperService.js';
 import { sendAdminAlert } from './alertService.js';
 import { runQualityGate } from './qualityGate.js';
 import { maybeNotifyHighScoreDeal } from './notifyGate.js';
+import { maybeQueueSocialContent } from './socialContentGate.js';
 
 
 
@@ -873,6 +874,17 @@ async function main() {
                     docId,
                     title: discountData.title,
                     imageUrl: discountData.imageUrl,
+                    score: verdict.score,
+                    newPrice,
+                    oldPrice,
+                }).catch(() => {});
+
+                await maybeQueueSocialContent(db, aiKey, {
+                    discountId: docId,
+                    title: discountData.title,
+                    imageUrl: discountData.imageUrl,
+                    category: discountData.category,
+                    storeName: discountData.storeName,
                     score: verdict.score,
                     newPrice,
                     oldPrice,

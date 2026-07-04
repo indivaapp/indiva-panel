@@ -38,12 +38,13 @@ import TrendyolScraper from './components/TrendyolScraper';
 import Dashboard from './components/Dashboard';
 import AddDiscountForm from './components/AddDiscountForm';
 import StoryManager from './components/StoryManager';
+import SocialContentManager from './components/SocialContentManager';
 import ShareTarget from './components/ShareTarget';
 import ShareUrlTarget from './components/ShareUrlTarget';
 import QuickShareOverlay from './components/QuickShareOverlay';
 import { watchUser } from './services/auth';
 import Login from './components/Login';
-import { getPendingAffiliateCount, getPendingAdRequestCount, getPendingDiscountCount } from './services/firebase';
+import { getPendingAffiliateCount, getPendingAdRequestCount, getPendingDiscountCount, getPendingSocialContentCount } from './services/firebase';
 
 const SYSTEM_KEY = 'indiva_system_active';
 
@@ -72,6 +73,7 @@ const App: React.FC = () => {
 
     const [selectedDeal, setSelectedDeal] = useState<ScrapedDeal | null>(null);
     const [pendingAffiliateCount, setPendingAffiliateCount] = useState(0);
+    const [pendingSocialContentCount, setPendingSocialContentCount] = useState(0);
     const [pendingAdRequestCount, setPendingAdRequestCount] = useState(0);
     const [pendingDiscountCount, setPendingDiscountCount] = useState(0);
     const [dealQueue, setDealQueue] = useState<ScrapedDeal[]>([]);
@@ -253,6 +255,7 @@ const App: React.FC = () => {
             try { setPendingAffiliateCount(await getPendingAffiliateCount()); } catch {}
             try { setPendingAdRequestCount(await getPendingAdRequestCount()); } catch {}
             try { setPendingDiscountCount(await getPendingDiscountCount()); } catch {}
+            try { setPendingSocialContentCount(await getPendingSocialContentCount()); } catch {}
         };
         loadCounts();
         const interval = setInterval(loadCounts, 30000);
@@ -281,7 +284,7 @@ const App: React.FC = () => {
     const renderContent = () => {
         switch (activeView) {
             case 'dashboard':
-                return <Dashboard setActiveView={setActiveView} isAdmin={isAdmin} pendingAffiliateCount={pendingAffiliateCount} />;
+                return <Dashboard setActiveView={setActiveView} isAdmin={isAdmin} pendingAffiliateCount={pendingAffiliateCount} pendingSocialContentCount={pendingSocialContentCount} />;
             case 'discounts':
                 return <DiscountManager setActiveView={setActiveView} isAdmin={isAdmin} />;
             case 'manageDiscounts':
@@ -324,6 +327,8 @@ const App: React.FC = () => {
                         onSharedDataConsumed={() => setSharedStoryData(null)}
                     />
                 );
+            case 'socialContent':
+                return <SocialContentManager isAdmin={isAdmin} />;
             default:
                 return <DiscountManager setActiveView={setActiveView} isAdmin={isAdmin} />;
         }
@@ -352,6 +357,7 @@ const App: React.FC = () => {
                     activeView={activeView}
                     setActiveView={setActiveView}
                     pendingAffiliateCount={pendingAffiliateCount}
+                    pendingSocialContentCount={pendingSocialContentCount}
                     systemEnabled={systemEnabled}
                     onToggleSystem={handleToggleSystem}
                 />
@@ -366,7 +372,7 @@ const App: React.FC = () => {
                     )}
 
                     {/* Kaydırılabilir içerik alanı */}
-                    <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 md:pb-8">
+                    <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-32 md:pb-8">
                         {renderContent()}
                     </main>
                 </div>
