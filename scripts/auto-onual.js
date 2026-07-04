@@ -9,13 +9,14 @@
 
 import { GoogleGenAI } from '@google/genai';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
-import { getFirestore, FieldValue, FieldPath } from 'firebase-admin/firestore';
+import { getFirestore, FieldValue, FieldPath, Timestamp } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
 import * as cheerio from 'cheerio';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fetchWithFallback, resolveUrl, parseDeals } from './scraperService.js';
 import { sendAdminAlert } from './alertService.js';
+import { runQualityGate } from './qualityGate.js';
 
 
 
@@ -724,6 +725,8 @@ async function main() {
     const finalToProcess = uncachedProducts.filter(p => !existingIdsInDb.has(`onual_${p.id}`));
     console.log(`   🆕 İşlenecek net yeni ürün sayısı: ${finalToProcess.length}\n`);
 
+    // ── FAZ A: Detay/link/fiyat topla (AI'ya gitmeden önce) ────────────────
+    const prepared = [];
     for (let i = 0; i < finalToProcess.length; i++) {
         const product = finalToProcess[i];
         const docId = `onual_${product.id}`;
@@ -731,11 +734,8 @@ async function main() {
         try {
             console.log(`\n[${i + 1}/${finalToProcess.length}] 📦 ${product.title.substring(0, 60)}...`);
 
-            const docRef = db.collection('discounts').doc(docId);
-
             await sleep(REQUEST_DELAY_MS);
 
-            // Detay sayfasını çek
             const details = await fetchProductDetails(product);
             if (!details) {
                 console.warn(`   ⚠️  Detay sayfası çekilemedi, atlanıyor`);
@@ -743,7 +743,6 @@ async function main() {
                 continue;
             }
 
-            // Görsel yoksa homepage'deki thumbnailUrl'i fallback olarak kullan (Gemini/CF path)
             const imageUrl = details.imageUrl || product.thumbnailUrl || '';
             if (!imageUrl) {
                 console.warn(`   ⚠️  Görsel bulunamadı, atlanıyor`);
@@ -752,7 +751,12 @@ async function main() {
             }
             details.imageUrl = imageUrl;
 
-            // Mağaza linkini çöz
+            if (details.isExpired) {
+                console.log(`   ⏭️  İndirim sona ermiş, atlanıyor: ${product.id}`);
+                idCache.ids[docId] = true;
+                continue;
+            }
+
             let storeLink = null;
             if (details.intermediateLink) {
                 const isDirectStore = STORE_MAP.some(s => details.intermediateLink.includes(s.domain)) &&
@@ -768,13 +772,10 @@ async function main() {
                 }
             }
 
-            // Gemini path'inde direkt storeUrl gelmiş olabilir — fallback olarak kullan
             if (!storeLink && product.storeUrl) {
                 console.log(`   🔁 storeUrl fallback: ${product.storeUrl.substring(0, 70)}`);
                 storeLink = product.storeUrl;
             }
-
-            // Son çare: onual.com ürün sayfasını link olarak kullan (kullanıcı oradan mağazaya gider)
             if (!storeLink) {
                 console.log(`   🔁 onual.com fallback link kullanılıyor`);
                 storeLink = product.url;
@@ -783,79 +784,95 @@ async function main() {
             const newPrice = details.newPrice || product.newPrice || 0;
             const oldPrice = details.oldPrice || simulateOldPrice(newPrice);
             const store = detectStore(storeLink);
-            // Cloudflare path'inde storeLink onual.com URL'si kalabilir → homepage'deki storeName'i kullan
             if (store.name === 'Online Mağaza' && product.storeName) {
                 store.name = product.storeName;
             }
 
             console.log(`   💰 Fiyat: ${oldPrice} TL -> ${newPrice} TL | Mağaza: ${store.name}`);
 
-            // ── AI Analiz (Açıklama ve Kategori) ─────────────────────────
-            const aiData = await generateAISentiments(
-                aiKey,
-                details.title || product.title,
-                details.newPrice || product.newPrice,
-                details.oldPrice || 0,
-                details.metaDescription || ''
-            );
+            prepared.push({ product, docId, details, storeLink, newPrice, oldPrice, store });
+        } catch (itemErr) {
+            console.error(`   ❌ Ürün hazırlama hatası: ${itemErr.message}`);
+            failCount++;
+        }
+    }
 
-            // ── AI Push Notifications ─────────────────────────────────────
-            const discountPercent = oldPrice > 0 ? Math.round(((oldPrice - newPrice) / oldPrice) * 100) : 0;
-            // 🔕 Push bildirimleri devre dışı — kullanıcılar her yeni ürün için bildirim almak istemiyordu
-            // Tekrar aktif etmek için bu satırı silin ve aşağıdaki generatePushNotifications bloğunu geri açın
-            let pushNotifications = [];
+    // ── FAZ B: AI kalite kapısı — TEK istekte toplu puanlama ───────────────
+    let rejectedCount = 0;
+    if (prepared.length > 0) {
+        const gateCandidates = prepared.map(p => ({
+            id: p.docId,
+            title: p.details.title || p.product.title,
+            oldPrice: p.oldPrice,
+            newPrice: p.newPrice,
+            category: detectCategory(p.details.title || p.product.title),
+            link: p.storeLink,
+        }));
+        const gateResults = await runQualityGate(gateCandidates, { apiKey: aiKey, threshold: 6 });
+        const gateMap = new Map(gateResults.map(r => [r.id, r]));
 
-            // Expired olarak tespit edilen ilanı yayınlama — atla
-            if (details.isExpired) {
-                console.log(`   ⏭️  İndirim sona ermiş, atlanıyor: ${product.id}`);
+        console.log(`\n🛡️  Kalite kapısı: ${gateResults.filter(r => r.publish).length}/${gateResults.length} onaylandı\n`);
+
+        for (const item of prepared) {
+            const verdict = gateMap.get(item.docId);
+            if (!verdict || !verdict.publish) {
+                console.log(`   🚫 Reddedildi (${item.docId}): ${verdict?.reason || 'bilinmeyen'}`);
+                idCache.ids[item.docId] = true; // tekrar tekrar değerlendirme
+                rejectedCount++;
                 continue;
             }
 
-            // Firebase'e kaydet
-            const cleanedTitle = cleanProductTitle(details.title || product.title);
-            const discountData = {
-                title: (aiData.title || cleanedTitle).substring(0, 200),
-                brand: store.name || 'Mağaza',
-                category: aiData.category || 'Ev & Yaşam',
-                description: aiData.description || '',
-                link: storeLink,
-                originalStoreLink: storeLink,
-                oldPrice: oldPrice || 0,
-                newPrice,
-                imageUrl: details.imageUrl,
-                deleteUrl: '',
-                submittedBy: 'auto-onual-bot',
-                isAd: false,
-                affiliateLinkUpdated: false,
-                originalSource: 'onual.com',
-                storeName: store.name,
-                status: 'aktif',
-                telegramMessageId: `onual_${product.id}`,
-                pushNotifications: pushNotifications, // Array of AI generated notifications
-                lastPriceCheck: FieldValue.serverTimestamp(), // Fiyat takibi için başlangıç zamanı
-                autoPublishedAt: FieldValue.serverTimestamp(),
-                createdAt: FieldValue.serverTimestamp(),
-                aiFomoScore: aiData.aiFomoScore || 5, // AI Fırsat Puanını veritabanına kaydet
-                expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000), // 12 saat sonra TTL
-            };
+            try {
+                const { product, docId, details, storeLink, newPrice, oldPrice, store } = item;
+                const docRef = db.collection('discounts').doc(docId);
 
-            await docRef.set(discountData);
-            console.log(`   🔥 Firebase'e kaydedildi ✅ (ID: ${docId}) - AI FOMO Puanı: ${discountData.aiFomoScore}`);
+                // ── AI Analiz (Açıklama ve Kategori) ─────────────────────
+                const aiData = await generateAISentiments(
+                    aiKey,
+                    details.title || product.title,
+                    details.newPrice || product.newPrice,
+                    details.oldPrice || 0,
+                    details.metaDescription || ''
+                );
 
-            // 🔕 Push bildirimi gönderimi devre dışı
-            // if (!details.isExpired && discountData.aiFomoScore >= 9 && pushNotifications.length >= 3) {
-            //     const urgentBody = pushNotifications[2];
-            //     const title = "🚨 İNDİVA FIRSAT ALARMI 🚨";
-            //     await sendFomoPushNotification(title, urgentBody, docId, details.imageUrl);
-            // }
+                const cleanedTitle = cleanProductTitle(details.title || product.title);
+                const discountData = {
+                    title: (aiData.title || cleanedTitle).substring(0, 200),
+                    brand: store.name || 'Mağaza',
+                    category: aiData.category || 'Ev & Yaşam',
+                    description: aiData.description || '',
+                    link: storeLink,
+                    originalStoreLink: storeLink,
+                    oldPrice: oldPrice || 0,
+                    newPrice,
+                    imageUrl: details.imageUrl,
+                    deleteUrl: '',
+                    submittedBy: 'auto-onual-bot',
+                    isAd: false,
+                    affiliateLinkUpdated: false,
+                    originalSource: 'onual.com',
+                    storeName: store.name,
+                    status: 'aktif',
+                    telegramMessageId: `onual_${product.id}`,
+                    pushNotifications: [],
+                    lastPriceCheck: FieldValue.serverTimestamp(),
+                    autoPublishedAt: FieldValue.serverTimestamp(),
+                    createdAt: FieldValue.serverTimestamp(),
+                    aiFomoScore: aiData.aiFomoScore || 5,
+                    expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000),
+                    priceHistory: [{ price: newPrice, at: Timestamp.now() }],
+                    qualityScore: verdict.score,
+                };
 
-            // Cache'e ekle
-            idCache.ids[docId] = true;
-            successCount++;
+                await docRef.set(discountData);
+                console.log(`   🔥 Firebase'e kaydedildi ✅ (ID: ${docId}) - Kalite: ${verdict.score}/10, FOMO: ${discountData.aiFomoScore}`);
 
-        } catch (itemErr) {
-            console.error(`   ❌ Ürün işleme hatası: ${itemErr.message}`);
-            failCount++;
+                idCache.ids[docId] = true;
+                successCount++;
+            } catch (itemErr) {
+                console.error(`   ❌ Ürün yazma hatası: ${itemErr.message}`);
+                failCount++;
+            }
         }
     }
 
@@ -870,6 +887,7 @@ async function main() {
     console.log('\n═══════════════════════════════════════════');
     console.log('📊 PIPELINE TAMAMLANDI');
     console.log(`   ✅ Başarılı: ${successCount}`);
+    console.log(`   🚫 Kalite kapısında reddedildi: ${rejectedCount}`);
     console.log(`   ❌ Başarısız: ${failCount}`);
     console.log(`   ⏰ ${new Date().toLocaleString('tr-TR')}`);
     console.log('═══════════════════════════════════════════\n');

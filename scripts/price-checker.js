@@ -9,7 +9,7 @@
  */
 
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -425,12 +425,19 @@ async function checkPrices() {
                 } else {
                     // decision === 'active'
                     console.log(`   ✅ Aktif: ${deal.title.substring(0, 20)}...`);
-                    await doc.ref.update({
+                    const updates = {
                         lastPriceCheck: FieldValue.serverTimestamp(),
                         lastCheckedPrice: verdict.currentPrice || deal.newPrice,
                         status: 'aktif',
                         expireStrike: 0, // aktif çıktı → şüphe işaretini sıfırla
-                    });
+                    };
+                    // Gerçek fiyat gözlemi varsa geçmişe ekle (sahte/şişirilmiş indirim
+                    // tespiti için ileride kullanılacak veri — arrayUnion sadece EKLER,
+                    // mevcut alanlara dokunmaz).
+                    if (verdict.currentPrice > 0) {
+                        updates.priceHistory = FieldValue.arrayUnion({ price: verdict.currentPrice, at: Timestamp.now() });
+                    }
+                    await doc.ref.update(updates);
                 }
             } catch (e) {
                 console.error(`   ❌ Hata (${id}): ${e.message}`);
