@@ -206,6 +206,22 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
         let cancelled = false;
         (async () => {
             setRenderState('loading');
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+
+            // 1) Önce ürün görselini DOĞRUDAN dene — birçok CDN (Amazon, n11 vb.)
+            // zaten CORS'a izin veriyor, proxy'ye hiç gerek kalmaz (daha hızlı,
+            // proxy servisi çökse bile çalışmaya devam eder).
+            try {
+                await renderDealImage(canvas, item, item.imageUrl);
+                canvas.toDataURL(); // tainted canvas mı diye ucuz bir kontrol — öyleyse burada atar
+                if (!cancelled) setRenderState('ready');
+                return;
+            } catch {
+                // Görsel CORS'a kapalı (tainted) veya yüklenemedi — proxy'ye düş
+            }
+
+            // 2) Proxy üzerinden CORS-safe bir kopya al ve yeniden çiz
             let safeUrl: string | null = null;
             try {
                 const uploaded = await uploadImageFromUrl(item.imageUrl);
