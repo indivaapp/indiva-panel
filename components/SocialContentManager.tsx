@@ -162,15 +162,20 @@ async function renderDealImage(
         ? Math.round(((item.oldPrice - item.newPrice) / item.oldPrice) * 100)
         : 0;
 
-    // Eleman bazlı animasyon segmentleri (genel progress'in hangi aralığında oynar)
-    const headerP  = easeOutCubic(segProgress(progress, 0.00, 0.15));
-    const cardP    = easeOutBack(segProgress(progress, 0.08, 0.30));
-    const burstP   = easeOutBack(segProgress(progress, 0.24, 0.44));
-    const urgencyP = easeOutCubic(segProgress(progress, 0.36, 0.52));
-    const titleP   = easeOutCubic(segProgress(progress, 0.44, 0.60));
-    const priceP   = easeOutBack(segProgress(progress, 0.52, 0.72));
-    const savingsP = easeOutBack(segProgress(progress, 0.66, 0.82));
-    const ctaP     = easeOutBack(segProgress(progress, 0.76, 0.94));
+    // Eleman bazlı animasyon segmentleri (genel progress'in hangi aralığında oynar).
+    // Video 4sn'den 8sn'ye uzatıldığında aynı mutlak hızda kalması için (yani
+    // fırsat 8sn'nin ilk yarısında aynı tempoda belirir) eski 4sn'lik oranlar
+    // yarıya bölündü. İkinci yarı: kısa bir bekleme + yeni "uygulamayı indir"
+    // banner'ı + final bekleme (izleyicinin okuyacak zamanı olsun).
+    const headerP     = easeOutCubic(segProgress(progress, 0.000, 0.075));
+    const cardP       = easeOutBack(segProgress(progress, 0.040, 0.150));
+    const burstP      = easeOutBack(segProgress(progress, 0.120, 0.220));
+    const urgencyP    = easeOutCubic(segProgress(progress, 0.180, 0.260));
+    const titleP      = easeOutCubic(segProgress(progress, 0.220, 0.300));
+    const priceP      = easeOutBack(segProgress(progress, 0.260, 0.360));
+    const savingsP    = easeOutBack(segProgress(progress, 0.330, 0.410));
+    const ctaP        = easeOutBack(segProgress(progress, 0.380, 0.470));
+    const appBannerP  = easeOutBack(segProgress(progress, 0.550, 0.680));
 
     // ── Arka plan: mor → pembe → turuncu canlı gradyan (glam/alışveriş enerjisi) ──
     const bgGrad = ctx.createLinearGradient(0, 0, CANVAS_W, CANVAS_H);
@@ -220,7 +225,11 @@ async function renderDealImage(
     });
 
     // ── Ürün kartı: beyaz zemin + altın çerçeve (hafif zıplayarak büyür) ─────
-    const cardX = 90, cardY = 300, cardW = CANVAS_W - 180, cardH = 860;
+    // NOT: cardH 860'tan 740'a küçültüldü — geri kalan her şey (uyarı, başlık,
+    // fiyat, tasarruf) cardY+cardH'e göre hesaplandığı için otomatik yukarı
+    // kayıyor, bu da CTA'nın (sabit, canvas altına göre) üstünde yeni "uygulamayı
+    // indir" banner'ı için yer açıyor — üstteki hiçbir sabiti değiştirmeye gerek yok.
+    const cardX = 90, cardY = 300, cardW = CANVAS_W - 180, cardH = 740;
     let loadedImg: HTMLImageElement | null = cachedImg ?? null;
     if (!loadedImg && safeImageUrl) {
         try { loadedImg = await loadImage(safeImageUrl); } catch { loadedImg = null; }
@@ -387,6 +396,35 @@ async function renderDealImage(
         });
     }
 
+    // ── "Uygulamayı indir" banner'ı — videoda geç aşamada belirir ────────────
+    // NOT: Google'ın resmi "Play Store'da İndir" rozetini birebir taklit ETMİYORUZ
+    // (üçüncü taraf marka/logo telif riski) — kendi stilimizde net bir indirme
+    // çağrısı kullanıyoruz, aynı teşvik etkisini sağlıyor.
+    const ctaYForBanner = CANVAS_H - 190;
+    const appBannerH = 90;
+    const appBannerY = ctaYForBanner - 140;
+    withPop(ctx, CANVAS_W / 2, appBannerY + appBannerH / 2, appBannerP, appBannerP, () => {
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = '800 30px Arial';
+        const appText = '📲 İNDİVA\'yı Google Play\'de Ücretsiz İndir';
+        const appW = Math.min(CANVAS_W - 120, ctx.measureText(appText).width + 70);
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.35)';
+        ctx.shadowBlur = 25;
+        ctx.shadowOffsetY = 8;
+        const bannerGrad = ctx.createLinearGradient(CANVAS_W / 2 - appW / 2, 0, CANVAS_W / 2 + appW / 2, 0);
+        bannerGrad.addColorStop(0, '#2563eb');
+        bannerGrad.addColorStop(1, '#0ea5a4');
+        ctx.fillStyle = bannerGrad;
+        drawRoundedRect(ctx, CANVAS_W / 2 - appW / 2, appBannerY, appW, appBannerH, 45);
+        ctx.restore();
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(appText, CANVAS_W / 2, appBannerY + appBannerH / 2 + 2);
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
+    });
+
     // ── Alt CTA butonu (beyaz pil, koyu mor yazı, zıplayarak büyür) ──────────
     const ctaW = 780, ctaH = 110, ctaX = (CANVAS_W - ctaW) / 2, ctaY = CANVAS_H - 190;
     withPop(ctx, CANVAS_W / 2, ctaY + ctaH / 2, ctaP, ctaP, () => {
@@ -411,7 +449,7 @@ async function renderDealImage(
 // canvas.captureStream + MediaRecorder ile animasyonu WebM'e kaydeder.
 // Çıktı formatı WebM'dir — Instagram MP4 istiyor, paylaşmadan önce dönüştürme
 // gerekebilir (bkz. panel ekranındaki not).
-const VIDEO_DURATION_MS = 4000;
+const VIDEO_DURATION_MS = 8000;
 const VIDEO_FPS = 30;
 
 function pickSupportedMimeType(): string {
