@@ -107,15 +107,70 @@ function loadImage(src: string): Promise<HTMLImageElement> {
     });
 }
 
-async function renderDealImage(canvas: HTMLCanvasElement, item: SocialContentItem, safeImageUrl: string | null) {
-    canvas.width = CANVAS_W;
-    canvas.height = CANVAS_H;
+// ─── Animasyon yardımcıları ─────────────────────────────────────────────────
+// progress: 0 (animasyon başı) → 1 (durağan/final görünüm, statik görsel de bunu kullanır)
+
+function easeOutCubic(t: number): number { return 1 - Math.pow(1 - t, 3); }
+function easeOutBack(t: number): number {
+    const c1 = 1.70158, c3 = c1 + 1;
+    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+// Genel progress'ten (0-1), bir elemanın kendi [start,end] aralığındaki alt-progress'i
+function segProgress(overall: number, start: number, end: number): number {
+    if (overall <= start) return 0;
+    if (overall >= end) return 1;
+    return (overall - start) / (end - start);
+}
+function withPop(ctx: CanvasRenderingContext2D, cx: number, cy: number, scale: number, alpha: number, draw: () => void) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(cx, cy);
+    ctx.scale(Math.max(0.001, scale), Math.max(0.001, scale));
+    ctx.translate(-cx, -cy);
+    draw();
+    ctx.restore();
+}
+function withSlideFade(ctx: CanvasRenderingContext2D, offsetY: number, alpha: number, draw: () => void) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(0, offsetY);
+    draw();
+    ctx.restore();
+}
+
+/**
+ * @param progress 0-1. Varsayılan 1 = statik/final görünüm (mevcut kullanım bozulmaz).
+ *   Video animasyonu için 0'dan 1'e kadar art arda çağrılır.
+ * @param cachedImg Önceden yüklenmiş ürün görseli — video her frame'de yeniden
+ *   indirmesin diye. Verilmezse (statik kullanım) her zamanki gibi kendi yükler.
+ * @returns Yüklenen görsel — çağıran, sonraki frame'ler için cache'leyebilir.
+ */
+async function renderDealImage(
+    canvas: HTMLCanvasElement,
+    item: SocialContentItem,
+    safeImageUrl: string | null,
+    progress: number = 1,
+    cachedImg?: HTMLImageElement | null,
+): Promise<HTMLImageElement | null> {
+    if (canvas.width !== CANVAS_W) canvas.width = CANVAS_W;
+    if (canvas.height !== CANVAS_H) canvas.height = CANVAS_H;
     const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    if (!ctx) return null;
+    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
     const discountPct = item.oldPrice > 0 && item.newPrice > 0
         ? Math.round(((item.oldPrice - item.newPrice) / item.oldPrice) * 100)
         : 0;
+
+    // Eleman bazlı animasyon segmentleri (genel progress'in hangi aralığında oynar)
+    const headerP  = easeOutCubic(segProgress(progress, 0.00, 0.15));
+    const cardP    = easeOutBack(segProgress(progress, 0.08, 0.30));
+    const burstP   = easeOutBack(segProgress(progress, 0.24, 0.44));
+    const urgencyP = easeOutCubic(segProgress(progress, 0.36, 0.52));
+    const titleP   = easeOutCubic(segProgress(progress, 0.44, 0.60));
+    const priceP   = easeOutBack(segProgress(progress, 0.52, 0.72));
+    const savingsP = easeOutBack(segProgress(progress, 0.66, 0.82));
+    const ctaP     = easeOutBack(segProgress(progress, 0.76, 0.94));
 
     // ── Arka plan: mor → pembe → turuncu canlı gradyan (glam/alışveriş enerjisi) ──
     const bgGrad = ctx.createLinearGradient(0, 0, CANVAS_W, CANVAS_H);
@@ -145,117 +200,133 @@ async function renderDealImage(canvas: HTMLCanvasElement, item: SocialContentIte
     ];
     sparkles.forEach(([x, y, s, c]) => drawSparkle(ctx, x, y, s, c));
 
-    // ── Üst satır: kategori + İNDİVA ──────────────────────────────────────────
-    ctx.textBaseline = 'middle';
-    if (item.category) {
-        const catText = item.category.toUpperCase();
-        ctx.font = '700 26px Arial';
-        const catWidth = ctx.measureText(catText).width;
-        ctx.fillStyle = 'rgba(255,255,255,0.24)';
-        drawRoundedRect(ctx, 64, 70, catWidth + 48, 58, 29);
+    // ── Üst satır: kategori + İNDİVA (yukarıdan kayarak belirir) ─────────────
+    withSlideFade(ctx, (1 - headerP) * -20, headerP, () => {
+        ctx.textBaseline = 'middle';
+        if (item.category) {
+            const catText = item.category.toUpperCase();
+            ctx.font = '700 26px Arial';
+            const catWidth = ctx.measureText(catText).width;
+            ctx.fillStyle = 'rgba(255,255,255,0.24)';
+            drawRoundedRect(ctx, 64, 70, catWidth + 48, 58, 29);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(catText, 88, 100);
+        }
+        ctx.font = '900 34px Arial';
         ctx.fillStyle = '#ffffff';
-        ctx.fillText(catText, 88, 100);
-    }
-    ctx.font = '900 34px Arial';
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'right';
-    ctx.fillText('✨ İNDİVA', CANVAS_W - 64, 100);
-    ctx.textAlign = 'left';
+        ctx.textAlign = 'right';
+        ctx.fillText('✨ İNDİVA', CANVAS_W - 64, 100);
+        ctx.textAlign = 'left';
+    });
 
-    // ── Ürün kartı: beyaz zemin + altın çerçeve ──────────────────────────────
+    // ── Ürün kartı: beyaz zemin + altın çerçeve (hafif zıplayarak büyür) ─────
     const cardX = 90, cardY = 300, cardW = CANVAS_W - 180, cardH = 860;
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.5)';
-    ctx.shadowBlur = 60;
-    ctx.shadowOffsetY = 30;
-    ctx.fillStyle = '#ffffff';
-    drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 44);
-    ctx.restore();
-    ctx.save();
-    ctx.strokeStyle = '#FFD966';
-    ctx.lineWidth = 6;
-    strokeRoundedRect(ctx, cardX + 3, cardY + 3, cardW - 6, cardH - 6, 42);
-    ctx.restore();
+    let loadedImg: HTMLImageElement | null = cachedImg ?? null;
+    if (!loadedImg && safeImageUrl) {
+        try { loadedImg = await loadImage(safeImageUrl); } catch { loadedImg = null; }
+    }
+    withPop(ctx, cardX + cardW / 2, cardY + cardH / 2, 0.85 + 0.15 * cardP, cardP, () => {
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.5)';
+        ctx.shadowBlur = 60;
+        ctx.shadowOffsetY = 30;
+        ctx.fillStyle = '#ffffff';
+        drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 44);
+        ctx.restore();
+        ctx.save();
+        ctx.strokeStyle = '#FFD966';
+        ctx.lineWidth = 6;
+        strokeRoundedRect(ctx, cardX + 3, cardY + 3, cardW - 6, cardH - 6, 42);
+        ctx.restore();
 
-    if (safeImageUrl) {
-        try {
-            const img = await loadImage(safeImageUrl);
+        if (loadedImg) {
             const pad = 70;
             const availW = cardW - pad * 2, availH = cardH - pad * 2;
-            const scale = Math.min(availW / img.width, availH / img.height, 1);
-            const drawW = img.width * scale, drawH = img.height * scale;
+            const scale = Math.min(availW / loadedImg.width, availH / loadedImg.height, 1);
+            const drawW = loadedImg.width * scale, drawH = loadedImg.height * scale;
             ctx.drawImage(
-                img,
+                loadedImg,
                 cardX + (cardW - drawW) / 2,
                 cardY + (cardH - drawH) / 2,
                 drawW, drawH,
             );
-        } catch {
-            // Görsel yüklenemezse kart boş beyaz kalır — yine de devam edilir
         }
-    }
+    });
 
-    // ── İndirim rozeti: altın "kampanya çıkartması" (kartın sol üstüne biner) ──
+    // ── İndirim rozeti: altın "kampanya çıkartması" (patlarcasına büyür) ─────
     if (discountPct > 0) {
         const bx = cardX + 60, by = cardY + 10, outerR = 140, innerR = 118;
-        ctx.save();
-        ctx.shadowColor = 'rgba(0,0,0,0.4)';
-        ctx.shadowBlur = 30;
-        ctx.shadowOffsetY = 10;
-        const burstGrad = ctx.createRadialGradient(bx, by, 10, bx, by, outerR);
-        burstGrad.addColorStop(0, '#FFE066');
-        burstGrad.addColorStop(1, '#FFB020');
-        ctx.fillStyle = burstGrad;
-        drawBurstPath(ctx, bx, by, 18, outerR, innerR);
-        ctx.fill();
-        ctx.restore();
+        withPop(ctx, bx, by, burstP, burstP, () => {
+            ctx.save();
+            ctx.shadowColor = 'rgba(0,0,0,0.4)';
+            ctx.shadowBlur = 30;
+            ctx.shadowOffsetY = 10;
+            const burstGrad = ctx.createRadialGradient(bx, by, 10, bx, by, outerR);
+            burstGrad.addColorStop(0, '#FFE066');
+            burstGrad.addColorStop(1, '#FFB020');
+            ctx.fillStyle = burstGrad;
+            drawBurstPath(ctx, bx, by, 18, outerR, innerR);
+            ctx.fill();
+            ctx.restore();
 
-        ctx.save();
-        ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-        ctx.lineWidth = 4;
-        drawBurstPath(ctx, bx, by, 18, outerR - 10, innerR - 10);
-        ctx.stroke();
-        ctx.restore();
+            ctx.save();
+            ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+            ctx.lineWidth = 4;
+            drawBurstPath(ctx, bx, by, 18, outerR - 10, innerR - 10);
+            ctx.stroke();
+            ctx.restore();
 
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#6b1642';
-        ctx.font = '900 66px Arial';
-        ctx.fillText(`%${discountPct}`, bx, by - 18);
-        ctx.font = '800 28px Arial';
-        ctx.fillText('İNDİRİM', bx, by + 38);
-        ctx.textAlign = 'left';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = '#6b1642';
+            ctx.font = '900 66px Arial';
+            ctx.fillText(`%${discountPct}`, bx, by - 18);
+            ctx.font = '800 28px Arial';
+            ctx.fillText('İNDİRİM', bx, by + 38);
+            ctx.textAlign = 'left';
+        });
     }
 
-    // ── Aciliyet etiketi (kartın altında, ortalı) ────────────────────────────
-    ctx.textAlign = 'center';
-    ctx.font = '800 30px Arial';
-    const urgencyText = '🔥 SINIRLI SÜRE — KAÇIRMA!';
-    const urgencyW = ctx.measureText(urgencyText).width + 56;
-    ctx.fillStyle = 'rgba(255,255,255,0.22)';
-    drawRoundedRect(ctx, CANVAS_W / 2 - urgencyW / 2, cardY + cardH + 40, urgencyW, 66, 33);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(urgencyText, CANVAS_W / 2, cardY + cardH + 73);
-
-    // ── Ürün başlığı (ortalı, gölgeli — okunabilirlik için) ──────────────────
-    ctx.textBaseline = 'alphabetic';
-    ctx.shadowColor = 'rgba(0,0,0,0.35)';
-    ctx.shadowBlur = 10;
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '800 46px Arial';
-    const titleLines = wrapText(ctx, item.title, CANVAS_W - 200, 2);
-    let ty = cardY + cardH + 195;
-    titleLines.forEach(line => {
-        ctx.fillText(line, CANVAS_W / 2, ty);
-        ty += 60;
+    // ── Aciliyet etiketi (kartın altında, aşağıdan kayarak belirir) ──────────
+    withSlideFade(ctx, (1 - urgencyP) * 20, urgencyP, () => {
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = '800 30px Arial';
+        const urgencyText = '🔥 SINIRLI SÜRE — KAÇIRMA!';
+        const urgencyW = ctx.measureText(urgencyText).width + 56;
+        ctx.fillStyle = 'rgba(255,255,255,0.22)';
+        drawRoundedRect(ctx, CANVAS_W / 2 - urgencyW / 2, cardY + cardH + 40, urgencyW, 66, 33);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(urgencyText, CANVAS_W / 2, cardY + cardH + 73);
+        ctx.textAlign = 'left';
     });
-    ctx.shadowBlur = 0;
 
-    // ── Fiyat satırı (ortalı grup: yeni fiyat + eski fiyat) ──────────────────
-    // NOT: textAlign yukarıdan 'center' kalmış olabilir — startX/oldX manuel
-    // sol-hizalı hesaplandığı için burada kesin 'left' olmalı, yoksa metnin
-    // yarısı canvas'ın dışına (görünmez) çizilir.
-    ctx.textAlign = 'left';
+    // ── Ürün başlığı (ortalı, gölgeli, aşağıdan kayarak belirir) ─────────────
+    let ty = cardY + cardH + 195;
+    withSlideFade(ctx, (1 - titleP) * 15, titleP, () => {
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
+        ctx.shadowColor = 'rgba(0,0,0,0.35)';
+        ctx.shadowBlur = 10;
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '800 46px Arial';
+        const titleLines = wrapText(ctx, item.title, CANVAS_W - 200, 2);
+        let lineY = ty;
+        titleLines.forEach(line => {
+            ctx.fillText(line, CANVAS_W / 2, lineY);
+            lineY += 60;
+        });
+        ctx.shadowBlur = 0;
+        ctx.textAlign = 'left';
+    });
+    // Başlık kaç satır sürdüyse fiyatın başlangıcı ona göre kaysın — bunu
+    // animasyon dışında (progress'ten bağımsız) sabit hesaplamak için burada
+    // bir kez daha (gerçek) satır sayısını ölç.
+    ctx.font = '800 46px Arial';
+    const titleLineCount = wrapText(ctx, item.title, CANVAS_W - 200, 2).length;
+    ty += titleLineCount * 60;
+
+    // ── Fiyat satırı (ortalı grup: yeni fiyat + eski fiyat, zıplayarak büyür) ─
     ty += 55;
     const newPriceText = `${Math.floor(item.newPrice).toLocaleString('tr-TR')} TL`;
     const oldPriceText = item.oldPrice > item.newPrice
@@ -272,58 +343,123 @@ async function renderDealImage(canvas: HTMLCanvasElement, item: SocialContentIte
     const totalW = newW + gap + oldW;
     const startX = CANVAS_W / 2 - totalW / 2;
 
-    ctx.save();
-    ctx.shadowColor = 'rgba(255,224,102,0.6)';
-    ctx.shadowBlur = 30;
-    ctx.font = '900 96px Arial';
-    ctx.fillStyle = '#FFE066';
-    ctx.fillText(newPriceText, startX, ty);
-    ctx.restore();
+    withPop(ctx, CANVAS_W / 2, ty - 25, 0.7 + 0.3 * priceP, priceP, () => {
+        // NOT: textAlign burada kesin 'left' olmalı — startX/oldX manuel
+        // sol-hizalı hesaplandı, yoksa metnin yarısı canvas dışına çizilir.
+        ctx.textAlign = 'left';
+        ctx.save();
+        ctx.shadowColor = 'rgba(255,224,102,0.6)';
+        ctx.shadowBlur = 30;
+        ctx.font = '900 96px Arial';
+        ctx.fillStyle = '#FFE066';
+        ctx.fillText(newPriceText, startX, ty);
+        ctx.restore();
 
-    if (oldPriceText) {
-        const oldX = startX + newW + gap;
-        const oldY = ty - 14;
-        ctx.font = '600 46px Arial';
-        ctx.fillStyle = 'rgba(255,255,255,0.65)';
-        ctx.fillText(oldPriceText, oldX, oldY);
-        ctx.strokeStyle = 'rgba(255,255,255,0.65)';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(oldX, oldY - 16);
-        ctx.lineTo(oldX + oldW, oldY - 16);
-        ctx.stroke();
-    }
+        if (oldPriceText) {
+            const oldX = startX + newW + gap;
+            const oldY = ty - 14;
+            ctx.font = '600 46px Arial';
+            ctx.fillStyle = 'rgba(255,255,255,0.65)';
+            ctx.fillText(oldPriceText, oldX, oldY);
+            ctx.strokeStyle = 'rgba(255,255,255,0.65)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(oldX, oldY - 16);
+            ctx.lineTo(oldX + oldW, oldY - 16);
+            ctx.stroke();
+        }
+    });
 
-    // ── Tasarruf rozeti (yeşil, ortalı) ───────────────────────────────────────
-    // NOT: textAlign fiyat satırından 'left' kalmış — bu ikisi CANVAS_W/2'ye göre
-    // ortalanmış metin bekliyor, o yüzden burada kesin 'center' olmalı.
-    ctx.textAlign = 'center';
+    // ── Tasarruf rozeti (yeşil, ortalı, zıplayarak büyür) ────────────────────
     const savings = item.oldPrice > item.newPrice ? Math.round(item.oldPrice - item.newPrice) : 0;
+    const saveY = ty + 60;
     if (savings > 0) {
-        const saveText = `💚 ${savings.toLocaleString('tr-TR')} TL TASARRUF`;
-        ctx.font = '800 32px Arial';
-        const saveW = ctx.measureText(saveText).width + 56;
-        const saveY = ty + 60;
-        ctx.fillStyle = '#22c55e';
-        drawRoundedRect(ctx, CANVAS_W / 2 - saveW / 2, saveY, saveW, 70, 35);
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(saveText, CANVAS_W / 2, saveY + 45);
+        withPop(ctx, CANVAS_W / 2, saveY + 35, savingsP, savingsP, () => {
+            ctx.textAlign = 'center';
+            const saveText = `💚 ${savings.toLocaleString('tr-TR')} TL TASARRUF`;
+            ctx.font = '800 32px Arial';
+            const saveW = ctx.measureText(saveText).width + 56;
+            ctx.fillStyle = '#22c55e';
+            drawRoundedRect(ctx, CANVAS_W / 2 - saveW / 2, saveY, saveW, 70, 35);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(saveText, CANVAS_W / 2, saveY + 45);
+            ctx.textAlign = 'left';
+        });
     }
 
-    // ── Alt CTA butonu (beyaz pil, koyu mor yazı) ─────────────────────────────
+    // ── Alt CTA butonu (beyaz pil, koyu mor yazı, zıplayarak büyür) ──────────
     const ctaW = 780, ctaH = 110, ctaX = (CANVAS_W - ctaW) / 2, ctaY = CANVAS_H - 190;
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.3)';
-    ctx.shadowBlur = 30;
-    ctx.shadowOffsetY = 10;
-    ctx.fillStyle = '#ffffff';
-    drawRoundedRect(ctx, ctaX, ctaY, ctaW, ctaH, 55);
-    ctx.restore();
-    ctx.font = '900 36px Arial';
-    ctx.fillStyle = '#4a1454';
-    ctx.textAlign = 'center';
-    ctx.fillText('İNDİVA\'DA FIRSATI YAKALA →', CANVAS_W / 2, ctaY + ctaH / 2 + 2);
-    ctx.textAlign = 'left';
+    withPop(ctx, CANVAS_W / 2, ctaY + ctaH / 2, ctaP, ctaP, () => {
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.3)';
+        ctx.shadowBlur = 30;
+        ctx.shadowOffsetY = 10;
+        ctx.fillStyle = '#ffffff';
+        drawRoundedRect(ctx, ctaX, ctaY, ctaW, ctaH, 55);
+        ctx.restore();
+        ctx.font = '900 36px Arial';
+        ctx.fillStyle = '#4a1454';
+        ctx.textAlign = 'center';
+        ctx.fillText('İNDİVA\'DA FIRSATI YAKALA →', CANVAS_W / 2, ctaY + ctaH / 2 + 2);
+        ctx.textAlign = 'left';
+    });
+
+    return loadedImg;
+}
+
+// ─── Animasyonlu video kaydı (tarayıcı içi, sunucuya gerek yok) ─────────────
+// canvas.captureStream + MediaRecorder ile animasyonu WebM'e kaydeder.
+// Çıktı formatı WebM'dir — Instagram MP4 istiyor, paylaşmadan önce dönüştürme
+// gerekebilir (bkz. panel ekranındaki not).
+const VIDEO_DURATION_MS = 4000;
+const VIDEO_FPS = 30;
+
+function pickSupportedMimeType(): string {
+    const candidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+    for (const type of candidates) {
+        if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)) return type;
+    }
+    return 'video/webm';
+}
+
+async function recordDealVideo(
+    canvas: HTMLCanvasElement,
+    item: SocialContentItem,
+    cachedImg: HTMLImageElement | null,
+    onProgress?: (fraction: number) => void,
+): Promise<Blob> {
+    if (typeof (canvas as any).captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
+        throw new Error('Bu tarayıcı video kaydını desteklemiyor.');
+    }
+    const stream: MediaStream = (canvas as any).captureStream(VIDEO_FPS);
+    const mimeType = pickSupportedMimeType();
+    const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_000_000 });
+    const chunks: Blob[] = [];
+
+    return new Promise((resolve, reject) => {
+        recorder.ondataavailable = (e: BlobEvent) => { if (e.data.size > 0) chunks.push(e.data); };
+        recorder.onerror = () => reject(new Error('Video kaydı başarısız oldu.'));
+        recorder.onstop = () => {
+            stream.getTracks().forEach(t => t.stop());
+            resolve(new Blob(chunks, { type: mimeType }));
+        };
+
+        const startTime = performance.now();
+        const tick = () => {
+            const elapsed = performance.now() - startTime;
+            const progress = Math.min(1, elapsed / VIDEO_DURATION_MS);
+            onProgress?.(progress);
+            renderDealImage(canvas, item, null, progress, cachedImg).catch(() => {});
+            if (progress < 1) {
+                requestAnimationFrame(tick);
+            } else {
+                // Son karenin de kaydedilmesi için kısa bir bekleme sonrası durdur
+                setTimeout(() => recorder.stop(), 150);
+            }
+        };
+        recorder.start();
+        requestAnimationFrame(tick);
+    });
 }
 
 // ─── Tekil kart bileşeni ────────────────────────────────────────────────────
@@ -335,9 +471,13 @@ interface CardProps {
 
 const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const cachedImgRef = useRef<HTMLImageElement | null>(null);
     const [renderState, setRenderState] = useState<'loading' | 'ready' | 'error'>('loading');
     const [copied, setCopied] = useState(false);
     const [marking, setMarking] = useState(false);
+    const [videoState, setVideoState] = useState<'idle' | 'recording' | 'ready' | 'error'>('idle');
+    const [videoProgress, setVideoProgress] = useState(0);
+    const [videoUrl, setVideoUrl] = useState<string | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -350,8 +490,9 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
             // zaten CORS'a izin veriyor, proxy'ye hiç gerek kalmaz (daha hızlı,
             // proxy servisi çökse bile çalışmaya devam eder).
             try {
-                await renderDealImage(canvas, item, item.imageUrl);
+                const img = await renderDealImage(canvas, item, item.imageUrl);
                 canvas.toDataURL(); // tainted canvas mı diye ucuz bir kontrol — öyleyse burada atar
+                cachedImgRef.current = img;
                 if (!cancelled) setRenderState('ready');
                 return;
             } catch {
@@ -368,7 +509,8 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
             }
             if (cancelled || !canvasRef.current) return;
             try {
-                await renderDealImage(canvasRef.current, item, safeUrl);
+                const img = await renderDealImage(canvasRef.current, item, safeUrl);
+                cachedImgRef.current = img;
                 if (!cancelled) setRenderState('ready');
             } catch {
                 if (!cancelled) setRenderState('error');
@@ -377,6 +519,9 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [item.id]);
+
+    // Bileşen kapanırken oluşturulmuş video object URL'ini serbest bırak
+    useEffect(() => () => { if (videoUrl) URL.revokeObjectURL(videoUrl); }, [videoUrl]);
 
     const handleDownload = () => {
         const canvas = canvasRef.current;
@@ -390,6 +535,29 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
             a.click();
             URL.revokeObjectURL(url);
         }, 'image/png');
+    };
+
+    const handleCreateVideo = async () => {
+        const canvas = canvasRef.current;
+        if (!canvas || videoState === 'recording') return;
+        setVideoState('recording');
+        setVideoProgress(0);
+        try {
+            const blob = await recordDealVideo(canvas, item, cachedImgRef.current, setVideoProgress);
+            const url = URL.createObjectURL(blob);
+            setVideoUrl(url);
+            setVideoState('ready');
+        } catch {
+            setVideoState('error');
+        }
+    };
+
+    const handleDownloadVideo = () => {
+        if (!videoUrl) return;
+        const a = document.createElement('a');
+        a.href = videoUrl;
+        a.download = `indiva-${item.discountId}.webm`;
+        a.click();
     };
 
     const handleCopyCaption = async () => {
@@ -454,11 +622,41 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
                     </button>
                     <button
                         onClick={handleDownload}
-                        disabled={renderState !== 'ready'}
+                        disabled={renderState !== 'ready' || videoState === 'recording'}
                         className="flex-1 min-w-[140px] py-2.5 bg-gradient-to-r from-orange-600 to-red-600 disabled:opacity-40 text-white text-sm font-bold rounded-xl transition-all active:scale-95 shadow-lg shadow-orange-900/30"
                     >
                         ⬇ Görseli İndir
                     </button>
+
+                    {videoState !== 'ready' && (
+                        <button
+                            onClick={handleCreateVideo}
+                            disabled={renderState !== 'ready' || videoState === 'recording'}
+                            className="flex-1 min-w-[140px] py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 disabled:opacity-40 text-white text-sm font-bold rounded-xl transition-all active:scale-95 shadow-lg shadow-purple-900/30"
+                        >
+                            {videoState === 'recording'
+                                ? `🎬 Kaydediliyor… %${Math.round(videoProgress * 100)}`
+                                : videoState === 'error'
+                                ? '🎬 Tekrar dene'
+                                : '🎬 Video Oluştur'}
+                        </button>
+                    )}
+                    {videoState === 'ready' && (
+                        <button
+                            onClick={handleDownloadVideo}
+                            className="flex-1 min-w-[140px] py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white text-sm font-bold rounded-xl transition-all active:scale-95 shadow-lg shadow-purple-900/30"
+                        >
+                            ⬇ Videoyu İndir (.webm)
+                        </button>
+                    )}
+
+                    {videoState === 'ready' && (
+                        <p className="w-full text-[11px] text-gray-500 text-center -mt-1">
+                            .webm formatında indi. Instagram MP4 istiyorsa, paylaşmadan önce
+                            telefonundaki bir dönüştürücü uygulamayla MP4'e çevirmen gerekebilir.
+                        </p>
+                    )}
+
                     <button
                         onClick={handleMarkPosted}
                         disabled={marking}
