@@ -295,6 +295,9 @@ async function renderDealImage(canvas: HTMLCanvasElement, item: SocialContentIte
     }
 
     // ── Tasarruf rozeti (yeşil, ortalı) ───────────────────────────────────────
+    // NOT: textAlign fiyat satırından 'left' kalmış — bu ikisi CANVAS_W/2'ye göre
+    // ortalanmış metin bekliyor, o yüzden burada kesin 'center' olmalı.
+    ctx.textAlign = 'center';
     const savings = item.oldPrice > item.newPrice ? Math.round(item.oldPrice - item.newPrice) : 0;
     if (savings > 0) {
         const saveText = `💚 ${savings.toLocaleString('tr-TR')} TL TASARRUF`;
@@ -318,6 +321,7 @@ async function renderDealImage(canvas: HTMLCanvasElement, item: SocialContentIte
     ctx.restore();
     ctx.font = '900 36px Arial';
     ctx.fillStyle = '#4a1454';
+    ctx.textAlign = 'center';
     ctx.fillText('İNDİVA\'DA FIRSATI YAKALA →', CANVAS_W / 2, ctaY + ctaH / 2 + 2);
     ctx.textAlign = 'left';
 }
