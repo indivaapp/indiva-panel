@@ -9,7 +9,7 @@ interface SocialContentManagerProps {
 }
 
 const CANVAS_W = 1080;
-const CANVAS_H = 1350;
+const CANVAS_H = 1920; // 9:16 — Instagram Hikaye/Reels formatı
 
 // ─── Canvas çizim yardımcıları ──────────────────────────────────────────────
 
@@ -22,6 +22,50 @@ function drawRoundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w:
     ctx.arcTo(x, y, x + w, y, r);
     ctx.closePath();
     ctx.fill();
+}
+
+function strokeRoundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    ctx.stroke();
+}
+
+// Küçük "parıltı" (✨ tarzı) şekli — glam/dikkat çekici dekor için
+function drawSparkle(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number, color: string) {
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - size);
+    ctx.quadraticCurveTo(cx + size * 0.15, cy - size * 0.15, cx + size, cy);
+    ctx.quadraticCurveTo(cx + size * 0.15, cy + size * 0.15, cx, cy + size);
+    ctx.quadraticCurveTo(cx - size * 0.15, cy + size * 0.15, cx - size, cy);
+    ctx.quadraticCurveTo(cx - size * 0.15, cy - size * 0.15, cx, cy - size);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+}
+
+// Dişli/patlama şekli — indirim rozetini bir "kampanya çıkartması" gibi gösterir
+function drawBurstPath(ctx: CanvasRenderingContext2D, cx: number, cy: number, spikes: number, outerR: number, innerR: number) {
+    ctx.beginPath();
+    const step = Math.PI / spikes;
+    let rot = -Math.PI / 2;
+    for (let i = 0; i < spikes; i++) {
+        let x = cx + Math.cos(rot) * outerR;
+        let y = cy + Math.sin(rot) * outerR;
+        ctx.lineTo(x, y);
+        rot += step;
+        x = cx + Math.cos(rot) * innerR;
+        y = cy + Math.sin(rot) * innerR;
+        ctx.lineTo(x, y);
+        rot += step;
+    }
+    ctx.closePath();
 }
 
 // Metni verilen genişliğe göre satırlara böler; sığmazsa son satırı "…" ile keser.
@@ -69,44 +113,74 @@ async function renderDealImage(canvas: HTMLCanvasElement, item: SocialContentIte
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Arka plan — koyu diyagonal gradyan (uygulamanın marka teması)
+    const discountPct = item.oldPrice > 0 && item.newPrice > 0
+        ? Math.round(((item.oldPrice - item.newPrice) / item.oldPrice) * 100)
+        : 0;
+
+    // ── Arka plan: mor → pembe → turuncu canlı gradyan (glam/alışveriş enerjisi) ──
     const bgGrad = ctx.createLinearGradient(0, 0, CANVAS_W, CANVAS_H);
-    bgGrad.addColorStop(0, '#1a1a2e');
-    bgGrad.addColorStop(1, '#0d0d16');
+    bgGrad.addColorStop(0, '#3a1454');
+    bgGrad.addColorStop(0.55, '#c2287a');
+    bgGrad.addColorStop(1, '#ff7a1a');
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-    // Üst satır: kategori etiketi (solda) + İNDİVA imzası (sağda)
+    // Yumuşak ışık lekeleri (derinlik için)
+    ctx.save();
+    ctx.filter = 'blur(60px)';
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    ctx.beginPath(); ctx.arc(160, 220, 180, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,214,102,0.14)';
+    ctx.beginPath(); ctx.arc(CANVAS_W - 120, CANVAS_H - 420, 220, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // Parıltı dekorları
+    const sparkles: [number, number, number, string][] = [
+        [90, 400, 16, 'rgba(255,255,255,0.55)'],
+        [1000, 240, 12, 'rgba(255,224,140,0.6)'],
+        [960, 520, 20, 'rgba(255,255,255,0.4)'],
+        [70, 700, 10, 'rgba(255,224,140,0.5)'],
+        [1010, 1250, 14, 'rgba(255,255,255,0.45)'],
+        [60, 1300, 18, 'rgba(255,224,140,0.4)'],
+    ];
+    sparkles.forEach(([x, y, s, c]) => drawSparkle(ctx, x, y, s, c));
+
+    // ── Üst satır: kategori + İNDİVA ──────────────────────────────────────────
     ctx.textBaseline = 'middle';
     if (item.category) {
         const catText = item.category.toUpperCase();
         ctx.font = '700 26px Arial';
         const catWidth = ctx.measureText(catText).width;
-        ctx.fillStyle = 'rgba(255,122,26,0.18)';
-        drawRoundedRect(ctx, 64, 60, catWidth + 48, 58, 29);
-        ctx.fillStyle = '#FF9A56';
-        ctx.fillText(catText, 88, 90);
+        ctx.fillStyle = 'rgba(255,255,255,0.24)';
+        drawRoundedRect(ctx, 64, 70, catWidth + 48, 58, 29);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(catText, 88, 100);
     }
     ctx.font = '900 34px Arial';
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillStyle = '#ffffff';
     ctx.textAlign = 'right';
-    ctx.fillText('İNDİVA', CANVAS_W - 64, 90);
+    ctx.fillText('✨ İNDİVA', CANVAS_W - 64, 100);
     ctx.textAlign = 'left';
 
-    // Ürün görseli — beyaz kart üzerinde ortalanmış
-    const cardX = 90, cardY = 180, cardW = CANVAS_W - 180, cardH = 610;
+    // ── Ürün kartı: beyaz zemin + altın çerçeve ──────────────────────────────
+    const cardX = 90, cardY = 300, cardW = CANVAS_W - 180, cardH = 860;
     ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.45)';
-    ctx.shadowBlur = 50;
-    ctx.shadowOffsetY = 25;
+    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    ctx.shadowBlur = 60;
+    ctx.shadowOffsetY = 30;
     ctx.fillStyle = '#ffffff';
-    drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 36);
+    drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 44);
+    ctx.restore();
+    ctx.save();
+    ctx.strokeStyle = '#FFD966';
+    ctx.lineWidth = 6;
+    strokeRoundedRect(ctx, cardX + 3, cardY + 3, cardW - 6, cardH - 6, 42);
     ctx.restore();
 
     if (safeImageUrl) {
         try {
             const img = await loadImage(safeImageUrl);
-            const pad = 55;
+            const pad = 70;
             const availW = cardW - pad * 2, availH = cardH - pad * 2;
             const scale = Math.min(availW / img.width, availH / img.height, 1);
             const drawW = img.width * scale, drawH = img.height * scale;
@@ -121,71 +195,130 @@ async function renderDealImage(canvas: HTMLCanvasElement, item: SocialContentIte
         }
     }
 
-    // İndirim rozeti — kartın sol üst köşesinde, hafif eğik
-    const discountPct = item.oldPrice > 0 && item.newPrice > 0
-        ? Math.round(((item.oldPrice - item.newPrice) / item.oldPrice) * 100)
-        : 0;
+    // ── İndirim rozeti: altın "kampanya çıkartması" (kartın sol üstüne biner) ──
     if (discountPct > 0) {
+        const bx = cardX + 60, by = cardY + 10, outerR = 140, innerR = 118;
         ctx.save();
-        ctx.translate(cardX + 30, cardY - 6);
-        ctx.rotate(-0.07);
-        const badgeText = `%${discountPct} İNDİRİM`;
-        ctx.font = '900 36px Arial';
-        const bw = ctx.measureText(badgeText).width + 60;
-        const grad = ctx.createLinearGradient(0, 0, bw, 0);
-        grad.addColorStop(0, '#FF9A3D');
-        grad.addColorStop(1, '#E24B4A');
-        ctx.fillStyle = grad;
-        drawRoundedRect(ctx, 0, 0, bw, 72, 36);
-        ctx.fillStyle = '#2a0d00';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(badgeText, 30, 38);
+        ctx.shadowColor = 'rgba(0,0,0,0.4)';
+        ctx.shadowBlur = 30;
+        ctx.shadowOffsetY = 10;
+        const burstGrad = ctx.createRadialGradient(bx, by, 10, bx, by, outerR);
+        burstGrad.addColorStop(0, '#FFE066');
+        burstGrad.addColorStop(1, '#FFB020');
+        ctx.fillStyle = burstGrad;
+        drawBurstPath(ctx, bx, by, 18, outerR, innerR);
+        ctx.fill();
         ctx.restore();
+
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+        ctx.lineWidth = 4;
+        drawBurstPath(ctx, bx, by, 18, outerR - 10, innerR - 10);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#6b1642';
+        ctx.font = '900 66px Arial';
+        ctx.fillText(`%${discountPct}`, bx, by - 18);
+        ctx.font = '800 28px Arial';
+        ctx.fillText('İNDİRİM', bx, by + 38);
+        ctx.textAlign = 'left';
     }
 
-    // Ürün başlığı
+    // ── Aciliyet etiketi (kartın altında, ortalı) ────────────────────────────
+    ctx.textAlign = 'center';
+    ctx.font = '800 30px Arial';
+    const urgencyText = '🔥 SINIRLI SÜRE — KAÇIRMA!';
+    const urgencyW = ctx.measureText(urgencyText).width + 56;
+    ctx.fillStyle = 'rgba(255,255,255,0.22)';
+    drawRoundedRect(ctx, CANVAS_W / 2 - urgencyW / 2, cardY + cardH + 40, urgencyW, 66, 33);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(urgencyText, CANVAS_W / 2, cardY + cardH + 73);
+
+    // ── Ürün başlığı (ortalı, gölgeli — okunabilirlik için) ──────────────────
     ctx.textBaseline = 'alphabetic';
-    ctx.fillStyle = '#f5f5fa';
-    ctx.font = '700 42px Arial';
-    const titleLines = wrapText(ctx, item.title, CANVAS_W - 180, 2);
-    let ty = cardY + cardH + 90;
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '800 46px Arial';
+    const titleLines = wrapText(ctx, item.title, CANVAS_W - 200, 2);
+    let ty = cardY + cardH + 195;
     titleLines.forEach(line => {
-        ctx.fillText(line, 90, ty);
-        ty += 56;
+        ctx.fillText(line, CANVAS_W / 2, ty);
+        ty += 60;
     });
+    ctx.shadowBlur = 0;
 
-    // Fiyat satırı
-    ty += 34;
-    ctx.font = '900 78px Arial';
-    ctx.fillStyle = '#FF8A3D';
+    // ── Fiyat satırı (ortalı grup: yeni fiyat + eski fiyat) ──────────────────
+    // NOT: textAlign yukarıdan 'center' kalmış olabilir — startX/oldX manuel
+    // sol-hizalı hesaplandığı için burada kesin 'left' olmalı, yoksa metnin
+    // yarısı canvas'ın dışına (görünmez) çizilir.
+    ctx.textAlign = 'left';
+    ty += 55;
     const newPriceText = `${Math.floor(item.newPrice).toLocaleString('tr-TR')} TL`;
-    ctx.fillText(newPriceText, 90, ty);
+    const oldPriceText = item.oldPrice > item.newPrice
+        ? `${Math.floor(item.oldPrice).toLocaleString('tr-TR')} TL` : '';
 
-    if (item.oldPrice > item.newPrice) {
-        const newPriceWidth = ctx.measureText(newPriceText).width;
-        const oldX = 90 + newPriceWidth + 34;
-        const oldText = `${Math.floor(item.oldPrice).toLocaleString('tr-TR')} TL`;
-        ctx.font = '500 42px Arial';
-        ctx.fillStyle = 'rgba(255,255,255,0.42)';
-        ctx.fillText(oldText, oldX, ty);
-        const oldWidth = ctx.measureText(oldText).width;
-        ctx.strokeStyle = 'rgba(255,255,255,0.42)';
+    ctx.font = '900 96px Arial';
+    const newW = ctx.measureText(newPriceText).width;
+    let oldW = 0;
+    if (oldPriceText) {
+        ctx.font = '600 46px Arial';
+        oldW = ctx.measureText(oldPriceText).width;
+    }
+    const gap = oldPriceText ? 30 : 0;
+    const totalW = newW + gap + oldW;
+    const startX = CANVAS_W / 2 - totalW / 2;
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(255,224,102,0.6)';
+    ctx.shadowBlur = 30;
+    ctx.font = '900 96px Arial';
+    ctx.fillStyle = '#FFE066';
+    ctx.fillText(newPriceText, startX, ty);
+    ctx.restore();
+
+    if (oldPriceText) {
+        const oldX = startX + newW + gap;
+        const oldY = ty - 14;
+        ctx.font = '600 46px Arial';
+        ctx.fillStyle = 'rgba(255,255,255,0.65)';
+        ctx.fillText(oldPriceText, oldX, oldY);
+        ctx.strokeStyle = 'rgba(255,255,255,0.65)';
         ctx.lineWidth = 3;
         ctx.beginPath();
-        ctx.moveTo(oldX, ty - 15);
-        ctx.lineTo(oldX + oldWidth, ty - 15);
+        ctx.moveTo(oldX, oldY - 16);
+        ctx.lineTo(oldX + oldW, oldY - 16);
         ctx.stroke();
     }
 
-    // Alt bant — çağrı metni
-    const footerH = 116;
-    ctx.fillStyle = 'rgba(255,122,26,0.14)';
-    ctx.fillRect(0, CANVAS_H - footerH, CANVAS_W, footerH);
-    ctx.font = '700 34px Arial';
-    ctx.fillStyle = '#FF9A56';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('📲  İNDİVA\'da fırsatı yakala', CANVAS_W / 2, CANVAS_H - footerH / 2);
+    // ── Tasarruf rozeti (yeşil, ortalı) ───────────────────────────────────────
+    const savings = item.oldPrice > item.newPrice ? Math.round(item.oldPrice - item.newPrice) : 0;
+    if (savings > 0) {
+        const saveText = `💚 ${savings.toLocaleString('tr-TR')} TL TASARRUF`;
+        ctx.font = '800 32px Arial';
+        const saveW = ctx.measureText(saveText).width + 56;
+        const saveY = ty + 60;
+        ctx.fillStyle = '#22c55e';
+        drawRoundedRect(ctx, CANVAS_W / 2 - saveW / 2, saveY, saveW, 70, 35);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(saveText, CANVAS_W / 2, saveY + 45);
+    }
+
+    // ── Alt CTA butonu (beyaz pil, koyu mor yazı) ─────────────────────────────
+    const ctaW = 780, ctaH = 110, ctaX = (CANVAS_W - ctaW) / 2, ctaY = CANVAS_H - 190;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.3)';
+    ctx.shadowBlur = 30;
+    ctx.shadowOffsetY = 10;
+    ctx.fillStyle = '#ffffff';
+    drawRoundedRect(ctx, ctaX, ctaY, ctaW, ctaH, 55);
+    ctx.restore();
+    ctx.font = '900 36px Arial';
+    ctx.fillStyle = '#4a1454';
+    ctx.fillText('İNDİVA\'DA FIRSATI YAKALA →', CANVAS_W / 2, ctaY + ctaH / 2 + 2);
     ctx.textAlign = 'left';
 }
 
@@ -279,7 +412,7 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
         <div className="bg-gray-800 rounded-2xl border border-gray-700 overflow-hidden flex flex-col md:flex-row">
             <div className="w-full md:w-72 shrink-0 bg-gray-900 flex items-center justify-center p-3">
                 {renderState === 'loading' && (
-                    <div className="aspect-[4/5] w-full flex items-center justify-center">
+                    <div className="aspect-[9/16] w-full flex items-center justify-center">
                         <div className="w-10 h-10 border-4 border-orange-500/30 border-t-orange-500 rounded-full animate-spin" />
                     </div>
                 )}
