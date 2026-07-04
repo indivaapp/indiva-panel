@@ -73,6 +73,63 @@ export function checkLinkFormat(url) {
 }
 
 /**
+ * Linki, kaynaktan bağımsız karşılaştırılabilir bir kimliğe indirger.
+ * Amaç: aynı ürün OnuAl'dan Amazon linkiyle, Cimri'den de aynı Amazon linkiyle
+ * gelirse ikisinin AYNI ürün olduğunu anlayabilmek (izleme parametreleri,
+ * slug farklılıkları vb. yüzünden ham URL karşılaştırması yetmez).
+ */
+export function normalizeLink(url) {
+    if (!url) return '';
+    try {
+        const u = new URL(url);
+        const host = u.hostname.replace(/^www\./, '').toLowerCase();
+
+        // Amazon: /dp/ASIN veya /gp/product/ASIN — slug/parametre farklı olsa da aynı ürün
+        if (host.includes('amazon.')) {
+            const m = u.pathname.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/i);
+            if (m) return `amazon:${m[1].toUpperCase()}`;
+        }
+        if (host.includes('trendyol.com')) {
+            const m = u.pathname.match(/-p-(\d+)/);
+            if (m) return `trendyol:${m[1]}`;
+        }
+        if (host.includes('hepsiburada.com')) {
+            const m = u.pathname.match(/-p-([a-z0-9]+)$/i);
+            if (m) return `hepsiburada:${m[1].toLowerCase()}`;
+        }
+        // Genel yedek: host + path, sorgu parametresiz (izleme param'ları elenmiş olur)
+        return `${host}${u.pathname}`.replace(/\/$/, '').toLowerCase();
+    } catch {
+        return String(url).toLowerCase();
+    }
+}
+
+/**
+ * Verilen normalize linklerden hangileri Firestore'da ZATEN var — kaynaktan
+ * bağımsız (submittedBy filtresi yok). Batch 'in' sorgusu (max 30/istek).
+ */
+export async function checkExistingLinks(db, normalizedLinks) {
+    const existing = new Set();
+    const unique = [...new Set(normalizedLinks.filter(Boolean))];
+    for (let i = 0; i < unique.length; i += 30) {
+        const chunk = unique.slice(i, i + 30);
+        try {
+            const snap = await db.collection('discounts')
+                .where('normalizedLink', 'in', chunk)
+                .select('normalizedLink')
+                .get();
+            snap.docs.forEach(d => {
+                const v = d.data()?.normalizedLink;
+                if (v) existing.add(v);
+            });
+        } catch (e) {
+            console.warn(`   ⚠️ [QualityGate] Mükerrer kontrolü hatası: ${e.message}`);
+        }
+    }
+    return existing;
+}
+
+/**
  * Adayları TEK Gemini isteğinde toplu puanla (1-10). Token tasarrufu için
  * her aday için ayrı istek ATILMAZ.
  */
@@ -125,16 +182,22 @@ SADECE JSON array döndür, her id için sırayla:
 }
 
 /**
- * Ana orkestratör. Ucuz kontroller önce (fiyat mantığı, link biçimi) —
- * bunlardan geçemeyenler AI'ya hiç gitmez. Hayatta kalanlar TEK istekte
- * AI'dan puan alır.
+ * Ana orkestratör. Ucuz kontroller önce (fiyat mantığı, link biçimi, kaynaklar
+ * arası mükerrer) — bunlardan geçemeyenler AI'ya hiç gitmez. Hayatta kalanlar
+ * TEK istekte AI'dan puan alır.
+ *
+ * NOT (Cimri): Cimri adayları bu aşamada henüz cimri.com linkine sahiptir
+ * (gerçek mağaza linki sadece yayın anında resolveCimriStoreLink ile çözülür).
+ * Yani buradaki dedup, Cimri'nin GERÇEK hedefini henüz yakalayamaz — o yüzden
+ * scrape.js'in publishBatch'i, Cimri linkini çözdükten SONRA checkExistingLinks
+ * ile İKİNCİ bir kontrol yapar (bkz. scrape.js).
  *
  * @param {Array<{id, title, oldPrice, newPrice, category, link}>} candidates
- * @param {{apiKey?: string, threshold?: number}} options
- * @returns {Promise<Array<{id, publish: boolean, score?, reason}>>}
+ * @param {{apiKey?: string, threshold?: number, db?: object}} options
+ * @returns {Promise<Array<{id, publish: boolean, score?, reason, normalizedLink?: string}>>}
  */
 export async function runQualityGate(candidates, options = {}) {
-    const { apiKey, threshold = DEFAULT_THRESHOLD } = options;
+    const { apiKey, threshold = DEFAULT_THRESHOLD, db } = options;
     const results = [];
     const survivors = [];
 
@@ -149,19 +212,35 @@ export async function runQualityGate(candidates, options = {}) {
             results.push({ id: c.id, publish: false, reason: `Link kontrolü: ${linkCheck.reason}` });
             continue;
         }
-        survivors.push(c);
+        survivors.push({ ...c, normalizedLink: normalizeLink(c.link) });
     }
 
     if (survivors.length === 0) return results;
 
-    const scores = await scoreDealsBatch(apiKey, survivors);
+    let dupSet = new Set();
+    if (db) {
+        dupSet = await checkExistingLinks(db, survivors.map(c => c.normalizedLink));
+    }
+    const afterDedup = [];
     survivors.forEach(c => {
+        if (dupSet.has(c.normalizedLink)) {
+            results.push({ id: c.id, publish: false, reason: 'Mükerrer: bu ürün başka bir kaynaktan zaten yayında' });
+            return;
+        }
+        afterDedup.push(c);
+    });
+
+    if (afterDedup.length === 0) return results;
+
+    const scores = await scoreDealsBatch(apiKey, afterDedup);
+    afterDedup.forEach(c => {
         const s = scores.find(x => x.id === c.id) || { score: DEFAULT_SCORE_ON_SKIP, reason: 'skor bulunamadı' };
         results.push({
             id: c.id,
             publish: s.score >= threshold,
             score: s.score,
             reason: s.reason,
+            normalizedLink: c.normalizedLink,
         });
     });
 

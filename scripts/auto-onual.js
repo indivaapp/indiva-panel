@@ -808,7 +808,7 @@ async function main() {
             category: detectCategory(p.details.title || p.product.title),
             link: p.storeLink,
         }));
-        const gateResults = await runQualityGate(gateCandidates, { apiKey: aiKey, threshold: 6 });
+        const gateResults = await runQualityGate(gateCandidates, { apiKey: aiKey, threshold: 6, db });
         const gateMap = new Map(gateResults.map(r => [r.id, r]));
 
         console.log(`\n🛡️  Kalite kapısı: ${gateResults.filter(r => r.publish).length}/${gateResults.length} onaylandı\n`);
@@ -862,6 +862,7 @@ async function main() {
                     expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000),
                     priceHistory: [{ price: newPrice, at: Timestamp.now() }],
                     qualityScore: verdict.score,
+                    normalizedLink: verdict.normalizedLink || '',
                 };
 
                 await docRef.set(discountData);
