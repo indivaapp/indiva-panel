@@ -17,6 +17,7 @@ import * as path from 'path';
 import { fetchWithFallback, resolveUrl, parseDeals } from './scraperService.js';
 import { sendAdminAlert } from './alertService.js';
 import { runQualityGate } from './qualityGate.js';
+import { maybeNotifyHighScoreDeal } from './notifyGate.js';
 
 
 
@@ -867,6 +868,15 @@ async function main() {
 
                 await docRef.set(discountData);
                 console.log(`   🔥 Firebase'e kaydedildi ✅ (ID: ${docId}) - Kalite: ${verdict.score}/10, FOMO: ${discountData.aiFomoScore}`);
+
+                await maybeNotifyHighScoreDeal(db, getMessaging(), {
+                    docId,
+                    title: discountData.title,
+                    imageUrl: discountData.imageUrl,
+                    score: verdict.score,
+                    newPrice,
+                    oldPrice,
+                }).catch(() => {});
 
                 idCache.ids[docId] = true;
                 successCount++;
