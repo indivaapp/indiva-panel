@@ -117,13 +117,15 @@ function loadAppIcon(): Promise<HTMLImageElement> {
 
 interface CroppedLogo { img: HTMLImageElement; sx: number; sy: number; sw: number; sh: number }
 
-// Google Play rozeti kaynak dosyası beyaz zeminli bir kare — etrafındaki boşluğu
+// Google Play rozeti kaynak dosyası (PNG, alfa kanallı) — etrafındaki boşluğu
 // otomatik kırpıp (piksel taraması) sadece üçgen+"Google Play" yazısını
-// bırakıyoruz, yoksa rozet küçük görünür. Bir kere hesaplayıp önbelleğe alıyoruz.
+// bırakıyoruz, yoksa rozet küçük görünür. Hem şeffaf hem beyaz-zeminli
+// kaynaklarla çalışsın diye alfa VE beyazlık birlikte kontrol ediliyor.
+// Bir kere hesaplayıp önbelleğe alıyoruz.
 let playStoreLogoPromise: Promise<CroppedLogo> | null = null;
 function loadPlayStoreLogo(): Promise<CroppedLogo> {
     if (!playStoreLogoPromise) {
-        playStoreLogoPromise = loadImage('/google-play-logo.jpg').then((img) => {
+        playStoreLogoPromise = loadImage('/google-play-logo.png').then((img) => {
             const off = document.createElement('canvas');
             off.width = img.width;
             off.height = img.height;
@@ -134,7 +136,9 @@ function loadPlayStoreLogo(): Promise<CroppedLogo> {
             for (let y = 0; y < img.height; y += 2) {
                 for (let x = 0; x < img.width; x += 2) {
                     const i = (y * img.width + x) * 4;
-                    if (data[i] < 245 || data[i + 1] < 245 || data[i + 2] < 245) {
+                    const isTransparent = data[i + 3] < 10;
+                    const isNearWhite = data[i] > 245 && data[i + 1] > 245 && data[i + 2] > 245;
+                    if (!isTransparent && !isNearWhite) {
                         if (x < minX) minX = x;
                         if (x > maxX) maxX = x;
                         if (y < minY) minY = y;
