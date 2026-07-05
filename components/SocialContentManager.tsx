@@ -107,6 +107,14 @@ function loadImage(src: string): Promise<HTMLImageElement> {
     });
 }
 
+// İNDİVA uygulama ikonu (alışveriş sepeti) — statik dosya, tüm kartlarda aynı,
+// bir kere yükleyip önbelleğe alıyoruz.
+let appIconPromise: Promise<HTMLImageElement> | null = null;
+function loadAppIcon(): Promise<HTMLImageElement> {
+    if (!appIconPromise) appIconPromise = loadImage('/indiva-app-icon.png');
+    return appIconPromise;
+}
+
 // ─── Animasyon yardımcıları ─────────────────────────────────────────────────
 // progress: 0 (animasyon başı) → 1 (durağan/final görünüm, statik görsel de bunu kullanır)
 
@@ -236,6 +244,10 @@ async function renderDealImage(
     ];
     sparkles.forEach(([x, y, s, c]) => drawSparkle(ctx, x, y, s, c));
 
+    // İNDİVA uygulama ikonu (alışveriş sepeti) — sağ üstteki wordmark'ın yanına
+    let appIconImg: HTMLImageElement | null = null;
+    try { appIconImg = await loadAppIcon(); } catch { appIconImg = null; }
+
     // ── Üst satır: kategori + İNDİVA (yukarıdan kayarak belirir) ─────────────
     withSlideFade(ctx, (1 - headerP) * -20, headerP, () => {
         ctx.textBaseline = 'middle';
@@ -251,7 +263,21 @@ async function renderDealImage(
         ctx.font = '900 34px Arial';
         ctx.fillStyle = '#ffffff';
         ctx.textAlign = 'right';
-        ctx.fillText('✨ İNDİVA', CANVAS_W - 64, 100);
+        const indivaText = 'İNDİVA';
+        const indivaTextW = ctx.measureText(indivaText).width;
+        const iconSize = 44, iconGap = 12;
+        const textRightX = CANVAS_W - 64;
+        if (appIconImg) {
+            const iconX = textRightX - indivaTextW - iconGap - iconSize;
+            const iconY = 100 - iconSize / 2;
+            ctx.save();
+            ctx.fillStyle = '#ffffff';
+            drawRoundedRect(ctx, iconX, iconY, iconSize, iconSize, 12);
+            ctx.clip();
+            ctx.drawImage(appIconImg, iconX, iconY, iconSize, iconSize);
+            ctx.restore();
+        }
+        ctx.fillText(indivaText, textRightX, 100);
         ctx.textAlign = 'left';
     });
 
@@ -438,7 +464,7 @@ async function renderDealImage(
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.font = '800 30px Arial';
-        const appText = '📲 İNDİVA\'yı Google Play\'de Ücretsiz İndir';
+        const appText = '📲 Google Play\'den İndir';
         const appW = Math.min(CANVAS_W - 120, ctx.measureText(appText).width + 70);
         ctx.save();
         ctx.shadowColor = 'rgba(0,0,0,0.35)';
@@ -470,7 +496,7 @@ async function renderDealImage(
         ctx.fillStyle = '#4a1454';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('İNDİVA\'DA FIRSATI YAKALA >', CANVAS_W / 2, ctaY + ctaH / 2 + 2);
+        ctx.fillText('İNDİVA ile Fırsatları Kaçırma!', CANVAS_W / 2, ctaY + ctaH / 2 + 2);
         ctx.textAlign = 'left';
         ctx.textBaseline = 'alphabetic';
     });
