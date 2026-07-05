@@ -499,6 +499,31 @@ export const getPendingSocialContentCount = async (): Promise<number> => {
     return items.length;
 };
 
+// Admin panelden elle seçilen bir fırsat için, puan eşiği beklemeden anında
+// içerik kuyruğuna ekler. Caption şablon tabanlıdır (AI çağrısı yok — anında
+// sonuç, tarayıcıda API anahtarı ifşa etme derdi yok).
+export const addManualSocialContent = async (discount: Discount): Promise<void> => {
+    const discountPct = discount.oldPrice > 0 && discount.newPrice > 0
+        ? Math.round(((discount.oldPrice - discount.newPrice) / discount.oldPrice) * 100)
+        : 0;
+    const caption = `🔥 %${discountPct} indirim: ${discount.title}\n${Math.floor(discount.newPrice)} TL — ${discount.brand}\n\nFırsatı kaçırmadan İNDİVA'dan yakala! 📲\n\n#indirim #firsat #kampanya #indivaapp`;
+
+    await addDoc(collection(db, 'social_content_queue'), {
+        discountId: discount.id,
+        title: discount.title,
+        imageUrl: discount.imageUrl,
+        category: discount.category || '',
+        storeName: discount.brand || '',
+        newPrice: discount.newPrice,
+        oldPrice: discount.oldPrice,
+        score: 10,
+        caption,
+        source: 'manual',
+        status: 'pending',
+        createdAt: serverTimestamp(),
+    });
+};
+
 
 // --- Notifications (Instant) ---
 

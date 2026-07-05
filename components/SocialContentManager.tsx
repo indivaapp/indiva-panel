@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { getSocialContentQueue, markSocialContentPosted } from '../services/firebase';
+import { getSocialContentQueue, markSocialContentPosted, getDiscounts, addManualSocialContent } from '../services/firebase';
 import { uploadImageFromUrl } from '../services/dealFinder';
 import { Clipboard } from '@capacitor/clipboard';
-import type { SocialContentItem } from '../types';
+import type { SocialContentItem, Discount } from '../types';
 
 interface SocialContentManagerProps {
     isAdmin: boolean;
@@ -638,7 +638,7 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
             <div className="flex-1 p-5 flex flex-col gap-3">
                 <div className="flex items-center justify-between gap-2">
                     <span className="bg-orange-500/20 text-orange-300 text-xs font-bold px-2.5 py-1 rounded-full">
-                        Kalite Puanı: {item.score}/10
+                        {item.source === 'manual' ? '✋ Manuel Seçim' : `Kalite Puanı: ${item.score}/10`}
                     </span>
                     <span className="text-gray-500 text-xs">{item.storeName}</span>
                 </div>
@@ -715,6 +715,12 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    const [pickerOpen, setPickerOpen] = useState(false);
+    const [allDiscounts, setAllDiscounts] = useState<Discount[]>([]);
+    const [discountsLoading, setDiscountsLoading] = useState(false);
+    const [pickerQuery, setPickerQuery] = useState('');
+    const [creatingId, setCreatingId] = useState<string | null>(null);
+
     const fetchItems = useCallback(async () => {
         setIsLoading(true);
         setError(null);
@@ -734,6 +740,41 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         setItems(prev => prev.filter(i => i.id !== id));
     };
 
+    const togglePicker = async () => {
+        const next = !pickerOpen;
+        setPickerOpen(next);
+        if (next && allDiscounts.length === 0) {
+            setDiscountsLoading(true);
+            try {
+                const data = await getDiscounts();
+                setAllDiscounts(data.filter(d => !d.isAd));
+            } catch {
+                // sessizce yok say — arama kutusu boş kalır, kullanıcı tekrar açabilir
+            } finally {
+                setDiscountsLoading(false);
+            }
+        }
+    };
+
+    const filteredDiscounts = (pickerQuery.trim()
+        ? allDiscounts.filter(d => d.title.toLowerCase().includes(pickerQuery.trim().toLowerCase()))
+        : allDiscounts
+    ).slice(0, 30);
+
+    const handleManualCreate = async (discount: Discount) => {
+        setCreatingId(discount.id);
+        try {
+            await addManualSocialContent(discount);
+            await fetchItems();
+            setPickerOpen(false);
+            setPickerQuery('');
+        } catch {
+            // hata olursa sessizce bırak — kullanıcı tekrar deneyebilir
+        } finally {
+            setCreatingId(null);
+        }
+    };
+
     return (
         <div className="max-w-3xl mx-auto p-4 md:p-6">
             <div className="flex items-center justify-between mb-6">
@@ -749,6 +790,62 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                 >
                     ↻ Yenile
                 </button>
+            </div>
+
+            <div className="mb-6 bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
+                <button
+                    onClick={togglePicker}
+                    className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-gray-750 transition-colors"
+                >
+                    <span className="text-white font-semibold text-sm">➕ İstediğim Fırsatı Seçip İçerik Üret</span>
+                    <span className="text-gray-400 text-lg">{pickerOpen ? '−' : '+'}</span>
+                </button>
+                {pickerOpen && (
+                    <div className="px-5 pb-5">
+                        <input
+                            type="text"
+                            value={pickerQuery}
+                            onChange={(e) => setPickerQuery(e.target.value)}
+                            placeholder="Ürün adıyla ara…"
+                            className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-orange-500 mb-3"
+                        />
+                        {discountsLoading && (
+                            <p className="text-gray-500 text-sm text-center py-6">Fırsatlar yükleniyor…</p>
+                        )}
+                        {!discountsLoading && filteredDiscounts.length === 0 && (
+                            <p className="text-gray-500 text-sm text-center py-6">Eşleşen fırsat bulunamadı.</p>
+                        )}
+                        {!discountsLoading && (
+                            <div className="max-h-80 overflow-y-auto space-y-2">
+                                {filteredDiscounts.map(d => (
+                                    <div
+                                        key={d.id}
+                                        className="flex items-center gap-3 bg-gray-900 rounded-xl p-2.5"
+                                    >
+                                        <img
+                                            src={d.imageUrl}
+                                            alt=""
+                                            className="w-12 h-12 rounded-lg object-contain bg-white shrink-0"
+                                        />
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-white text-xs font-medium truncate">{d.title}</p>
+                                            <p className="text-gray-500 text-[11px]">
+                                                {Math.floor(d.newPrice).toLocaleString('tr-TR')} TL · {d.brand}
+                                            </p>
+                                        </div>
+                                        <button
+                                            onClick={() => handleManualCreate(d)}
+                                            disabled={creatingId === d.id}
+                                            className="shrink-0 text-xs font-bold px-3 py-2 rounded-lg bg-gradient-to-r from-orange-600 to-red-600 disabled:opacity-40 text-white transition-all active:scale-95"
+                                        >
+                                            {creatingId === d.id ? 'Oluşturuluyor…' : 'Oluştur'}
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
 
             {isLoading && (

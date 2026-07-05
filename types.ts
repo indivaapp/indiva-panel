@@ -116,6 +116,8 @@ export interface AdRequest {
 
 // Otomatik pipeline'ların (auto-onual, trendyol-scraper) yüksek kalite puanlı
 // (9/10+) fırsatlar için kuyruğa attığı, Instagram'a hazır içerik önerisi.
+// source: 'auto' otomatik kalite kapısından geldi; 'manual' admin panelden
+// elle seçip ürettiği bir içerik (puan eşiği aranmaz).
 export interface SocialContentItem {
     id: string;
     discountId: string;
@@ -127,6 +129,7 @@ export interface SocialContentItem {
     oldPrice: number;
     score: number;
     caption: string;
+    source?: 'auto' | 'manual';
     status: 'pending' | 'posted';
     createdAt: FirestoreTimestamp;
 }
