@@ -124,9 +124,16 @@ function initFirebase() {
 }
 
 // ─── AI Config ───────────────────────────────────────────────────────────────
-// AI_ENABLED=true olmadığı sürece Gemini çağrısı yapılmaz, keyword tabanlı
-// fallback kullanılır. İleride AI açmak için GitHub Actions secret olarak
+// AI_ENABLED=true olmadığı sürece AÇIKLAMA/BAŞLIK üretimi (generateAISentiments)
+// çalışmaz, keyword tabanlı fallback kullanılır — bu isteğe bağlı, maliyetli bir
+// zenginleştirme adımı. İleride açmak için GitHub Actions secret olarak
 // AI_ENABLED=true eklemek yeterlidir.
+//
+// ÖNEMLİ: Kalite kapısı / bildirim / sosyal içerik puanlaması (getQualityGateKey)
+// BUNDAN AYRIDIR ve AI_ENABLED'a bağlı DEĞİLDİR — bunlar artık pipeline'ın temel,
+// hep-açık bir parçası. Daha önce ikisi aynı anahtarı (getGeminiKey) paylaştığı
+// için AI_ENABLED kapalıyken kalite puanlaması da sessizce devre dışı kalıyordu
+// ve hiçbir ürün 9/10 eşiğine ulaşamıyordu — bu yüzden ayrıldı.
 
 function getGeminiKey() {
     if (process.env.AI_ENABLED !== 'true') return null;
@@ -136,6 +143,10 @@ function getGeminiKey() {
         return null;
     }
     return key;
+}
+
+function getQualityGateKey() {
+    return process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || null;
 }
 
 
@@ -669,10 +680,14 @@ async function main() {
     console.log('🏗️  Servisler başlatılıyor...');
     const db = initFirebase();
     const aiKey = getGeminiKey();
+    const qualityGateKey = getQualityGateKey();
     if (aiKey) {
-        console.log('✅ Servisler hazır. (AI: AÇIK)');
+        console.log('✅ Servisler hazır. (AI açıklama üretimi: AÇIK)');
     } else {
-        console.log('✅ Servisler hazır. (AI: KAPALI — keyword tabanlı kategori kullanılıyor)');
+        console.log('✅ Servisler hazır. (AI açıklama üretimi: KAPALI — keyword tabanlı kategori kullanılıyor)');
+    }
+    if (!qualityGateKey) {
+        console.warn('⚠️  GEMINI_API_KEY yok — kalite kapısı/bildirim/sosyal içerik puanlaması devre dışı (varsayılan 6/10 ile geçecek).');
     }
     // 1. Ürün listesini çek (onual.com/fiyat/)
     const allProducts = await fetchProductList();
@@ -810,7 +825,7 @@ async function main() {
             category: detectCategory(p.details.title || p.product.title),
             link: p.storeLink,
         }));
-        const gateResults = await runQualityGate(gateCandidates, { apiKey: aiKey, threshold: 6, db });
+        const gateResults = await runQualityGate(gateCandidates, { apiKey: qualityGateKey, threshold: 6, db });
         const gateMap = new Map(gateResults.map(r => [r.id, r]));
 
         console.log(`\n🛡️  Kalite kapısı: ${gateResults.filter(r => r.publish).length}/${gateResults.length} onaylandı\n`);
@@ -879,7 +894,7 @@ async function main() {
                     oldPrice,
                 }).catch(() => {});
 
-                await maybeQueueSocialContent(db, aiKey, {
+                await maybeQueueSocialContent(db, qualityGateKey, {
                     discountId: docId,
                     title: discountData.title,
                     imageUrl: discountData.imageUrl,
