@@ -194,6 +194,37 @@ async function renderDealImage(
     ctx.beginPath(); ctx.arc(CANVAS_W - 120, CANVAS_H - 420, 220, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
 
+    // ── İndirim çılgınlığı: arka planda dağınık % işaretleri (fırsat görseli olduğu ilk bakışta belli olsun) ──
+    const bgMarks: [number, number, number, number, number, string][] = [
+        // x, y, rotationDeg, fontSize, opacity, text
+        [140, 155, -18, 92, 0.32, '%'],
+        [940, 110, 16, 78, 0.30, '%50'],
+        [1010, 400, -12, 60, 0.24, '%'],
+        [50, 370, 22, 74, 0.28, '%70'],
+        [530, 45, -8, 56, 0.20, '%'],
+        [990, 920, -15, 84, 0.26, '%30'],
+        [70, 1180, 18, 70, 0.26, '%'],
+        [1025, 1580, -20, 80, 0.30, '%'],
+        [60, 1690, 14, 68, 0.26, '%40'],
+        [310, 1875, 10, 52, 0.18, '%'],
+        [790, 1885, -12, 50, 0.18, '%20'],
+        [1000, 1180, 20, 58, 0.22, '%'],
+    ];
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    bgMarks.forEach(([x, y, rot, size, alpha, text], i) => {
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(x, y);
+        ctx.rotate(rot * Math.PI / 180);
+        ctx.font = `900 ${size}px Arial`;
+        ctx.fillStyle = i % 2 === 0 ? '#FFD966' : '#ffffff';
+        ctx.fillText(text, 0, 0);
+        ctx.restore();
+    });
+    ctx.restore();
+
     // Parıltı dekorları
     const sparkles: [number, number, number, string][] = [
         [90, 400, 16, 'rgba(255,255,255,0.55)'],
