@@ -129,6 +129,11 @@ function segProgress(overall: number, start: number, end: number): number {
     if (overall >= end) return 1;
     return (overall - start) / (end - start);
 }
+// Elemanlar belirdikten sonra tamamen durgun kalmasın diye hafif, sürekli
+// bir salınım — progress'e bağlı (video boyunca yumuşak devam eder).
+function idleWave(progress: number, freq: number, phase = 0): number {
+    return Math.sin(progress * Math.PI * 2 * freq + phase);
+}
 function withPop(ctx: CanvasRenderingContext2D, cx: number, cy: number, scale: number, alpha: number, draw: () => void) {
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -257,18 +262,18 @@ async function renderDealImage(
     // ── Üst sağ köşe: sadece logo (yazısız, küçük bir marka imzası) ──────────
     withSlideFade(ctx, (1 - headerP) * -20, headerP, () => {
         if (appIconImg) {
-            const iconSize = 56;
+            const iconSize = 76;
             const iconX = CANVAS_W - 64 - iconSize;
-            const iconY = 70;
+            const iconY = 62;
             ctx.save();
             ctx.shadowColor = 'rgba(0,0,0,0.3)';
-            ctx.shadowBlur = 16;
-            ctx.shadowOffsetY = 4;
+            ctx.shadowBlur = 18;
+            ctx.shadowOffsetY = 5;
             ctx.fillStyle = '#ffffff';
-            drawRoundedRect(ctx, iconX, iconY, iconSize, iconSize, 16);
+            drawRoundedRect(ctx, iconX, iconY, iconSize, iconSize, 20);
             ctx.restore();
             ctx.save();
-            drawRoundedRect(ctx, iconX, iconY, iconSize, iconSize, 16);
+            drawRoundedRect(ctx, iconX, iconY, iconSize, iconSize, 20);
             ctx.clip();
             ctx.drawImage(appIconImg, iconX, iconY, iconSize, iconSize);
             ctx.restore();
@@ -340,8 +345,8 @@ async function renderDealImage(
     // ── İNDİVA marka rozeti: ürün görselinin ÜSTÜNDE, akılda kalıcı olsun ────
     // "İNDİVA'DA İNDİRİM VAR!" algısı için wordmark + sloganı burada, fotoğrafın
     // üstünde büyük gösteriyoruz (sağ üstteki köşe artık sade logo işareti).
-    withPop(ctx, cardX + cardW - 175, cardY + 105, burstP, burstP, () => {
-        const bx2 = cardX + cardW - 175, by2 = cardY + 105;
+    withPop(ctx, cardX + cardW - 175, cardY + 72, burstP, burstP, () => {
+        const bx2 = cardX + cardW - 175, by2 = cardY + 72;
         ctx.font = '900 42px Arial';
         const line1 = 'İNDİVA';
         const line1W = ctx.measureText(line1).width;
@@ -359,7 +364,7 @@ async function renderDealImage(
         drawRoundedRect(ctx, bx2 - pillW / 2, by2 - pillH / 2, pillW, pillH, 24);
         ctx.restore();
         ctx.save();
-        ctx.strokeStyle = 'rgba(255,217,102,0.7)';
+        ctx.strokeStyle = 'rgba(255,122,26,0.9)';
         ctx.lineWidth = 3;
         strokeRoundedRect(ctx, bx2 - pillW / 2 + 2, by2 - pillH / 2 + 2, pillW - 4, pillH - 4, 22);
         ctx.restore();
@@ -369,7 +374,7 @@ async function renderDealImage(
         ctx.fillStyle = '#ffffff';
         ctx.font = '900 42px Arial';
         ctx.fillText(line1, bx2, by2 - 20);
-        ctx.fillStyle = '#FFD966';
+        ctx.fillStyle = '#FF8A3D';
         ctx.font = '800 22px Arial';
         ctx.fillText(line2, bx2, by2 + 22);
         ctx.textAlign = 'left';
@@ -379,7 +384,9 @@ async function renderDealImage(
     // ── İndirim rozeti: altın "kampanya çıkartması" (patlarcasına büyür) ─────
     if (discountPct > 0) {
         const bx = cardX + 60, by = cardY + 10, outerR = 140, innerR = 118;
-        withPop(ctx, bx, by, burstP, burstP, () => {
+        const burstSettle = segProgress(progress, 0.220, 0.260);
+        const burstIdle = 1 + 0.025 * idleWave(progress, 5.5) * burstSettle;
+        withPop(ctx, bx, by, burstP * burstIdle, burstP, () => {
             ctx.save();
             ctx.shadowColor = 'rgba(0,0,0,0.4)';
             ctx.shadowBlur = 30;
@@ -411,7 +418,9 @@ async function renderDealImage(
     }
 
     // ── Aciliyet etiketi (kartın altında, aşağıdan kayarak belirir) ──────────
-    withSlideFade(ctx, (1 - urgencyP) * 20, urgencyP, () => {
+    const urgencySettle = segProgress(progress, 0.260, 0.300);
+    const urgencyIdleY = 3 * idleWave(progress, 5, 0.8) * urgencySettle;
+    withSlideFade(ctx, (1 - urgencyP) * 20 + urgencyIdleY, urgencyP, () => {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.font = '800 30px Arial';
@@ -426,7 +435,9 @@ async function renderDealImage(
 
     // ── Ürün başlığı (ortalı, gölgeli, aşağıdan kayarak belirir) ─────────────
     let ty = cardY + cardH + 195;
-    withSlideFade(ctx, (1 - titleP) * 15, titleP, () => {
+    const titleSettle = segProgress(progress, 0.300, 0.340);
+    const titleIdleY = 3 * idleWave(progress, 4.5, 0.4) * titleSettle;
+    withSlideFade(ctx, (1 - titleP) * 15 + titleIdleY, titleP, () => {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'alphabetic';
         ctx.shadowColor = 'rgba(0,0,0,0.35)';
@@ -466,7 +477,9 @@ async function renderDealImage(
     const totalW = newW + gap + oldW;
     const startX = CANVAS_W / 2 - totalW / 2;
 
-    withPop(ctx, CANVAS_W / 2, ty - 25, 0.7 + 0.3 * priceP, priceP, () => {
+    const priceSettle = segProgress(progress, 0.360, 0.400);
+    const priceIdle = 1 + 0.02 * idleWave(progress, 6, 1.1) * priceSettle;
+    withPop(ctx, CANVAS_W / 2, ty - 25, (0.7 + 0.3 * priceP) * priceIdle, priceP, () => {
         // NOT: textAlign burada kesin 'left' olmalı — startX/oldX manuel
         // sol-hizalı hesaplandı, yoksa metnin yarısı canvas dışına çizilir.
         ctx.textAlign = 'left';
@@ -497,7 +510,9 @@ async function renderDealImage(
     const savings = item.oldPrice > item.newPrice ? Math.round(item.oldPrice - item.newPrice) : 0;
     const saveY = ty + 60;
     if (savings > 0) {
-        withPop(ctx, CANVAS_W / 2, saveY + 35, savingsP, savingsP, () => {
+        const savingsSettle = segProgress(progress, 0.410, 0.450);
+        const savingsIdle = 1 + 0.03 * idleWave(progress, 5, 2.2) * savingsSettle;
+        withPop(ctx, CANVAS_W / 2, saveY + 35, savingsP * savingsIdle, savingsP, () => {
             ctx.textAlign = 'center';
             const saveText = `💚 ${savings.toLocaleString('tr-TR')} TL TASARRUF`;
             ctx.font = '800 32px Arial';
@@ -541,7 +556,9 @@ async function renderDealImage(
 
     // ── Alt CTA butonu (beyaz pil, koyu mor yazı, zıplayarak büyür) ──────────
     const ctaW = 780, ctaH = 110, ctaX = (CANVAS_W - ctaW) / 2, ctaY = CANVAS_H - 190;
-    withPop(ctx, CANVAS_W / 2, ctaY + ctaH / 2, ctaP, ctaP, () => {
+    const ctaSettle = segProgress(progress, 0.470, 0.510);
+    const ctaIdle = 1 + 0.015 * idleWave(progress, 4, 3.0) * ctaSettle;
+    withPop(ctx, CANVAS_W / 2, ctaY + ctaH / 2, ctaP * ctaIdle, ctaP, () => {
         ctx.save();
         ctx.shadowColor = 'rgba(0,0,0,0.3)';
         ctx.shadowBlur = 30;
@@ -633,6 +650,10 @@ async function renderPromoFrame(canvas: HTMLCanvasElement, appIconImg: HTMLImage
 
 // ── Sayfa çevirme geçişi: fırsat sahnesi yatayda katlanıp promo sayfasına
 // döner (klasik "kart çevirme" efekti — cos(açı) ile yatay ölçek) ───────────
+function easeInOutCubic(t: number): number {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
 async function renderFlipFrame(
     canvas: HTMLCanvasElement,
     item: SocialContentItem,
@@ -645,18 +666,31 @@ async function renderFlipFrame(
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
-    const rawCos = Math.cos(t * Math.PI);
+    // Ham lineer zaman yerine yumuşak giriş/çıkış — dönüş, katlanma noktasına
+    // (dik açı) doğru hızlanıp diğer tarafta yavaşlayarak "gerçek" hissettirir.
+    const angle = easeInOutCubic(t) * Math.PI;
+    const rawCos = Math.cos(angle);
     const showingDeal = rawCos > 0;
     const scaleX = Math.max(0.001, Math.abs(rawCos));
+    // Düz bir kağıt yerine hafif kabaran bir yüzey gibi dönsün diye ufak dikey
+    // esneme — sayfanın gerçekten 3 boyutlu döndüğü hissini güçlendirir.
+    const bulge = 1 + 0.05 * Math.sin(angle);
+    // Katlanma anına (yandan görünen, scaleX≈0) yaklaştıkça koyulaşan gölge —
+    // düz bir ölçekleme animasyonunu "dönen bir yüzey" gibi gösteren asıl ipucu.
+    const foldShade = Math.sin(angle);
 
     ctx.save();
-    ctx.translate(CANVAS_W / 2, 0);
-    ctx.scale(scaleX, 1);
-    ctx.translate(-CANVAS_W / 2, 0);
+    ctx.translate(CANVAS_W / 2, CANVAS_H / 2);
+    ctx.scale(scaleX, bulge);
+    ctx.translate(-CANVAS_W / 2, -CANVAS_H / 2);
     if (showingDeal) {
         await renderDealImage(canvas, item, null, 1, cachedImg);
     } else {
         await renderPromoFrame(canvas, appIconImg);
+    }
+    if (foldShade > 0.02) {
+        ctx.fillStyle = `rgba(0,0,0,${Math.min(0.65, foldShade * 0.7)})`;
+        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
     }
     ctx.restore();
 }
