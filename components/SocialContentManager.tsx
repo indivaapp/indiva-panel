@@ -115,6 +115,43 @@ function loadAppIcon(): Promise<HTMLImageElement> {
     return appIconPromise;
 }
 
+interface CroppedLogo { img: HTMLImageElement; sx: number; sy: number; sw: number; sh: number }
+
+// Google Play rozeti kaynak dosyası beyaz zeminli bir kare — etrafındaki boşluğu
+// otomatik kırpıp (piksel taraması) sadece üçgen+"Google Play" yazısını
+// bırakıyoruz, yoksa rozet küçük görünür. Bir kere hesaplayıp önbelleğe alıyoruz.
+let playStoreLogoPromise: Promise<CroppedLogo> | null = null;
+function loadPlayStoreLogo(): Promise<CroppedLogo> {
+    if (!playStoreLogoPromise) {
+        playStoreLogoPromise = loadImage('/google-play-logo.jpg').then((img) => {
+            const off = document.createElement('canvas');
+            off.width = img.width;
+            off.height = img.height;
+            const octx = off.getContext('2d')!;
+            octx.drawImage(img, 0, 0);
+            const { data } = octx.getImageData(0, 0, img.width, img.height);
+            let minX = img.width, minY = img.height, maxX = 0, maxY = 0;
+            for (let y = 0; y < img.height; y += 2) {
+                for (let x = 0; x < img.width; x += 2) {
+                    const i = (y * img.width + x) * 4;
+                    if (data[i] < 245 || data[i + 1] < 245 || data[i + 2] < 245) {
+                        if (x < minX) minX = x;
+                        if (x > maxX) maxX = x;
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
+                    }
+                }
+            }
+            const pad = 12;
+            const sx = Math.max(0, minX - pad), sy = Math.max(0, minY - pad);
+            const sw = Math.min(img.width, maxX + pad) - sx;
+            const sh = Math.min(img.height, maxY + pad) - sy;
+            return { img, sx, sy, sw, sh };
+        });
+    }
+    return playStoreLogoPromise;
+}
+
 // ─── Animasyon yardımcıları ─────────────────────────────────────────────────
 // progress: 0 (animasyon başı) → 1 (durağan/final görünüm, statik görsel de bunu kullanır)
 
@@ -626,6 +663,39 @@ async function renderPromoFrame(canvas: HTMLCanvasElement, appIconImg: HTMLImage
     subLines.forEach(line => { ctx.fillText(line, CANVAS_W / 2, sy); sy += 46; });
 
     const ctaW = 840, ctaH = 130, ctaX = (CANVAS_W - ctaW) / 2, ctaY = 1500;
+
+    // Google Play rozeti — kullanıcının sağladığı gerçek logo, beyaz kenar
+    // boşlukları kırpılıp yuvarlak köşeli bir "rozet" olarak CTA'nın üstüne
+    // yerleştiriliyor. Metin ile buton arasında kalan boşluğa göre otomatik boyutlanır.
+    let playStoreLogo: CroppedLogo | null = null;
+    try { playStoreLogo = await loadPlayStoreLogo(); } catch { playStoreLogo = null; }
+    if (playStoreLogo) {
+        const aspect = playStoreLogo.sw / playStoreLogo.sh;
+        const availTop = sy + 20;
+        const availBottom = ctaY - 40;
+        const maxH = Math.max(0, availBottom - availTop);
+        const maxW = CANVAS_W - 280;
+        const logoH = Math.min(maxH, maxW / aspect);
+        const logoW = logoH * aspect;
+        const logoX = CANVAS_W / 2 - logoW / 2;
+        const logoY = availTop + (maxH - logoH) / 2;
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.35)';
+        ctx.shadowBlur = 30;
+        ctx.shadowOffsetY = 12;
+        ctx.fillStyle = '#ffffff';
+        drawRoundedRect(ctx, logoX, logoY, logoW, logoH, 28);
+        ctx.restore();
+        ctx.save();
+        drawRoundedRect(ctx, logoX, logoY, logoW, logoH, 28);
+        ctx.clip();
+        ctx.drawImage(
+            playStoreLogo.img,
+            playStoreLogo.sx, playStoreLogo.sy, playStoreLogo.sw, playStoreLogo.sh,
+            logoX, logoY, logoW, logoH,
+        );
+        ctx.restore();
+    }
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.35)';
     ctx.shadowBlur = 30;
