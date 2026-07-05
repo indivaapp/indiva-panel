@@ -438,8 +438,10 @@ async function renderDealImage(
         ctx.font = '900 36px Arial';
         ctx.fillStyle = '#4a1454';
         ctx.textAlign = 'center';
-        ctx.fillText('İNDİVA\'DA FIRSATI YAKALA →', CANVAS_W / 2, ctaY + ctaH / 2 + 2);
+        ctx.textBaseline = 'middle';
+        ctx.fillText('İNDİVA\'DA FIRSATI YAKALA >', CANVAS_W / 2, ctaY + ctaH / 2 + 2);
         ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
     });
 
     return loadedImg;
