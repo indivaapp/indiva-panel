@@ -146,46 +146,10 @@ function withSlideFade(ctx: CanvasRenderingContext2D, offsetY: number, alpha: nu
     ctx.restore();
 }
 
-/**
- * @param progress 0-1. Varsayılan 1 = statik/final görünüm (mevcut kullanım bozulmaz).
- *   Video animasyonu için 0'dan 1'e kadar art arda çağrılır.
- * @param cachedImg Önceden yüklenmiş ürün görseli — video her frame'de yeniden
- *   indirmesin diye. Verilmezse (statik kullanım) her zamanki gibi kendi yükler.
- * @returns Yüklenen görsel — çağıran, sonraki frame'ler için cache'leyebilir.
- */
-async function renderDealImage(
-    canvas: HTMLCanvasElement,
-    item: SocialContentItem,
-    safeImageUrl: string | null,
-    progress: number = 1,
-    cachedImg?: HTMLImageElement | null,
-): Promise<HTMLImageElement | null> {
-    if (canvas.width !== CANVAS_W) canvas.width = CANVAS_W;
-    if (canvas.height !== CANVAS_H) canvas.height = CANVAS_H;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-
-    const discountPct = item.oldPrice > 0 && item.newPrice > 0
-        ? Math.round(((item.oldPrice - item.newPrice) / item.oldPrice) * 100)
-        : 0;
-
-    // Eleman bazlı animasyon segmentleri (genel progress'in hangi aralığında oynar).
-    // Video 4sn'den 8sn'ye uzatıldığında aynı mutlak hızda kalması için (yani
-    // fırsat 8sn'nin ilk yarısında aynı tempoda belirir) eski 4sn'lik oranlar
-    // yarıya bölündü. İkinci yarı: kısa bir bekleme + yeni "uygulamayı indir"
-    // banner'ı + final bekleme (izleyicinin okuyacak zamanı olsun).
-    const headerP     = easeOutCubic(segProgress(progress, 0.000, 0.075));
-    const cardP       = easeOutBack(segProgress(progress, 0.040, 0.150));
-    const burstP      = easeOutBack(segProgress(progress, 0.120, 0.220));
-    const urgencyP    = easeOutCubic(segProgress(progress, 0.180, 0.260));
-    const titleP      = easeOutCubic(segProgress(progress, 0.220, 0.300));
-    const priceP      = easeOutBack(segProgress(progress, 0.260, 0.360));
-    const savingsP    = easeOutBack(segProgress(progress, 0.330, 0.410));
-    const ctaP        = easeOutBack(segProgress(progress, 0.380, 0.470));
-    const appBannerP  = easeOutBack(segProgress(progress, 0.550, 0.680));
-
-    // ── Arka plan: mor → pembe → turuncu canlı gradyan (glam/alışveriş enerjisi) ──
+// ── Arka plan: gradyan + ışık lekeleri + % işaretleri + parıltılar ──────────
+// renderDealImage VE promo sayfası (renderPromoFrame) ortak kullanır — marka
+// kimliği (İNDİVA renkleri, "indirim çılgınlığı" dokusu) her yerde aynı kalsın.
+function drawBackground(ctx: CanvasRenderingContext2D) {
     const bgGrad = ctx.createLinearGradient(0, 0, CANVAS_W, CANVAS_H);
     bgGrad.addColorStop(0, '#3a1454');
     bgGrad.addColorStop(0.55, '#c2287a');
@@ -243,42 +207,72 @@ async function renderDealImage(
         [60, 1300, 18, 'rgba(255,224,140,0.4)'],
     ];
     sparkles.forEach(([x, y, s, c]) => drawSparkle(ctx, x, y, s, c));
+}
 
-    // İNDİVA uygulama ikonu (alışveriş sepeti) — sağ üstteki wordmark'ın yanına
+/**
+ * @param progress 0-1. Varsayılan 1 = statik/final görünüm (mevcut kullanım bozulmaz).
+ *   Video animasyonu için 0'dan 1'e kadar art arda çağrılır.
+ * @param cachedImg Önceden yüklenmiş ürün görseli — video her frame'de yeniden
+ *   indirmesin diye. Verilmezse (statik kullanım) her zamanki gibi kendi yükler.
+ * @returns Yüklenen görsel — çağıran, sonraki frame'ler için cache'leyebilir.
+ */
+async function renderDealImage(
+    canvas: HTMLCanvasElement,
+    item: SocialContentItem,
+    safeImageUrl: string | null,
+    progress: number = 1,
+    cachedImg?: HTMLImageElement | null,
+): Promise<HTMLImageElement | null> {
+    if (canvas.width !== CANVAS_W) canvas.width = CANVAS_W;
+    if (canvas.height !== CANVAS_H) canvas.height = CANVAS_H;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+    const discountPct = item.oldPrice > 0 && item.newPrice > 0
+        ? Math.round(((item.oldPrice - item.newPrice) / item.oldPrice) * 100)
+        : 0;
+
+    // Eleman bazlı animasyon segmentleri (genel progress'in hangi aralığında oynar).
+    // Video 4sn'den 8sn'ye uzatıldığında aynı mutlak hızda kalması için (yani
+    // fırsat 8sn'nin ilk yarısında aynı tempoda belirir) eski 4sn'lik oranlar
+    // yarıya bölündü. İkinci yarı: kısa bir bekleme + yeni "uygulamayı indir"
+    // banner'ı + final bekleme (izleyicinin okuyacak zamanı olsun).
+    const headerP     = easeOutCubic(segProgress(progress, 0.000, 0.075));
+    const cardP       = easeOutBack(segProgress(progress, 0.040, 0.150));
+    const burstP      = easeOutBack(segProgress(progress, 0.120, 0.220));
+    const urgencyP    = easeOutCubic(segProgress(progress, 0.180, 0.260));
+    const titleP      = easeOutCubic(segProgress(progress, 0.220, 0.300));
+    const priceP      = easeOutBack(segProgress(progress, 0.260, 0.360));
+    const savingsP    = easeOutBack(segProgress(progress, 0.330, 0.410));
+    const ctaP        = easeOutBack(segProgress(progress, 0.380, 0.470));
+    const appBannerP  = easeOutBack(segProgress(progress, 0.550, 0.680));
+
+    drawBackground(ctx);
+
+    // İNDİVA uygulama ikonu (alışveriş sepeti) — statik dosya, önbellekten
     let appIconImg: HTMLImageElement | null = null;
     try { appIconImg = await loadAppIcon(); } catch { appIconImg = null; }
 
-    // ── Üst satır: kategori + İNDİVA (yukarıdan kayarak belirir) ─────────────
+    // ── Üst sağ köşe: sadece logo (yazısız, küçük bir marka imzası) ──────────
     withSlideFade(ctx, (1 - headerP) * -20, headerP, () => {
-        ctx.textBaseline = 'middle';
-        if (item.category) {
-            const catText = item.category.toUpperCase();
-            ctx.font = '700 26px Arial';
-            const catWidth = ctx.measureText(catText).width;
-            ctx.fillStyle = 'rgba(255,255,255,0.24)';
-            drawRoundedRect(ctx, 64, 70, catWidth + 48, 58, 29);
-            ctx.fillStyle = '#ffffff';
-            ctx.fillText(catText, 88, 100);
-        }
-        ctx.font = '900 34px Arial';
-        ctx.fillStyle = '#ffffff';
-        ctx.textAlign = 'right';
-        const indivaText = 'İNDİVA';
-        const indivaTextW = ctx.measureText(indivaText).width;
-        const iconSize = 44, iconGap = 12;
-        const textRightX = CANVAS_W - 64;
         if (appIconImg) {
-            const iconX = textRightX - indivaTextW - iconGap - iconSize;
-            const iconY = 100 - iconSize / 2;
+            const iconSize = 56;
+            const iconX = CANVAS_W - 64 - iconSize;
+            const iconY = 70;
             ctx.save();
+            ctx.shadowColor = 'rgba(0,0,0,0.3)';
+            ctx.shadowBlur = 16;
+            ctx.shadowOffsetY = 4;
             ctx.fillStyle = '#ffffff';
-            drawRoundedRect(ctx, iconX, iconY, iconSize, iconSize, 12);
+            drawRoundedRect(ctx, iconX, iconY, iconSize, iconSize, 16);
+            ctx.restore();
+            ctx.save();
+            drawRoundedRect(ctx, iconX, iconY, iconSize, iconSize, 16);
             ctx.clip();
             ctx.drawImage(appIconImg, iconX, iconY, iconSize, iconSize);
             ctx.restore();
         }
-        ctx.fillText(indivaText, textRightX, 100);
-        ctx.textAlign = 'left';
     });
 
     // ── Ürün kartı: beyaz zemin + altın çerçeve (hafif zıplayarak büyür) ─────
@@ -308,15 +302,78 @@ async function renderDealImage(
         if (loadedImg) {
             const pad = 70;
             const availW = cardW - pad * 2, availH = cardH - pad * 2;
+
+            // Ürün görseli kartın oranına tam oturmuyorsa (çoğu ürün fotoğrafı
+            // kare/dikey değildir) kalan boşluk çıplak beyazdı — Instagram
+            // Stories'in yaptığı gibi, aynı görselin bulanık "cover" halini
+            // arkaya doldurup boş/amatör görünümü ortadan kaldırıyoruz.
+            ctx.save();
+            drawRoundedRect(ctx, cardX + 10, cardY + 10, cardW - 20, cardH - 20, 36);
+            ctx.clip();
+            const coverScale = Math.max(cardW / loadedImg.width, cardH / loadedImg.height);
+            const coverW = loadedImg.width * coverScale, coverH = loadedImg.height * coverScale;
+            ctx.filter = 'blur(45px) brightness(0.75) saturate(1.15)';
+            ctx.drawImage(
+                loadedImg,
+                cardX + (cardW - coverW) / 2,
+                cardY + (cardH - coverH) / 2,
+                coverW, coverH,
+            );
+            ctx.filter = 'none';
+            ctx.restore();
+
             const scale = Math.min(availW / loadedImg.width, availH / loadedImg.height, 1);
             const drawW = loadedImg.width * scale, drawH = loadedImg.height * scale;
+            ctx.save();
+            ctx.shadowColor = 'rgba(0,0,0,0.4)';
+            ctx.shadowBlur = 30;
             ctx.drawImage(
                 loadedImg,
                 cardX + (cardW - drawW) / 2,
                 cardY + (cardH - drawH) / 2,
                 drawW, drawH,
             );
+            ctx.restore();
         }
+    });
+
+    // ── İNDİVA marka rozeti: ürün görselinin ÜSTÜNDE, akılda kalıcı olsun ────
+    // "İNDİVA'DA İNDİRİM VAR!" algısı için wordmark + sloganı burada, fotoğrafın
+    // üstünde büyük gösteriyoruz (sağ üstteki köşe artık sade logo işareti).
+    withPop(ctx, cardX + cardW - 175, cardY + 105, burstP, burstP, () => {
+        const bx2 = cardX + cardW - 175, by2 = cardY + 105;
+        ctx.font = '900 42px Arial';
+        const line1 = 'İNDİVA';
+        const line1W = ctx.measureText(line1).width;
+        ctx.font = '800 22px Arial';
+        const line2 = 'İNDİRİM VAR!';
+        const line2W = ctx.measureText(line2).width;
+        const pillW = Math.max(line1W, line2W) + 60;
+        const pillH = 100;
+
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.5)';
+        ctx.shadowBlur = 24;
+        ctx.shadowOffsetY = 8;
+        ctx.fillStyle = 'rgba(20,8,32,0.6)';
+        drawRoundedRect(ctx, bx2 - pillW / 2, by2 - pillH / 2, pillW, pillH, 24);
+        ctx.restore();
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,217,102,0.7)';
+        ctx.lineWidth = 3;
+        strokeRoundedRect(ctx, bx2 - pillW / 2 + 2, by2 - pillH / 2 + 2, pillW - 4, pillH - 4, 22);
+        ctx.restore();
+
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 42px Arial';
+        ctx.fillText(line1, bx2, by2 - 20);
+        ctx.fillStyle = '#FFD966';
+        ctx.font = '800 22px Arial';
+        ctx.fillText(line2, bx2, by2 + 22);
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
     });
 
     // ── İndirim rozeti: altın "kampanya çıkartması" (patlarcasına büyür) ─────
@@ -504,15 +561,124 @@ async function renderDealImage(
     return loadedImg;
 }
 
+// ── "Daha fazla fırsat" promo sayfası — videonun son bölümü. Üründen bağımsız,
+// her video için aynı — uygulamayı indirmeye teşvik eden kapanış ekranı. ────
+async function renderPromoFrame(canvas: HTMLCanvasElement, appIconImg: HTMLImageElement | null): Promise<void> {
+    if (canvas.width !== CANVAS_W) canvas.width = CANVAS_W;
+    if (canvas.height !== CANVAS_H) canvas.height = CANVAS_H;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    drawBackground(ctx);
+
+    const iconSize = 220, iconX = CANVAS_W / 2 - iconSize / 2, iconY = 360;
+    if (appIconImg) {
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.5)';
+        ctx.shadowBlur = 50;
+        ctx.shadowOffsetY = 20;
+        ctx.fillStyle = '#ffffff';
+        drawRoundedRect(ctx, iconX, iconY, iconSize, iconSize, 48);
+        ctx.restore();
+        ctx.save();
+        drawRoundedRect(ctx, iconX, iconY, iconSize, iconSize, 48);
+        ctx.clip();
+        ctx.drawImage(appIconImg, iconX, iconY, iconSize, iconSize);
+        ctx.restore();
+        ctx.strokeStyle = '#FFD966';
+        ctx.lineWidth = 6;
+        strokeRoundedRect(ctx, iconX + 3, iconY + 3, iconSize - 6, iconSize - 6, 46);
+    }
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 14;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '900 62px Arial';
+    const headlineLines = wrapText(ctx, 'Daha Fazla Fırsat Seni Bekliyor!', CANVAS_W - 160, 2);
+    let hy = 700;
+    headlineLines.forEach(line => { ctx.fillText(line, CANVAS_W / 2, hy); hy += 76; });
+    ctx.restore();
+
+    ctx.font = '600 34px Arial';
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    const subLines = wrapText(ctx, 'İNDİVA\'da yüzlerce indirim her gün güncelleniyor.', CANVAS_W - 220, 2);
+    let sy = hy + 20;
+    subLines.forEach(line => { ctx.fillText(line, CANVAS_W / 2, sy); sy += 46; });
+
+    const ctaW = 840, ctaH = 130, ctaX = (CANVAS_W - ctaW) / 2, ctaY = 1500;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 30;
+    ctx.shadowOffsetY = 10;
+    const ctaGrad = ctx.createLinearGradient(ctaX, 0, ctaX + ctaW, 0);
+    ctaGrad.addColorStop(0, '#2563eb');
+    ctaGrad.addColorStop(1, '#0ea5a4');
+    ctx.fillStyle = ctaGrad;
+    drawRoundedRect(ctx, ctaX, ctaY, ctaW, ctaH, 65);
+    ctx.restore();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '900 40px Arial';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('📲 Google Play\'den Ücretsiz İndir', CANVAS_W / 2, ctaY + ctaH / 2 + 2);
+    ctx.textBaseline = 'alphabetic';
+
+    ctx.font = '700 30px Arial';
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText('İNDİVA ile hiçbir fırsatı kaçırma!', CANVAS_W / 2, ctaY + ctaH + 70);
+    ctx.textAlign = 'left';
+}
+
+// ── Sayfa çevirme geçişi: fırsat sahnesi yatayda katlanıp promo sayfasına
+// döner (klasik "kart çevirme" efekti — cos(açı) ile yatay ölçek) ───────────
+async function renderFlipFrame(
+    canvas: HTMLCanvasElement,
+    item: SocialContentItem,
+    cachedImg: HTMLImageElement | null,
+    appIconImg: HTMLImageElement | null,
+    t: number,
+): Promise<void> {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+    const rawCos = Math.cos(t * Math.PI);
+    const showingDeal = rawCos > 0;
+    const scaleX = Math.max(0.001, Math.abs(rawCos));
+
+    ctx.save();
+    ctx.translate(CANVAS_W / 2, 0);
+    ctx.scale(scaleX, 1);
+    ctx.translate(-CANVAS_W / 2, 0);
+    if (showingDeal) {
+        await renderDealImage(canvas, item, null, 1, cachedImg);
+    } else {
+        await renderPromoFrame(canvas, appIconImg);
+    }
+    ctx.restore();
+}
+
 // ─── Animasyonlu video kaydı (tarayıcı içi, sunucuya gerek yok) ─────────────
-// canvas.captureStream + MediaRecorder ile animasyonu WebM'e kaydeder.
-// Çıktı formatı WebM'dir — Instagram MP4 istiyor, paylaşmadan önce dönüştürme
-// gerekebilir (bkz. panel ekranındaki not).
-const VIDEO_DURATION_MS = 8000;
+// canvas.captureStream + MediaRecorder ile kaydeder. Sırasıyla: fırsat sahnesi
+// (mevcut animasyon) → sayfa çevirme geçişi → "daha fazla fırsat" promo sayfası.
+// MP4 (H.264) destekleniyorsa onu, yoksa WebM'e düşer.
+const DEAL_DURATION_MS = 8000;
+const FLIP_DURATION_MS = 900;
+const PROMO_DURATION_MS = 3200;
+const VIDEO_DURATION_MS = DEAL_DURATION_MS + FLIP_DURATION_MS + PROMO_DURATION_MS;
 const VIDEO_FPS = 30;
 
 function pickSupportedMimeType(): string {
-    const candidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+    const candidates = [
+        'video/mp4;codecs=avc1.42E01E',
+        'video/mp4',
+        'video/webm;codecs=vp9',
+        'video/webm;codecs=vp8',
+        'video/webm',
+    ];
     for (const type of candidates) {
         if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)) return type;
     }
@@ -533,6 +699,9 @@ async function recordDealVideo(
     const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_000_000 });
     const chunks: Blob[] = [];
 
+    let appIconImg: HTMLImageElement | null = null;
+    try { appIconImg = await loadAppIcon(); } catch { appIconImg = null; }
+
     return new Promise((resolve, reject) => {
         recorder.ondataavailable = (e: BlobEvent) => { if (e.data.size > 0) chunks.push(e.data); };
         recorder.onerror = () => reject(new Error('Video kaydı başarısız oldu.'));
@@ -544,10 +713,18 @@ async function recordDealVideo(
         const startTime = performance.now();
         const tick = () => {
             const elapsed = performance.now() - startTime;
-            const progress = Math.min(1, elapsed / VIDEO_DURATION_MS);
-            onProgress?.(progress);
-            renderDealImage(canvas, item, null, progress, cachedImg).catch(() => {});
-            if (progress < 1) {
+            onProgress?.(Math.min(1, elapsed / VIDEO_DURATION_MS));
+
+            if (elapsed < DEAL_DURATION_MS) {
+                renderDealImage(canvas, item, null, elapsed / DEAL_DURATION_MS, cachedImg).catch(() => {});
+            } else if (elapsed < DEAL_DURATION_MS + FLIP_DURATION_MS) {
+                const flipT = (elapsed - DEAL_DURATION_MS) / FLIP_DURATION_MS;
+                renderFlipFrame(canvas, item, cachedImg, appIconImg, flipT).catch(() => {});
+            } else {
+                renderPromoFrame(canvas, appIconImg).catch(() => {});
+            }
+
+            if (elapsed < VIDEO_DURATION_MS) {
                 requestAnimationFrame(tick);
             } else {
                 // Son karenin de kaydedilmesi için kısa bir bekleme sonrası durdur
@@ -575,6 +752,7 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
     const [videoState, setVideoState] = useState<'idle' | 'recording' | 'ready' | 'error'>('idle');
     const [videoProgress, setVideoProgress] = useState(0);
     const [videoUrl, setVideoUrl] = useState<string | null>(null);
+    const [videoExt, setVideoExt] = useState<'mp4' | 'webm'>('mp4');
 
     useEffect(() => {
         let cancelled = false;
@@ -643,6 +821,7 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
             const blob = await recordDealVideo(canvas, item, cachedImgRef.current, setVideoProgress);
             const url = URL.createObjectURL(blob);
             setVideoUrl(url);
+            setVideoExt(blob.type.includes('mp4') ? 'mp4' : 'webm');
             setVideoState('ready');
         } catch {
             setVideoState('error');
@@ -653,7 +832,7 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
         if (!videoUrl) return;
         const a = document.createElement('a');
         a.href = videoUrl;
-        a.download = `indiva-${item.discountId}.webm`;
+        a.download = `indiva-${item.discountId}.${videoExt}`;
         a.click();
     };
 
@@ -743,14 +922,15 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
                             onClick={handleDownloadVideo}
                             className="flex-1 min-w-[140px] py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white text-sm font-bold rounded-xl transition-all active:scale-95 shadow-lg shadow-purple-900/30"
                         >
-                            ⬇ Videoyu İndir (.webm)
+                            ⬇ Videoyu İndir (.{videoExt})
                         </button>
                     )}
 
-                    {videoState === 'ready' && (
+                    {videoState === 'ready' && videoExt === 'webm' && (
                         <p className="w-full text-[11px] text-gray-500 text-center -mt-1">
-                            .webm formatında indi. Instagram MP4 istiyorsa, paylaşmadan önce
-                            telefonundaki bir dönüştürücü uygulamayla MP4'e çevirmen gerekebilir.
+                            Bu tarayıcı MP4 kaydını desteklemediği için .webm formatında indi.
+                            Instagram MP4 istiyorsa, paylaşmadan önce telefonundaki bir
+                            dönüştürücü uygulamayla MP4'e çevirmen gerekebilir.
                         </p>
                     )}
 
