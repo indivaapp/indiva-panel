@@ -123,14 +123,17 @@ function blobToBase64(blob: Blob): Promise<string> {
     });
 }
 
-// Görsel/videoyu cihaza kaydeder. Native (APK) ortamda tarayıcının
-// <a download> mekanizması WebView içinde sessizce başarısız oluyordu — bu
-// yüzden Capacitor Filesystem ile gerçek bir dosyaya yazıyoruz. Web'de mevcut
-// blob-URL + <a download> yöntemi zaten çalıştığı için değişmedi.
-async function saveFileToDevice(blob: Blob, filename: string): Promise<void> {
+// Görsel/videoyu cihaza kaydeder.
+// NOT: Native (APK) tarafta önce Directory.Documents'a yazmayı denemiştik —
+// ama Android'in scoped storage kısıtları yüzünden bu ya sessizce başarısız
+// oluyor ya da dosya kullanıcının hiç göremeyeceği bir uygulama-özel klasöre
+// yazılıyordu ("indirdim ama telefonda bulamıyorum" şikayetinin sebebi buydu).
+// Artık native'de doğrudan native paylaşım sayfasını açıyoruz — kullanıcı
+// oradan "Dosyalara Kaydet", Galeri, WhatsApp vb. seçip gerçekten kaydedebiliyor.
+// Web'de mevcut blob-URL + <a download> yöntemi (zaten çalıştığı için) aynen duruyor.
+async function saveFileToDevice(blob: Blob, filename: string, title: string): Promise<void> {
     if (Capacitor.isNativePlatform()) {
-        const base64 = await blobToBase64(blob);
-        await Filesystem.writeFile({ path: filename, data: base64, directory: Directory.Documents });
+        await shareFile(blob, filename, blob.type, title);
     } else {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -813,6 +816,21 @@ async function recordDealVideo(
     if (typeof (canvas as any).captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
         throw new Error('Bu tarayıcı video kaydını desteklemiyor.');
     }
+    if (canvas.width !== CANVAS_W) canvas.width = CANVAS_W;
+    if (canvas.height !== CANVAS_H) canvas.height = CANVAS_H;
+    const visibleCtx = canvas.getContext('2d');
+    if (!visibleCtx) throw new Error('Canvas context alınamadı.');
+
+    // Her kare önce bu görünmez arabellek canvas'ına çiziliyor, sonra TEK
+    // senkron drawImage ile asıl (captureStream'e bağlı) canvas'a aktarılıyor.
+    // Render fonksiyonları clearRect + await adımlarından oluştuğu için,
+    // doğrudan görünen canvas'a çizersek MediaRecorder bazen "temizlenmiş ama
+    // henüz yeniden çizilmemiş" bir kareyi yakalayıp videoda flaş/titreme
+    // olarak kaydediyordu — bu arabellek bunu tamamen ortadan kaldırıyor.
+    const buffer = document.createElement('canvas');
+    buffer.width = CANVAS_W;
+    buffer.height = CANVAS_H;
+
     const stream: MediaStream = (canvas as any).captureStream(VIDEO_FPS);
     const mimeType = pickSupportedMimeType();
     const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_000_000 });
@@ -829,19 +847,23 @@ async function recordDealVideo(
             resolve(new Blob(chunks, { type: mimeType }));
         };
 
+        const blit = () => visibleCtx.drawImage(buffer, 0, 0);
+
         const startTime = performance.now();
         const tick = () => {
             const elapsed = performance.now() - startTime;
             onProgress?.(Math.min(1, elapsed / VIDEO_DURATION_MS));
 
+            let renderPromise: Promise<unknown>;
             if (elapsed < DEAL_DURATION_MS) {
-                renderDealImage(canvas, item, null, elapsed / DEAL_DURATION_MS, cachedImg).catch(() => {});
+                renderPromise = renderDealImage(buffer, item, null, elapsed / DEAL_DURATION_MS, cachedImg);
             } else if (elapsed < DEAL_DURATION_MS + SLIDE_DURATION_MS) {
                 const flipT = (elapsed - DEAL_DURATION_MS) / SLIDE_DURATION_MS;
-                renderSlideFrame(canvas, item, cachedImg, appIconImg, flipT).catch(() => {});
+                renderPromise = renderSlideFrame(buffer, item, cachedImg, appIconImg, flipT);
             } else {
-                renderPromoFrame(canvas, appIconImg).catch(() => {});
+                renderPromise = renderPromoFrame(buffer, appIconImg);
             }
+            renderPromise.then(blit).catch(() => {});
 
             if (elapsed < VIDEO_DURATION_MS) {
                 requestAnimationFrame(tick);
@@ -924,7 +946,12 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
         if (!canvas) return;
         const blob = await canvasToBlob(canvas);
         if (!blob) return;
-        try { await saveFileToDevice(blob, `indiva-${item.discountId}.png`); } catch { /* sessizce yok say */ }
+        try {
+            await saveFileToDevice(blob, `indiva-${item.discountId}.png`, item.title);
+        } catch {
+            setShareError('image');
+            setTimeout(() => setShareError(null), 2500);
+        }
     };
 
     const handleShareImage = async () => {
@@ -959,7 +986,12 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
 
     const handleDownloadVideo = async () => {
         if (!videoBlobRef.current) return;
-        try { await saveFileToDevice(videoBlobRef.current, `indiva-${item.discountId}.${videoExt}`); } catch { /* sessizce yok say */ }
+        try {
+            await saveFileToDevice(videoBlobRef.current, `indiva-${item.discountId}.${videoExt}`, item.title);
+        } catch {
+            setShareError('video');
+            setTimeout(() => setShareError(null), 2500);
+        }
     };
 
     const handleShareVideo = async () => {
@@ -1079,7 +1111,7 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
 
                     {shareError && (
                         <p className="w-full text-[11px] text-red-400 text-center -mt-1">
-                            Bu cihaz/tarayıcı {shareError === 'video' ? 'video' : 'görsel'} paylaşımını desteklemiyor — indirip elle paylaşabilirsin.
+                            {shareError === 'video' ? 'Video' : 'Görsel'} kaydedilemedi/paylaşılamadı — tekrar dener misin?
                         </p>
                     )}
 
