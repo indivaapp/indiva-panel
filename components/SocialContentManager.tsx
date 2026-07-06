@@ -424,11 +424,11 @@ async function renderDealImage(
             ctx.filter = 'none';
             ctx.restore();
 
-            // NOT: Üst sınır eskiden 1'di (küçük ürün fotoğrafları hiç büyütülmüyordu,
-            // kart içinde minicik kalıyorlardı — çoğu scraper görseli 300-500px).
-            // 2.2x'e kadar büyütmeye izin veriyoruz; hafif bulanıklaşma, boşlukta
-            // kaybolan minik bir fotoğraftan çok daha iyi görünüyor.
-            const scale = Math.min(availW / loadedImg.width, availH / loadedImg.height, 3);
+            // NOT: Üst sınır tamamen kaldırıldı — görsel, dar olan eksende
+            // (genişlik ya da yükseklik) çerçeveyi UCA KADAR doldursun istendi.
+            // Küçük kaynak görsellerde hafif bulanıklaşma olabilir ama bu,
+            // kenarlarda boşluk kalmasından çok daha iyi görünüyor.
+            const scale = Math.min(availW / loadedImg.width, availH / loadedImg.height);
             const drawW = loadedImg.width * scale, drawH = loadedImg.height * scale;
             ctx.save();
             ctx.shadowColor = 'rgba(0,0,0,0.4)';
