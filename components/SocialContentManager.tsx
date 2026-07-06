@@ -424,7 +424,11 @@ async function renderDealImage(
             ctx.filter = 'none';
             ctx.restore();
 
-            const scale = Math.min(availW / loadedImg.width, availH / loadedImg.height, 1);
+            // NOT: Üst sınır eskiden 1'di (küçük ürün fotoğrafları hiç büyütülmüyordu,
+            // kart içinde minicik kalıyorlardı — çoğu scraper görseli 300-500px).
+            // 2.2x'e kadar büyütmeye izin veriyoruz; hafif bulanıklaşma, boşlukta
+            // kaybolan minik bir fotoğraftan çok daha iyi görünüyor.
+            const scale = Math.min(availW / loadedImg.width, availH / loadedImg.height, 2.2);
             const drawW = loadedImg.width * scale, drawH = loadedImg.height * scale;
             ctx.save();
             ctx.shadowColor = 'rgba(0,0,0,0.4)';
@@ -442,6 +446,9 @@ async function renderDealImage(
     // ── Slogan: ürün görselinin TAM ÜSTÜNDE, el yazısı tarzı (Caveat) ────────
     // Kullanıcı defalarca görselin üstüne bindiğini belirtti — artık kartın
     // dışında, header ile kart arasındaki boşlukta, gerçek bir "slogan" gibi.
+    // İki satıra bölündü (altlı üstlü) — tek satırken sol taraftaki indirim
+    // yıldızının altına giriyordu; alt alta durunca yatayda daha dar bir alan
+    // kaplıyor ve yıldıza çarpmıyor.
     try { await document.fonts.load("700 80px Caveat"); } catch { /* font yoksa sistem fontuna düşer */ }
     withSlideFade(ctx, (1 - headerP) * -12, headerP, () => {
         ctx.save();
@@ -449,17 +456,20 @@ async function renderDealImage(
         ctx.rotate(-3 * Math.PI / 180);
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const sloganText = 'İNDİVA\'da İndirim Var!';
+        const sloganLine1 = 'İNDİVA\'da';
+        const sloganLine2 = 'İndirim Var!';
         const maxSloganW = CANVAS_W - 160;
-        let sloganSize = 82;
+        let sloganSize = 76;
         ctx.font = `700 ${sloganSize}px Caveat, cursive`;
-        const rawW = ctx.measureText(sloganText).width;
-        if (rawW > maxSloganW) sloganSize = Math.floor(sloganSize * (maxSloganW / rawW));
+        const maxRawW = Math.max(ctx.measureText(sloganLine1).width, ctx.measureText(sloganLine2).width);
+        if (maxRawW > maxSloganW) sloganSize = Math.floor(sloganSize * (maxSloganW / maxRawW));
         ctx.font = `700 ${sloganSize}px Caveat, cursive`;
         ctx.shadowColor = 'rgba(0,0,0,0.45)';
         ctx.shadowBlur = 16;
         ctx.fillStyle = '#ffffff';
-        ctx.fillText(sloganText, 0, 0);
+        const sloganLineGap = sloganSize * 0.64;
+        ctx.fillText(sloganLine1, 0, -sloganLineGap / 2);
+        ctx.fillText(sloganLine2, 0, sloganLineGap / 2);
         ctx.restore();
     });
 
