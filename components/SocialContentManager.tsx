@@ -2,6 +2,9 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { getSocialContentQueue, markSocialContentPosted, getDiscounts, addManualSocialContent } from '../services/firebase';
 import { uploadImageFromUrl } from '../services/dealFinder';
 import { Clipboard } from '@capacitor/clipboard';
+import { Capacitor } from '@capacitor/core';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
 import type { SocialContentItem, Discount } from '../types';
 
 interface SocialContentManagerProps {
@@ -105,6 +108,60 @@ function loadImage(src: string): Promise<HTMLImageElement> {
         img.onerror = () => reject(new Error('Görsel yüklenemedi'));
         img.src = src;
     });
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
+    return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve((reader.result as string).split(',')[1] ?? '');
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+}
+
+// Görsel/videoyu cihaza kaydeder. Native (APK) ortamda tarayıcının
+// <a download> mekanizması WebView içinde sessizce başarısız oluyordu — bu
+// yüzden Capacitor Filesystem ile gerçek bir dosyaya yazıyoruz. Web'de mevcut
+// blob-URL + <a download> yöntemi zaten çalıştığı için değişmedi.
+async function saveFileToDevice(blob: Blob, filename: string): Promise<void> {
+    if (Capacitor.isNativePlatform()) {
+        const base64 = await blobToBase64(blob);
+        await Filesystem.writeFile({ path: filename, data: base64, directory: Directory.Documents });
+    } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // NOT: revokeObjectURL'i hemen çağırmak, tarayıcının blob'u henüz okumaya
+        // başlamadan indirmeyi iptal etmesine yol açabiliyordu (özellikle büyük
+        // video dosyalarında) — indirmenin gerçekten başlaması için biraz bekliyoruz.
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+    }
+}
+
+// Görseli/videoyu native paylaşım sayfasıyla (WhatsApp, Instagram vb.) paylaşır.
+// Web'de Web Share API'ye (destekleniyorsa) düşer, yoksa hata fırlatır.
+async function shareFile(blob: Blob, filename: string, mimeType: string, title: string): Promise<void> {
+    if (Capacitor.isNativePlatform()) {
+        const base64 = await blobToBase64(blob);
+        const written = await Filesystem.writeFile({ path: filename, data: base64, directory: Directory.Cache });
+        await Share.share({ title, url: written.uri });
+    } else if (navigator.share) {
+        const file = new File([blob], filename, { type: mimeType });
+        if (navigator.canShare && !navigator.canShare({ files: [file] })) {
+            throw new Error('Bu tarayıcı dosya paylaşımını desteklemiyor.');
+        }
+        await navigator.share({ title, files: [file] });
+    } else {
+        throw new Error('Bu tarayıcı paylaşımı desteklemiyor.');
+    }
 }
 
 // İNDİVA uygulama ikonu (alışveriş sepeti) — statik dosya, tüm kartlarda aynı,
@@ -292,7 +349,6 @@ async function renderDealImage(
     const priceP      = easeOutBack(segProgress(progress, 0.260, 0.360));
     const savingsP    = easeOutBack(segProgress(progress, 0.330, 0.410));
     const ctaP        = easeOutBack(segProgress(progress, 0.380, 0.470));
-    const appBannerP  = easeOutBack(segProgress(progress, 0.550, 0.680));
 
     drawBackground(ctx);
 
@@ -383,41 +439,28 @@ async function renderDealImage(
         }
     });
 
-    // ── İNDİVA marka rozeti: ürün görselinin EN ÜSTÜNDE (burst rozetiyle aynı
-    // hizada), tek satır "İNDİVA'DA İNDİRİM VAR!" ifadesi olarak ────────────
-    const badgeCX = cardX + cardW - 175, badgeCY = cardY + 12;
-    withPop(ctx, badgeCX, badgeCY, burstP, burstP, () => {
-        ctx.font = '900 34px Arial';
-        const partA = 'İNDİVA\'DA ';
-        const partB = 'İNDİRİM VAR!';
-        const wA = ctx.measureText(partA).width;
-        const wB = ctx.measureText(partB).width;
-        const totalW = wA + wB;
-        const pillW = totalW + 56;
-        const pillH = 76;
-
+    // ── Slogan: ürün görselinin TAM ÜSTÜNDE, el yazısı tarzı (Caveat) ────────
+    // Kullanıcı defalarca görselin üstüne bindiğini belirtti — artık kartın
+    // dışında, header ile kart arasındaki boşlukta, gerçek bir "slogan" gibi.
+    try { await document.fonts.load("700 80px Caveat"); } catch { /* font yoksa sistem fontuna düşer */ }
+    withSlideFade(ctx, (1 - headerP) * -12, headerP, () => {
         ctx.save();
-        ctx.shadowColor = 'rgba(0,0,0,0.5)';
-        ctx.shadowBlur = 24;
-        ctx.shadowOffsetY = 8;
-        ctx.fillStyle = 'rgba(20,8,32,0.6)';
-        drawRoundedRect(ctx, badgeCX - pillW / 2, badgeCY - pillH / 2, pillW, pillH, 22);
-        ctx.restore();
-        ctx.save();
-        ctx.strokeStyle = 'rgba(255,122,26,0.9)';
-        ctx.lineWidth = 3;
-        strokeRoundedRect(ctx, badgeCX - pillW / 2 + 2, badgeCY - pillH / 2 + 2, pillW - 4, pillH - 4, 20);
-        ctx.restore();
-
-        ctx.textAlign = 'left';
+        ctx.translate(CANVAS_W / 2, 232);
+        ctx.rotate(-3 * Math.PI / 180);
+        ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const startX = badgeCX - totalW / 2;
+        const sloganText = 'İNDİVA\'da İndirim Var!';
+        const maxSloganW = CANVAS_W - 160;
+        let sloganSize = 82;
+        ctx.font = `700 ${sloganSize}px Caveat, cursive`;
+        const rawW = ctx.measureText(sloganText).width;
+        if (rawW > maxSloganW) sloganSize = Math.floor(sloganSize * (maxSloganW / rawW));
+        ctx.font = `700 ${sloganSize}px Caveat, cursive`;
+        ctx.shadowColor = 'rgba(0,0,0,0.45)';
+        ctx.shadowBlur = 16;
         ctx.fillStyle = '#ffffff';
-        ctx.fillText(partA, startX, badgeCY + 6);
-        ctx.fillStyle = '#FF8A3D';
-        ctx.fillText(partB, startX + wA, badgeCY + 6);
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'alphabetic';
+        ctx.fillText(sloganText, 0, 0);
+        ctx.restore();
     });
 
     // ── İndirim rozeti: altın "kampanya çıkartması" (patlarcasına büyür) ─────
@@ -463,7 +506,7 @@ async function renderDealImage(
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.font = '800 30px Arial';
-        const urgencyText = '🔥 SINIRLI SÜRE — KAÇIRMA!';
+        const urgencyText = '🔥 GÜNÜN ÖNE ÇIKAN FIRSATI!';
         const urgencyW = ctx.measureText(urgencyText).width + 56;
         ctx.fillStyle = 'rgba(255,255,255,0.22)';
         drawRoundedRect(ctx, CANVAS_W / 2 - urgencyW / 2, cardY + cardH + 40, urgencyW, 66, 33);
@@ -564,37 +607,11 @@ async function renderDealImage(
         });
     }
 
-    // ── "Uygulamayı indir" banner'ı — videoda geç aşamada belirir ────────────
-    // NOT: Google'ın resmi "Play Store'da İndir" rozetini birebir taklit ETMİYORUZ
-    // (üçüncü taraf marka/logo telif riski) — kendi stilimizde net bir indirme
-    // çağrısı kullanıyoruz, aynı teşvik etkisini sağlıyor.
-    const ctaYForBanner = CANVAS_H - 190;
-    const appBannerH = 90;
-    const appBannerY = ctaYForBanner - 140;
-    withPop(ctx, CANVAS_W / 2, appBannerY + appBannerH / 2, appBannerP, appBannerP, () => {
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.font = '800 30px Arial';
-        const appText = '📲 Google Play\'den İndir';
-        const appW = Math.min(CANVAS_W - 120, ctx.measureText(appText).width + 70);
-        ctx.save();
-        ctx.shadowColor = 'rgba(0,0,0,0.35)';
-        ctx.shadowBlur = 25;
-        ctx.shadowOffsetY = 8;
-        const bannerGrad = ctx.createLinearGradient(CANVAS_W / 2 - appW / 2, 0, CANVAS_W / 2 + appW / 2, 0);
-        bannerGrad.addColorStop(0, '#2563eb');
-        bannerGrad.addColorStop(1, '#0ea5a4');
-        ctx.fillStyle = bannerGrad;
-        drawRoundedRect(ctx, CANVAS_W / 2 - appW / 2, appBannerY, appW, appBannerH, 45);
-        ctx.restore();
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(appText, CANVAS_W / 2, appBannerY + appBannerH / 2 + 2);
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'alphabetic';
-    });
-
     // ── Alt CTA butonu (beyaz pil, koyu mor yazı, zıplayarak büyür) ──────────
-    const ctaW = 780, ctaH = 110, ctaX = (CANVAS_W - ctaW) / 2, ctaY = CANVAS_H - 190;
+    // NOT: Ayrı bir "Google Play'den İndir" banner'ı buradan kaldırıldı —
+    // promo sayfasında (video/2. sahne) zaten Play Store yönlendirmesi var,
+    // burada tekrar etmek yerine CTA o boşluğu doldursun diye yukarı taşındı.
+    const ctaW = 780, ctaH = 110, ctaX = (CANVAS_W - ctaW) / 2, ctaY = 1650;
     const ctaSettle = segProgress(progress, 0.470, 0.510);
     const ctaIdle = 1 + 0.015 * idleWave(progress, 4, 3.0) * ctaSettle;
     withPop(ctx, CANVAS_W / 2, ctaY + ctaH / 2, ctaP * ctaIdle, ctaP, () => {
@@ -660,15 +677,15 @@ async function renderPromoFrame(canvas: HTMLCanvasElement, appIconImg: HTMLImage
 
     ctx.font = '600 34px Arial';
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    const subLines = wrapText(ctx, 'İNDİVA\'da yüzlerce indirim her gün güncelleniyor.', CANVAS_W - 220, 2);
+    const subLines = wrapText(ctx, 'Yüzlerce mağazadaki anlık indirimleri kaçırmamak için sen de İNDİVA uygulamasını indir!', CANVAS_W - 220, 3);
     let sy = hy + 20;
     subLines.forEach(line => { ctx.fillText(line, CANVAS_W / 2, sy); sy += 46; });
 
     const ctaW = 840, ctaH = 130, ctaX = (CANVAS_W - ctaW) / 2, ctaY = 1500;
 
     // Google Play rozeti — kullanıcının sağladığı gerçek logo, beyaz kenar
-    // boşlukları kırpılıp yuvarlak köşeli bir "rozet" olarak CTA'nın üstüne
-    // yerleştiriliyor. Metin ile buton arasında kalan boşluğa göre otomatik boyutlanır.
+    // boşlukları kırpılıp doğrudan (beyaz plaka OLMADAN) şeffaf haliyle
+    // çiziliyor — arka planla kaynaşsın diye, sadece hafif bir gölgeyle.
     let playStoreLogo: CroppedLogo | null = null;
     try { playStoreLogo = await loadPlayStoreLogo(); } catch { playStoreLogo = null; }
     if (playStoreLogo) {
@@ -682,15 +699,9 @@ async function renderPromoFrame(canvas: HTMLCanvasElement, appIconImg: HTMLImage
         const logoX = CANVAS_W / 2 - logoW / 2;
         const logoY = availTop + (maxH - logoH) / 2;
         ctx.save();
-        ctx.shadowColor = 'rgba(0,0,0,0.35)';
-        ctx.shadowBlur = 30;
-        ctx.shadowOffsetY = 12;
-        ctx.fillStyle = '#ffffff';
-        drawRoundedRect(ctx, logoX, logoY, logoW, logoH, 28);
-        ctx.restore();
-        ctx.save();
-        drawRoundedRect(ctx, logoX, logoY, logoW, logoH, 28);
-        ctx.clip();
+        ctx.shadowColor = 'rgba(0,0,0,0.4)';
+        ctx.shadowBlur = 24;
+        ctx.shadowOffsetY = 10;
         ctx.drawImage(
             playStoreLogo.img,
             playStoreLogo.sx, playStoreLogo.sy, playStoreLogo.sw, playStoreLogo.sh,
@@ -851,6 +862,8 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
     const [videoProgress, setVideoProgress] = useState(0);
     const [videoUrl, setVideoUrl] = useState<string | null>(null);
     const [videoExt, setVideoExt] = useState<'mp4' | 'webm'>('mp4');
+    const videoBlobRef = useRef<Blob | null>(null);
+    const [shareError, setShareError] = useState<'image' | 'video' | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -896,18 +909,25 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
     // Bileşen kapanırken oluşturulmuş video object URL'ini serbest bırak
     useEffect(() => () => { if (videoUrl) URL.revokeObjectURL(videoUrl); }, [videoUrl]);
 
-    const handleDownload = () => {
+    const handleDownload = async () => {
         const canvas = canvasRef.current;
         if (!canvas) return;
-        canvas.toBlob((blob) => {
-            if (!blob) return;
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `indiva-${item.discountId}.png`;
-            a.click();
-            URL.revokeObjectURL(url);
-        }, 'image/png');
+        const blob = await canvasToBlob(canvas);
+        if (!blob) return;
+        try { await saveFileToDevice(blob, `indiva-${item.discountId}.png`); } catch { /* sessizce yok say */ }
+    };
+
+    const handleShareImage = async () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const blob = await canvasToBlob(canvas);
+        if (!blob) return;
+        try {
+            await shareFile(blob, `indiva-${item.discountId}.png`, 'image/png', item.title);
+        } catch {
+            setShareError('image');
+            setTimeout(() => setShareError(null), 2500);
+        }
     };
 
     const handleCreateVideo = async () => {
@@ -917,6 +937,7 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
         setVideoProgress(0);
         try {
             const blob = await recordDealVideo(canvas, item, cachedImgRef.current, setVideoProgress);
+            videoBlobRef.current = blob;
             const url = URL.createObjectURL(blob);
             setVideoUrl(url);
             setVideoExt(blob.type.includes('mp4') ? 'mp4' : 'webm');
@@ -926,12 +947,19 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
         }
     };
 
-    const handleDownloadVideo = () => {
-        if (!videoUrl) return;
-        const a = document.createElement('a');
-        a.href = videoUrl;
-        a.download = `indiva-${item.discountId}.${videoExt}`;
-        a.click();
+    const handleDownloadVideo = async () => {
+        if (!videoBlobRef.current) return;
+        try { await saveFileToDevice(videoBlobRef.current, `indiva-${item.discountId}.${videoExt}`); } catch { /* sessizce yok say */ }
+    };
+
+    const handleShareVideo = async () => {
+        if (!videoBlobRef.current) return;
+        try {
+            await shareFile(videoBlobRef.current, `indiva-${item.discountId}.${videoExt}`, videoBlobRef.current.type, item.title);
+        } catch {
+            setShareError('video');
+            setTimeout(() => setShareError(null), 2500);
+        }
     };
 
     const handleCopyCaption = async () => {
@@ -1001,6 +1029,13 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
                     >
                         ⬇ Görseli İndir
                     </button>
+                    <button
+                        onClick={handleShareImage}
+                        disabled={renderState !== 'ready' || videoState === 'recording'}
+                        className="flex-1 min-w-[140px] py-2.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-white text-sm font-bold rounded-xl transition-all active:scale-95"
+                    >
+                        📤 Görseli Paylaş
+                    </button>
 
                     {videoState !== 'ready' && (
                         <button
@@ -1022,6 +1057,20 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
                         >
                             ⬇ Videoyu İndir (.{videoExt})
                         </button>
+                    )}
+                    {videoState === 'ready' && (
+                        <button
+                            onClick={handleShareVideo}
+                            className="flex-1 min-w-[140px] py-2.5 bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold rounded-xl transition-all active:scale-95"
+                        >
+                            📤 Videoyu Paylaş
+                        </button>
+                    )}
+
+                    {shareError && (
+                        <p className="w-full text-[11px] text-red-400 text-center -mt-1">
+                            Bu cihaz/tarayıcı {shareError === 'video' ? 'video' : 'görsel'} paylaşımını desteklemiyor — indirip elle paylaşabilirsin.
+                        </p>
                     )}
 
                     {videoState === 'ready' && videoExt === 'webm' && (
