@@ -5,6 +5,7 @@ import { Clipboard } from '@capacitor/clipboard';
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
+import { Media } from '@capacitor-community/media';
 import type { SocialContentItem, Discount } from '../types';
 
 interface SocialContentManagerProps {
@@ -123,17 +124,39 @@ function blobToBase64(blob: Blob): Promise<string> {
     });
 }
 
+// İNDİVA albümünü (yoksa) bir kere oluşturup identifier'ını önbelleğe alır —
+// Media.saveVideo/savePhoto Android'de bir albümün identifier'ını istiyor.
+let indivaAlbumPromise: Promise<string | undefined> | null = null;
+function ensureIndivaAlbum(): Promise<string | undefined> {
+    if (!indivaAlbumPromise) {
+        indivaAlbumPromise = (async () => {
+            try { await Media.createAlbum({ name: 'İNDİVA' }); } catch { /* zaten varsa hata verir, sorun değil */ }
+            const { albums } = await Media.getAlbums();
+            return albums.find(a => a.name === 'İNDİVA')?.identifier ?? albums[0]?.identifier;
+        })();
+    }
+    return indivaAlbumPromise;
+}
+
 // Görsel/videoyu cihaza kaydeder.
-// NOT: Native (APK) tarafta önce Directory.Documents'a yazmayı denemiştik —
-// ama Android'in scoped storage kısıtları yüzünden bu ya sessizce başarısız
-// oluyor ya da dosya kullanıcının hiç göremeyeceği bir uygulama-özel klasöre
-// yazılıyordu ("indirdim ama telefonda bulamıyorum" şikayetinin sebebi buydu).
-// Artık native'de doğrudan native paylaşım sayfasını açıyoruz — kullanıcı
-// oradan "Dosyalara Kaydet", Galeri, WhatsApp vb. seçip gerçekten kaydedebiliyor.
+// NOT: Önce Directory.Documents'a (uygulama-özel, görünmez klasör), sonra
+// sadece native paylaşım sayfasını açmayı denedik — ama paylaşım ekranındaki
+// hedeflerin hiçbiri "Galeriye kaydet" yapmıyordu, kullanıcı dosyayı telefonda
+// bulamıyordu. Artık @capacitor-community/media ile Android'in MediaStore
+// API'sini kullanıp gerçekten Galeri'de görünen bir "İNDİVA" albümüne
+// kaydediyoruz — bu, ek izin gerektirmeyen resmi/modern yöntem.
 // Web'de mevcut blob-URL + <a download> yöntemi (zaten çalıştığı için) aynen duruyor.
 async function saveFileToDevice(blob: Blob, filename: string, title: string): Promise<void> {
     if (Capacitor.isNativePlatform()) {
-        await shareFile(blob, filename, blob.type, title);
+        const albumIdentifier = await ensureIndivaAlbum();
+        const base64 = await blobToBase64(blob);
+        const dataUri = `data:${blob.type};base64,${base64}`;
+        const baseName = filename.replace(/\.[^.]+$/, '');
+        if (blob.type.startsWith('video/')) {
+            await Media.saveVideo({ path: dataUri, albumIdentifier, fileName: baseName });
+        } else {
+            await Media.savePhoto({ path: dataUri, albumIdentifier, fileName: baseName });
+        }
     } else {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
