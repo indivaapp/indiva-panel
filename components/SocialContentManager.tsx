@@ -383,41 +383,39 @@ async function renderDealImage(
         }
     });
 
-    // ── İNDİVA marka rozeti: ürün görselinin ÜSTÜNDE, akılda kalıcı olsun ────
-    // "İNDİVA'DA İNDİRİM VAR!" algısı için wordmark + sloganı burada, fotoğrafın
-    // üstünde büyük gösteriyoruz (sağ üstteki köşe artık sade logo işareti).
-    withPop(ctx, cardX + cardW - 175, cardY + 72, burstP, burstP, () => {
-        const bx2 = cardX + cardW - 175, by2 = cardY + 72;
-        ctx.font = '900 42px Arial';
-        const line1 = 'İNDİVA';
-        const line1W = ctx.measureText(line1).width;
-        ctx.font = '800 22px Arial';
-        const line2 = 'İNDİRİM VAR!';
-        const line2W = ctx.measureText(line2).width;
-        const pillW = Math.max(line1W, line2W) + 60;
-        const pillH = 100;
+    // ── İNDİVA marka rozeti: ürün görselinin EN ÜSTÜNDE (burst rozetiyle aynı
+    // hizada), tek satır "İNDİVA'DA İNDİRİM VAR!" ifadesi olarak ────────────
+    const badgeCX = cardX + cardW - 175, badgeCY = cardY + 12;
+    withPop(ctx, badgeCX, badgeCY, burstP, burstP, () => {
+        ctx.font = '900 34px Arial';
+        const partA = 'İNDİVA\'DA ';
+        const partB = 'İNDİRİM VAR!';
+        const wA = ctx.measureText(partA).width;
+        const wB = ctx.measureText(partB).width;
+        const totalW = wA + wB;
+        const pillW = totalW + 56;
+        const pillH = 76;
 
         ctx.save();
         ctx.shadowColor = 'rgba(0,0,0,0.5)';
         ctx.shadowBlur = 24;
         ctx.shadowOffsetY = 8;
         ctx.fillStyle = 'rgba(20,8,32,0.6)';
-        drawRoundedRect(ctx, bx2 - pillW / 2, by2 - pillH / 2, pillW, pillH, 24);
+        drawRoundedRect(ctx, badgeCX - pillW / 2, badgeCY - pillH / 2, pillW, pillH, 22);
         ctx.restore();
         ctx.save();
         ctx.strokeStyle = 'rgba(255,122,26,0.9)';
         ctx.lineWidth = 3;
-        strokeRoundedRect(ctx, bx2 - pillW / 2 + 2, by2 - pillH / 2 + 2, pillW - 4, pillH - 4, 22);
+        strokeRoundedRect(ctx, badgeCX - pillW / 2 + 2, badgeCY - pillH / 2 + 2, pillW - 4, pillH - 4, 20);
         ctx.restore();
 
-        ctx.textAlign = 'center';
+        ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
+        const startX = badgeCX - totalW / 2;
         ctx.fillStyle = '#ffffff';
-        ctx.font = '900 42px Arial';
-        ctx.fillText(line1, bx2, by2 - 20);
+        ctx.fillText(partA, startX, badgeCY + 6);
         ctx.fillStyle = '#FF8A3D';
-        ctx.font = '800 22px Arial';
-        ctx.fillText(line2, bx2, by2 + 22);
+        ctx.fillText(partB, startX + wA, badgeCY + 6);
         ctx.textAlign = 'left';
         ctx.textBaseline = 'alphabetic';
     });
@@ -728,7 +726,13 @@ function easeInOutCubic(t: number): number {
     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-async function renderFlipFrame(
+// NOT: Daha önce burada ölçekleme tabanlı bir "sayfa çevirme" efekti vardı,
+// ancak scaleX'in her karede sıfıra yaklaşması MediaRecorder'ın gerçek zamanlı
+// MP4 (H.264) kodlamasında ciddi blok artefaktlarına (sarı/beyaz bozulmalar)
+// yol açtı — kaydedilen videoda görüldü. Basit, sabit hızlı bir yatay kaydırma
+// (translate) hem çok daha akıcı encode edilir hem de görsel olarak daha
+// profesyonel/kesintisiz durur.
+async function renderSlideFrame(
     canvas: HTMLCanvasElement,
     item: SocialContentItem,
     cachedImg: HTMLImageElement | null,
@@ -740,32 +744,18 @@ async function renderFlipFrame(
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
-    // Ham lineer zaman yerine yumuşak giriş/çıkış — dönüş, katlanma noktasına
-    // (dik açı) doğru hızlanıp diğer tarafta yavaşlayarak "gerçek" hissettirir.
-    const angle = easeInOutCubic(t) * Math.PI;
-    const rawCos = Math.cos(angle);
-    const showingDeal = rawCos > 0;
-    const scaleX = Math.max(0.001, Math.abs(rawCos));
-    // Düz bir kağıt yerine hafif kabaran bir yüzey gibi dönsün diye ufak dikey
-    // esneme — sayfanın gerçekten 3 boyutlu döndüğü hissini güçlendirir.
-    const bulge = 1 + 0.05 * Math.sin(angle);
-    // Katlanma anına (yandan görünen, scaleX≈0) yaklaştıkça koyulaşan gölge —
-    // düz bir ölçekleme animasyonunu "dönen bir yüzey" gibi gösteren asıl ipucu.
-    const foldShade = Math.sin(angle);
+    const offset = easeInOutCubic(t) * CANVAS_W;
 
+    // Fırsat sahnesi sola doğru kayarak çıkar
     ctx.save();
-    ctx.translate(CANVAS_W / 2, CANVAS_H / 2);
-    ctx.scale(scaleX, bulge);
-    ctx.translate(-CANVAS_W / 2, -CANVAS_H / 2);
-    if (showingDeal) {
-        await renderDealImage(canvas, item, null, 1, cachedImg);
-    } else {
-        await renderPromoFrame(canvas, appIconImg);
-    }
-    if (foldShade > 0.02) {
-        ctx.fillStyle = `rgba(0,0,0,${Math.min(0.65, foldShade * 0.7)})`;
-        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    }
+    ctx.translate(-offset, 0);
+    await renderDealImage(canvas, item, null, 1, cachedImg);
+    ctx.restore();
+
+    // Promo sayfası sağdan içeri kayar
+    ctx.save();
+    ctx.translate(CANVAS_W - offset, 0);
+    await renderPromoFrame(canvas, appIconImg);
     ctx.restore();
 }
 
@@ -774,9 +764,9 @@ async function renderFlipFrame(
 // (mevcut animasyon) → sayfa çevirme geçişi → "daha fazla fırsat" promo sayfası.
 // MP4 (H.264) destekleniyorsa onu, yoksa WebM'e düşer.
 const DEAL_DURATION_MS = 8000;
-const FLIP_DURATION_MS = 900;
+const SLIDE_DURATION_MS = 900;
 const PROMO_DURATION_MS = 3200;
-const VIDEO_DURATION_MS = DEAL_DURATION_MS + FLIP_DURATION_MS + PROMO_DURATION_MS;
+const VIDEO_DURATION_MS = DEAL_DURATION_MS + SLIDE_DURATION_MS + PROMO_DURATION_MS;
 const VIDEO_FPS = 30;
 
 function pickSupportedMimeType(): string {
@@ -825,9 +815,9 @@ async function recordDealVideo(
 
             if (elapsed < DEAL_DURATION_MS) {
                 renderDealImage(canvas, item, null, elapsed / DEAL_DURATION_MS, cachedImg).catch(() => {});
-            } else if (elapsed < DEAL_DURATION_MS + FLIP_DURATION_MS) {
-                const flipT = (elapsed - DEAL_DURATION_MS) / FLIP_DURATION_MS;
-                renderFlipFrame(canvas, item, cachedImg, appIconImg, flipT).catch(() => {});
+            } else if (elapsed < DEAL_DURATION_MS + SLIDE_DURATION_MS) {
+                const flipT = (elapsed - DEAL_DURATION_MS) / SLIDE_DURATION_MS;
+                renderSlideFrame(canvas, item, cachedImg, appIconImg, flipT).catch(() => {});
             } else {
                 renderPromoFrame(canvas, appIconImg).catch(() => {});
             }
