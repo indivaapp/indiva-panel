@@ -402,7 +402,7 @@ async function renderDealImage(
         ctx.restore();
 
         if (loadedImg) {
-            const pad = 70;
+            const pad = 40;
             const availW = cardW - pad * 2, availH = cardH - pad * 2;
 
             // Ürün görseli kartın oranına tam oturmuyorsa (çoğu ürün fotoğrafı
@@ -428,7 +428,7 @@ async function renderDealImage(
             // kart içinde minicik kalıyorlardı — çoğu scraper görseli 300-500px).
             // 2.2x'e kadar büyütmeye izin veriyoruz; hafif bulanıklaşma, boşlukta
             // kaybolan minik bir fotoğraftan çok daha iyi görünüyor.
-            const scale = Math.min(availW / loadedImg.width, availH / loadedImg.height, 2.2);
+            const scale = Math.min(availW / loadedImg.width, availH / loadedImg.height, 3);
             const drawW = loadedImg.width * scale, drawH = loadedImg.height * scale;
             ctx.save();
             ctx.shadowColor = 'rgba(0,0,0,0.4)';
@@ -452,7 +452,7 @@ async function renderDealImage(
     try { await document.fonts.load("700 80px Caveat"); } catch { /* font yoksa sistem fontuna düşer */ }
     withSlideFade(ctx, (1 - headerP) * -12, headerP, () => {
         ctx.save();
-        ctx.translate(CANVAS_W / 2, 232);
+        ctx.translate(CANVAS_W / 2, 195);
         ctx.rotate(-3 * Math.PI / 180);
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
