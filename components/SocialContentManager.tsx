@@ -773,46 +773,14 @@ function easeInOutCubic(t: number): number {
     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-// NOT: Daha önce burada ölçekleme tabanlı bir "sayfa çevirme" efekti vardı,
-// ancak scaleX'in her karede sıfıra yaklaşması MediaRecorder'ın gerçek zamanlı
-// MP4 (H.264) kodlamasında ciddi blok artefaktlarına (sarı/beyaz bozulmalar)
-// yol açtı — kaydedilen videoda görüldü. Basit, sabit hızlı bir yatay kaydırma
-// (translate) hem çok daha akıcı encode edilir hem de görsel olarak daha
-// profesyonel/kesintisiz durur.
-async function renderSlideFrame(
-    canvas: HTMLCanvasElement,
-    item: SocialContentItem,
-    cachedImg: HTMLImageElement | null,
-    appIconImg: HTMLImageElement | null,
-    t: number,
-): Promise<void> {
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-
-    const offset = easeInOutCubic(t) * CANVAS_W;
-
-    // Fırsat sahnesi sola doğru kayarak çıkar
-    ctx.save();
-    ctx.translate(-offset, 0);
-    await renderDealImage(canvas, item, null, 1, cachedImg);
-    ctx.restore();
-
-    // Promo sayfası sağdan içeri kayar
-    ctx.save();
-    ctx.translate(CANVAS_W - offset, 0);
-    await renderPromoFrame(canvas, appIconImg);
-    ctx.restore();
-}
-
 // ─── Animasyonlu video kaydı (tarayıcı içi, sunucuya gerek yok) ─────────────
 // canvas.captureStream + MediaRecorder ile kaydeder. Sırasıyla: fırsat sahnesi
 // (mevcut animasyon) → sayfa çevirme geçişi → "daha fazla fırsat" promo sayfası.
 // MP4 (H.264) destekleniyorsa onu, yoksa WebM'e düşer.
-const DEAL_DURATION_MS = 8000;
-const SLIDE_DURATION_MS = 900;
-const PROMO_DURATION_MS = 3200;
+// Toplam 18sn: ilk sayfa 12sn, geçiş 0.6sn, ikinci sayfa ~5.4sn (~6sn).
+const DEAL_DURATION_MS = 12000;
+const SLIDE_DURATION_MS = 600;
+const PROMO_DURATION_MS = 5400;
 const VIDEO_DURATION_MS = DEAL_DURATION_MS + SLIDE_DURATION_MS + PROMO_DURATION_MS;
 const VIDEO_FPS = 30;
 
@@ -862,6 +830,38 @@ async function recordDealVideo(
     let appIconImg: HTMLImageElement | null = null;
     try { appIconImg = await loadAppIcon(); } catch { appIconImg = null; }
 
+    // Geçiş ve ikinci sayfa kendi içinde ayrıca animasyon oynatmıyor (statik) —
+    // önceden her karede İKİ tam sahneyi (blur filtreleri dahil) yeniden çizmek
+    // özellikle geçişte videoyu belirgin şekilde kasıyordu. Artık ilk (fırsat,
+    // progress=1) ve ikinci (promo) sahne BİR KEZ render edilip önbelleğe
+    // alınıyor; geçiş sırasında sadece bu iki hazır kareyi kaydırarak
+    // birleştiriyoruz (ucuz, sadece drawImage).
+    // NOT: İlk denemede bu önbelleğe alma işlemi geçiş TAM BAŞLARKEN (ilk
+    // ihtiyaç duyulduğu anda) yapılıyordu — bu tek seferlik ama pahalı işlem
+    // (blur filtreli tam sahne render'ı) tam da akıcılığın en çok önemli
+    // olduğu anda bir kare atlanmasına/donmaya yol açıyordu. Artık promo
+    // sayfası (ürüne bağlı olmadığı için) kayıt başlamadan HEMEN önce, fırsat
+    // sahnesinin dondurulmuş hali de geçişten ~300ms önce arka planda
+    // önceden ısıtılıyor — geçiş anına geldiğimizde ikisi de zaten hazır.
+    const promoSnapshot = document.createElement('canvas');
+    promoSnapshot.width = CANVAS_W;
+    promoSnapshot.height = CANVAS_H;
+    await renderPromoFrame(promoSnapshot, appIconImg);
+
+    let dealSnapshotPromise: Promise<HTMLCanvasElement> | null = null;
+    const getDealSnapshot = () => {
+        if (!dealSnapshotPromise) {
+            dealSnapshotPromise = (async () => {
+                const c = document.createElement('canvas');
+                c.width = CANVAS_W;
+                c.height = CANVAS_H;
+                await renderDealImage(c, item, null, 1, cachedImg);
+                return c;
+            })();
+        }
+        return dealSnapshotPromise;
+    };
+
     return new Promise((resolve, reject) => {
         recorder.ondataavailable = (e: BlobEvent) => { if (e.data.size > 0) chunks.push(e.data); };
         recorder.onerror = () => reject(new Error('Video kaydı başarısız oldu.'));
@@ -871,6 +871,8 @@ async function recordDealVideo(
         };
 
         const blit = () => visibleCtx.drawImage(buffer, 0, 0);
+        const bufferCtx = buffer.getContext('2d')!;
+        const DEAL_SNAPSHOT_PREWARM_MS = 300;
 
         const startTime = performance.now();
         const tick = () => {
@@ -880,11 +882,22 @@ async function recordDealVideo(
             let renderPromise: Promise<unknown>;
             if (elapsed < DEAL_DURATION_MS) {
                 renderPromise = renderDealImage(buffer, item, null, elapsed / DEAL_DURATION_MS, cachedImg);
+                if (elapsed > DEAL_DURATION_MS - DEAL_SNAPSHOT_PREWARM_MS) {
+                    getDealSnapshot().catch(() => {});
+                }
             } else if (elapsed < DEAL_DURATION_MS + SLIDE_DURATION_MS) {
                 const flipT = (elapsed - DEAL_DURATION_MS) / SLIDE_DURATION_MS;
-                renderPromise = renderSlideFrame(buffer, item, cachedImg, appIconImg, flipT);
+                renderPromise = getDealSnapshot().then((deal) => {
+                    const offset = easeInOutCubic(flipT) * CANVAS_W;
+                    bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
+                    bufferCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+                    bufferCtx.drawImage(deal, -offset, 0);
+                    bufferCtx.drawImage(promoSnapshot, CANVAS_W - offset, 0);
+                });
             } else {
-                renderPromise = renderPromoFrame(buffer, appIconImg);
+                bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
+                bufferCtx.drawImage(promoSnapshot, 0, 0);
+                renderPromise = Promise.resolve();
             }
             renderPromise.then(blit).catch(() => {});
 
