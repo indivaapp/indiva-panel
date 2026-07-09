@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.3",
-    "@capacitor-community/media": "^7.0.1",
+    "@capacitor-community/media": "^8.0.1",
     "@capacitor/android": "^7.4.4",
     "@capacitor/app": "^7.1.1",
     "@capacitor/cli": "^7.4.4",
