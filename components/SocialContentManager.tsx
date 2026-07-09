@@ -378,31 +378,6 @@ async function renderDealImage(
 
     drawBackground(ctx);
 
-    // İNDİVA uygulama ikonu (alışveriş sepeti) — statik dosya, önbellekten
-    let appIconImg: HTMLImageElement | null = null;
-    try { appIconImg = await loadAppIcon(); } catch { appIconImg = null; }
-
-    // ── Üst sağ köşe: sadece logo (yazısız, küçük bir marka imzası) ──────────
-    withSlideFade(ctx, (1 - headerP) * -20, headerP, () => {
-        if (appIconImg) {
-            const iconSize = 76;
-            const iconX = CANVAS_W - 64 - iconSize;
-            const iconY = 62;
-            ctx.save();
-            ctx.shadowColor = 'rgba(0,0,0,0.3)';
-            ctx.shadowBlur = 18;
-            ctx.shadowOffsetY = 5;
-            ctx.fillStyle = '#ffffff';
-            drawRoundedRect(ctx, iconX, iconY, iconSize, iconSize, 20);
-            ctx.restore();
-            ctx.save();
-            drawRoundedRect(ctx, iconX, iconY, iconSize, iconSize, 20);
-            ctx.clip();
-            ctx.drawImage(appIconImg, iconX, iconY, iconSize, iconSize);
-            ctx.restore();
-        }
-    });
-
     // ── Ürün kartı: beyaz zemin + altın çerçeve (hafif zıplayarak büyür) ─────
     // NOT: cardH 860'tan 740'a küçültüldü — geri kalan her şey (uyarı, başlık,
     // fiyat, tasarruf) cardY+cardH'e göre hesaplandığı için otomatik yukarı
@@ -782,7 +757,7 @@ const DEAL_DURATION_MS = 12000;
 const SLIDE_DURATION_MS = 600;
 const PROMO_DURATION_MS = 5400;
 const VIDEO_DURATION_MS = DEAL_DURATION_MS + SLIDE_DURATION_MS + PROMO_DURATION_MS;
-const VIDEO_FPS = 30;
+const VIDEO_FPS = 60;
 
 function pickSupportedMimeType(): string {
     const candidates = [
@@ -824,7 +799,7 @@ async function recordDealVideo(
 
     const stream: MediaStream = (canvas as any).captureStream(VIDEO_FPS);
     const mimeType = pickSupportedMimeType();
-    const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_000_000 });
+    const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 8_000_000 });
     const chunks: Blob[] = [];
 
     let appIconImg: HTMLImageElement | null = null;

@@ -14,7 +14,7 @@ import { getMessaging } from 'firebase-admin/messaging';
 import * as cheerio from 'cheerio';
 import * as fs from 'fs';
 import * as path from 'path';
-import { fetchWithFallback, resolveUrl, parseDeals } from './scraperService.js';
+import { fetchWithFallback, resolveUrl, parseDeals, upgradeImageQuality } from './scraperService.js';
 import { sendAdminAlert } from './alertService.js';
 import { runQualityGate } from './qualityGate.js';
 import { maybeNotifyHighScoreDeal } from './notifyGate.js';
@@ -448,7 +448,7 @@ SADECE JSON array döndür, kesinlikle başka metin yok. Maks 20 ürün.
                     ? p.productUrl
                     : `https://www.onual.com/${String(p.productUrl || '').replace(/^\//, '')}`,
                 newPrice: Number(p.newPrice) || 0,
-                thumbnailUrl: String(p.imageUrl || ''),
+                thumbnailUrl: upgradeImageQuality(String(p.imageUrl || '')),
                 storeName: String(p.storeName || ''),
                 storeUrl: String(p.storeUrl || ''),
             }));
@@ -553,6 +553,10 @@ async function fetchProductDetails(product) {
             const mainImg = $('img[class*="product"], img[id*="product"], .product-image img, .main-image img').first().attr('src');
             if (mainImg && mainImg.startsWith('http')) imageUrl = mainImg;
         }
+
+        // Bazı mağaza CDN'leri (örn. Hepsiburada) burada da küçük boyutlu
+        // bir varyant döndürebilir — mümkünse büyütülmüş halini iste.
+        imageUrl = upgradeImageQuality(imageUrl);
 
         // ── Ürün başlığı ─────────────────────────────────────────────────
         let title = product.title;

@@ -132,6 +132,22 @@ export async function resolveUrl(url, timeout = 10000) {
 }
 
 /**
+ * Bazı mağaza CDN'leri listeleme sayfasında küçük/bulanık bir thumbnail
+ * boyutu döndürüyor, oysa URL'deki boyut segmentini değiştirerek aynı
+ * CDN'den çok daha büyük bir varyant istemek mümkün (yeni istek gerekmiyor,
+ * sadece string değişimi). Doğrulandı: productimages.hepsiburada.net,
+ * "424-600" yerine "1500-1500" istendiğinde 200 dönüyor ve ~3-4 kat daha
+ * büyük dosya boyutu geliyor (gerçek yüksek çözünürlük).
+ */
+export function upgradeImageQuality(url) {
+    if (!url) return url;
+    if (url.includes('productimages.hepsiburada.net')) {
+        return url.replace(/\/\d+-\d+\//, '/1500-1500/');
+    }
+    return url;
+}
+
+/**
  * Online alışveriş sitesinden ilanları parse et
  * Yeni onual.com yapısı (2025+): <a class="product-card group" data-share-id="...">
  */
@@ -169,7 +185,7 @@ export function parseDeals(html) {
             }
         }
 
-        const thumbnailUrl = $card.find('.product-image').attr('src') || '';
+        const thumbnailUrl = upgradeImageQuality($card.find('.product-image').attr('src') || '');
         const storeName = $card.find('.product-store-logo-badge').attr('title') || '';
         const discountNote = $card.find('.product-note-tooltip').text().trim();
 
@@ -211,7 +227,7 @@ export function parseDeals(html) {
                 if (hashMatch) newPrice = parseInt(hashMatch[1], 10);
             }
             const img = $card.find('figure.post-thumbnail img, .post-thumbnail img, img').first();
-            const thumbnailUrl = img.attr('src') || img.attr('data-src') || '';
+            const thumbnailUrl = upgradeImageQuality(img.attr('src') || img.attr('data-src') || '');
             const fullLink = href.startsWith('http') ? href : `https://www.onual.com${href}`;
             deals.push({ id: productId, title: title.replace(/\s+/g, ' ').trim(), url: fullLink.split('#')[0], newPrice, thumbnailUrl });
         });
