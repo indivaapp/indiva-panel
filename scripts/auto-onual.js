@@ -164,7 +164,9 @@ function cleanProductTitle(title) {
         // Sondaki alfanumerik model kodları (Ch-91D401L-Tr, Ccb001Btbk, 000Cg20917)
         .replace(/\s+[A-Z]{1,3}[-][A-Z0-9]{3,}[-]?[A-Z0-9]*\s*$/gi, '')
         // Sondaki ürün kodlarını sil (örn: "Ürün Adı - ABC123", "Ürün Adı 50276557-VR090")
-        .replace(/[-–]\s*[A-Z0-9]{4,}(?:[\-_][A-Z0-9]+)*\s*$/i, '')
+        // NOT: en az bir rakam şartı eklendi — yoksa "- Pembe" gibi düz renk/kelime
+        // eklerini de kod sanıp siliyordu (SEO eki temizliği sonrası ortaya çıktı).
+        .replace(/[-–]\s*(?=\S*\d)[A-Z0-9]{4,}(?:[\-_][A-Z0-9]+)*\s*$/i, '')
         // Parantez içindeki kodları sil (örn: "(HB000018U0DJ)")
         .replace(/\([A-Z0-9]{5,}\)\s*$/i, '')
         // Sondaki kısa model kodları (Eld01, Pb-70, Ap12T)
