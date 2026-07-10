@@ -671,6 +671,42 @@ export const publishStagingProducts = async (products: StagingProduct[]): Promis
     return published;
 };
 
+// AI kalite kapısından geçip otomatik yayınlanan Trendyol/Cimri ürünleri.
+// Tek alan where + client-side sıralama (composite index gerektirmez).
+export interface AutoPublishedProduct {
+    id: string;
+    title: string;
+    brand?: string;
+    imageUrl: string;
+    link: string;
+    newPrice: number;
+    oldPrice: number;
+    site?: string;
+    storeName?: string;
+    qualityScore: number;
+    satisPotansiyeli?: number | null;
+    ilgiCekicilik?: number | null;
+    qualityReason?: string;
+    autoPublishedAt?: any;
+}
+
+export const getAutoPublishedProducts = async (limitCount = 30): Promise<AutoPublishedProduct[]> => {
+    const q = query(
+        collection(db, 'discounts'),
+        where('submittedBy', '==', 'trendyol-scraper')
+    );
+    const snap = await getDocs(q);
+    return snap.docs
+        .map(d => ({ id: d.id, ...d.data() } as AutoPublishedProduct))
+        .filter(p => typeof p.qualityScore === 'number')
+        .sort((a, b) => {
+            const am = a.autoPublishedAt?.toMillis?.() ?? 0;
+            const bm = b.autoPublishedAt?.toMillis?.() ?? 0;
+            return bm - am;
+        })
+        .slice(0, limitCount);
+};
+
 export const clearStagingProducts = async (site?: string): Promise<void> => {
     const q = query(collection(db, 'trendyol_staging'), where('status', '==', 'pending'));
     const snap = await getDocs(q);

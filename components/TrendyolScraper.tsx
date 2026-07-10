@@ -3,8 +3,8 @@ import type { StagingProduct } from '../types';
 import {
   getStagingProducts, publishStagingProducts, clearStagingProducts,
   getScraperStatus, getScraperConfig, toggleScraperSource, triggerScrape,
-  requestResolvePublish, getPublishStatus,
-  type ScraperStatusDoc, type ScraperConfigDoc,
+  requestResolvePublish, getPublishStatus, getAutoPublishedProducts,
+  type ScraperStatusDoc, type ScraperConfigDoc, type AutoPublishedProduct,
 } from '../services/firebase';
 
 const TrendyolScraper: React.FC = () => {
@@ -17,6 +17,8 @@ const TrendyolScraper: React.FC = () => {
   const [publishInterval, setPublishInterval] = useState<number>(0); // 0=hemen, >0=dakika
 
   const [stagingProducts, setStagingProducts] = useState<StagingProduct[]>([]);
+  const [autoPublished, setAutoPublished] = useState<AutoPublishedProduct[]>([]);
+  const [loadingAutoPublished, setLoadingAutoPublished] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [loadingStaging, setLoadingStaging] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -51,6 +53,22 @@ const TrendyolScraper: React.FC = () => {
   }, []);
 
   useEffect(() => { loadStaging(); }, [loadStaging]);
+
+  // ── AI tarafından otomatik yayınlanan ürünler ────────────────────────────
+  const loadAutoPublished = useCallback(async () => {
+    setLoadingAutoPublished(true);
+    try {
+      const products = await getAutoPublishedProducts(30);
+      setAutoPublished(products);
+    } catch {}
+    finally { setLoadingAutoPublished(false); }
+  }, []);
+
+  useEffect(() => {
+    loadAutoPublished();
+    const t = setInterval(loadAutoPublished, 30000);
+    return () => clearInterval(t);
+  }, [loadAutoPublished]);
 
   // Tarama bitince staging'i otomatik yenile
   const prevRunning = useRef(false);
@@ -189,15 +207,24 @@ const TrendyolScraper: React.FC = () => {
   const recentActivity = Math.max(listenerMs || 0, lastRunMs || 0);
   const listenerOnline = recentActivity > 0 && (Date.now() - recentActivity) < 6 * 60 * 60 * 1000;
 
-  // Site listesi + seçili siteye göre kaynaklar ve ürünler
-  const sites = config?.sites?.length ? config.sites : [{ id: 'trendyol', label: 'Trendyol' }];
+  // Site listesi — config.sites varsa kullan; yoksa sources'tan türet; ikisi de yoksa her iki site göster
+  const FALLBACK_SITES = [{ id: 'trendyol', label: 'Trendyol' }, { id: 'cimri', label: 'Cimri' }];
+  const sites: { id: string; label: string }[] = config?.sites?.length
+    ? config.sites
+    : config?.sources?.length
+      ? [...new Map(config.sources.map(s => {
+          const id = s.site || 'trendyol';
+          const label = id === 'cimri' ? 'Cimri' : id.charAt(0).toUpperCase() + id.slice(1);
+          return [id, { id, label }] as [string, { id: string; label: string }];
+        })).values()]
+      : FALLBACK_SITES;
   const siteSources = (config?.sources || []).filter(s => (s.site || 'trendyol') === selectedSite);
   const siteProducts = stagingProducts.filter(p => (p.site || 'trendyol') === selectedSite);
   const siteLabel = sites.find(s => s.id === selectedSite)?.label || 'Trendyol';
 
   return (
     <>
-    <div className="max-w-5xl mx-auto space-y-6 pb-24">
+    <div className={`max-w-5xl mx-auto space-y-6 ${selectedIds.size > 0 ? 'pb-56' : 'pb-36'}`}>
 
       {/* Başlık */}
       <div className="flex items-center gap-3">
@@ -311,6 +338,81 @@ const TrendyolScraper: React.FC = () => {
       </button>
       {triggerMessage && <p className="text-center text-sm text-blue-400">{triggerMessage}</p>}
 
+      {/* ── AI Tarafından Otomatik Yayınlananlar ────────────────────────────── */}
+      <div className="border-t border-gray-700 pt-6">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <div>
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <span>🤖</span> AI Tarafından Yayınlanan
+              {autoPublished.length > 0 && (
+                <span className="bg-green-600 text-white text-sm font-bold px-2 py-0.5 rounded-full">{autoPublished.length}</span>
+              )}
+            </h2>
+            <p className="text-sm text-gray-400">Kalite kapısını geçip otomatik yayınlanan son ürünler (satış potansiyeli / ilgi çekicilik puanı)</p>
+          </div>
+          <button onClick={loadAutoPublished} disabled={loadingAutoPublished} className="text-xs px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">↻ Yenile</button>
+        </div>
+
+        {loadingAutoPublished && autoPublished.length === 0 ? (
+          <div className="flex items-center gap-3 py-8 justify-center">
+            <div className="w-5 h-5 border-2 border-gray-600 border-t-blue-400 rounded-full animate-spin" />
+            <span className="text-gray-400">Yükleniyor...</span>
+          </div>
+        ) : autoPublished.length === 0 ? (
+          <div className="text-center py-10 text-gray-500">
+            <p className="text-4xl mb-3">🤷</p>
+            <p>Henüz AI tarafından otomatik yayınlanan ürün yok.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            {autoPublished.map(p => {
+              const discount = p.oldPrice > p.newPrice ? Math.round((1 - p.newPrice / p.oldPrice) * 100) : 0;
+              return (
+                <a key={p.id} href={p.link} target="_blank" rel="noopener noreferrer"
+                  className="relative bg-gray-800 rounded-xl overflow-hidden border-2 border-transparent hover:border-green-600/60 transition-all">
+
+                  <div className="absolute top-2 left-2 bg-green-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded z-10">
+                    ⭐ {p.qualityScore}/10
+                  </div>
+                  {discount > 0 && (
+                    <div className="absolute top-2 right-2 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded z-10">-%{discount}</div>
+                  )}
+
+                  <div className="bg-white aspect-square">
+                    <img src={p.imageUrl} alt={p.title} className="w-full h-full object-contain"
+                      onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                  </div>
+
+                  <div className="p-2">
+                    <p className="text-[11px] text-gray-400 truncate">{p.brand}</p>
+                    <p className="text-xs text-white line-clamp-2 leading-tight mt-0.5 min-h-[2rem]">{p.title}</p>
+                    <div className="mt-1.5">
+                      <span className="text-green-400 font-bold text-sm">{p.newPrice.toLocaleString('tr-TR')} TL</span>
+                      {p.oldPrice > p.newPrice && (
+                        <span className="text-gray-500 line-through text-[11px] ml-1.5">{p.oldPrice.toLocaleString('tr-TR')} TL</span>
+                      )}
+                    </div>
+                    {(p.satisPotansiyeli != null || p.ilgiCekicilik != null) && (
+                      <div className="mt-1.5 flex gap-1 flex-wrap">
+                        {p.satisPotansiyeli != null && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-300">Satış {p.satisPotansiyeli}/10</span>
+                        )}
+                        {p.ilgiCekicilik != null && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-900/50 text-purple-300">İlgi {p.ilgiCekicilik}/10</span>
+                        )}
+                      </div>
+                    )}
+                    {p.qualityReason && (
+                      <p className="text-[10px] text-gray-500 mt-1.5 line-clamp-2 italic">"{p.qualityReason}"</p>
+                    )}
+                  </div>
+                </a>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* ── Onay Bölümü ─────────────────────────────────────────────────────── */}
       <div className="border-t border-gray-700 pt-6">
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
@@ -405,7 +507,7 @@ const TrendyolScraper: React.FC = () => {
 
       {/* ── Sabit alt yayın çubuğu (seçim varsa görünür) ──────────────────── */}
       {selectedIds.size > 0 && (
-        <div className="fixed bottom-[65px] left-0 right-0 z-50 px-3 pointer-events-none">
+        <div className="fixed bottom-[calc(62px+env(safe-area-inset-bottom,0px))] left-0 right-0 z-50 px-3 pointer-events-none">
 
           {/* Süre seçici — yukarı doğru açılır */}
           {showIntervalPicker && (
