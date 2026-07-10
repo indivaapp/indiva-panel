@@ -103,6 +103,30 @@ async function sendSilentExpiredNotification(discountId, title) {
     }
 }
 
+// ─── Akıllı İçerik Kısaltma (Gemini maliyeti için) ────────────────────────────
+// 12.000 karakterin tamamını Gemini'ye göndermek yerine, fiyat/stok bilgisiyle
+// ilgili anahtar kelimelerin geçtiği bölgeyi (+ makul bir bağlam payı) kesip
+// yolluyoruz. Fiyat bilgisi neredeyse hep bu anahtar kelimelerin yakınında
+// olur; sayfanın geri kalanı (menü, footer, ilgili ürünler vb.) AI kararı için
+// gereksiz — sadece token maliyeti. Bu, token hacmini ~4 kat azaltır.
+const PRICE_CONTEXT_MAX = 3000;
+function extractPriceContext(content) {
+    const text = String(content);
+    if (text.length <= PRICE_CONTEXT_MAX) return text;
+
+    const keywords = ['tl', '₺', 'fiyat', 'price', 'stok', 'sepet', 'satın', 'tükendi', 'bulunamadı'];
+    const lower = text.toLowerCase();
+    let bestIdx = -1;
+    for (const kw of keywords) {
+        const idx = lower.indexOf(kw);
+        if (idx >= 0 && (bestIdx === -1 || idx < bestIdx)) bestIdx = idx;
+    }
+    if (bestIdx === -1) return text.substring(0, PRICE_CONTEXT_MAX);
+
+    const start = Math.max(0, bestIdx - 500);
+    return text.substring(start, start + PRICE_CONTEXT_MAX);
+}
+
 // ─── İçerik Güvenilirlik Kontrolü ─────────────────────────────────────────────
 // Bot-engeli / captcha / boş sayfa → "güvenilmez". Bu durumda ASLA "bitti" demeyiz
 // (yanlış-pozitifin en büyük kaynağı budur); ilanı dokunmadan bırakırız.
@@ -177,7 +201,7 @@ KAYITLI İLAN:
 - Liste/eski fiyat: ${originalOldPrice} TL
 
 SAYFA İÇERİĞİ (temizlenmiş):
-${String(content).substring(0, 12000)}
+${extractPriceContext(content)}
 
 KURALLAR:
 - "currentPrice": Şu an GERÇEKTE ÖDENECEK satış fiyatı (TL, sayı). Üstü çizili liste/eski fiyatı DEĞİL. Net göremiyorsan 0 yaz.
@@ -266,7 +290,7 @@ async function checkPrices() {
 
         const activeDocs = activeSnapshot.docs;
         const now = Date.now();
-        const ONE_HOUR_MS           =  1 * 60 * 60 * 1000;
+        const ONE_HOUR_MS           =  3 * 60 * 60 * 1000; // adı ONE_HOUR ama maliyet icin 3 saate cikarildi (bkz asagidaki filtre)
         const TWELVE_HOURS_MS       = 12 * 60 * 60 * 1000;
         const TWENTY_FOUR_HOURS_MS  = 24 * 60 * 60 * 1000;
 
