@@ -144,18 +144,32 @@ export async function scoreDealsBatch(apiKey, items) {
     ).join('\n');
 
     const prompt = `Sen İNDİVA uygulamasının kıdemli fırsat editörüsün. Aşağıdaki ${items.length} adayı
-değerlendir: her biri kullanıcıya paylaşmaya gerçekten değer bir fırsat mı?
+iki ayrı boyutta 1-10 puanla:
 
-Kriterler:
-- İndirim oranı gerçekçi ve cazip mi (çok düşükse düşük puan, mantıksız yüksekse şüpheli)
-- Ürün/başlık anlamlı mı, spam veya bozuk veri değil mi
-- Genel olarak bir kullanıcının tıklamak isteyeceği bir fırsat mı
+1) satisPotansiyeli — bu ürün gerçekten SATIN ALINIR mı?
+   - Kategori talebi: elektronik, kişisel bakım, ev/mutfak gibi kanıtlanmış yüksek talepli
+     kategoriler yüksek puan; niş/nadir ihtiyaç ürünleri düşük puan
+   - Fiyat aralığı: dürtüsel satın alma bandında mı (~0-500 TL) yoksa yüksek düşünme
+     gerektiren pahalı bir ürün mü (pahalı ürün otomatik düşük puan almaz ama net
+     indirim ve marka güveniyle desteklenmeli)
+   - Marka tanınırlığı: bilinen/güvenilir marka güven arttırır, bilinmeyen marka düşürür
+   - Evrensellik: geniş kitleye mi hitap ediyor, yoksa çok spesifik/dar bir kesime mi
+
+2) ilgiCekicilik — kullanıcı bu kartı görünce durur, tıklar mı?
+   - İndirim yüzdesinin görsel çarpıcılığı (%50+ dikkat çeker, tek haneli % çekmez)
+   - Başlıktaki "wow" faktörü: tanınan marka adı, ilgi çekici/popüler ürün tipi
+   - Fiyat eşiği psikolojisi (yuvarlak/caydırıcı eşiklerin altında kalması artı puan)
+   - Trend/mevsimsellik: şu anki mevsim ve gündemle örtüşen ürünler artı puan
+
+Ayrıca genel filtre olarak:
+- İndirim oranı gerçekçi mi (mantıksız yüksekse şüpheli, düşürücü)
+- Ürün/başlık anlamlı mı, spam veya bozuk veri değil mi (öyleyse ikisine de 1 ver)
 
 Adaylar:
 ${list}
 
 SADECE JSON array döndür, her id için sırayla:
-[{"id":"...","score":1-10,"reason":"kısa neden (max 10 kelime)"}]`;
+[{"id":"...","satisPotansiyeli":1-10,"ilgiCekicilik":1-10,"reason":"kısa neden (max 12 kelime)"}]`;
 
     try {
         const response = await genAI.models.generateContent({
@@ -173,7 +187,10 @@ SADECE JSON array döndür, her id için sırayla:
         return items.map(it => {
             const found = parsed.find(p => String(p.id) === String(it.id));
             if (!found) return { id: it.id, score: DEFAULT_SCORE_ON_SKIP, reason: 'AI bu id için cevap vermedi, varsayılan geç' };
-            return { id: it.id, score: Number(found.score) || DEFAULT_SCORE_ON_SKIP, reason: String(found.reason || '').slice(0, 100) };
+            const satisPotansiyeli = Number(found.satisPotansiyeli) || DEFAULT_SCORE_ON_SKIP;
+            const ilgiCekicilik = Number(found.ilgiCekicilik) || DEFAULT_SCORE_ON_SKIP;
+            const score = Math.round((satisPotansiyeli + ilgiCekicilik) / 2);
+            return { id: it.id, score, satisPotansiyeli, ilgiCekicilik, reason: String(found.reason || '').slice(0, 100) };
         });
     } catch (err) {
         console.warn(`   ⚠️ [QualityGate] AI puanlama hatası: ${err.message}`);
@@ -239,6 +256,8 @@ export async function runQualityGate(candidates, options = {}) {
             id: c.id,
             publish: s.score >= threshold,
             score: s.score,
+            satisPotansiyeli: s.satisPotansiyeli,
+            ilgiCekicilik: s.ilgiCekicilik,
             reason: s.reason,
             normalizedLink: c.normalizedLink,
         });
