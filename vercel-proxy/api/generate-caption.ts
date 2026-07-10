@@ -2,15 +2,21 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 /**
  * Generate Caption — panelden manuel seçilen fırsatlar için satış dilinde
- * Instagram caption'ı üretir. Tarayıcıda Gemini anahtarı ifşa etmemek için
+ * Instagram caption'ı üretir. Tarayıcıda API anahtarı ifşa etmemek için
  * bu üretim sunucu tarafında (Vercel function) yapılır; frontend sadece
  * ürün bilgisini gönderir, üretilen metni geri alır.
+ *
+ * OpenRouter (deepseek/deepseek-v4-flash) kullanır — Gemini'nin ücretsiz
+ * kotası artık diğer scriptler (auto-onual, indirimRadar, qualityGate, vb.)
+ * tarafından paylaşıldığı için sık sık 429 (kota aşımı) veriyordu. Bu uç
+ * nokta düşük hacimli (sadece manuel seçimde tetiklenir) olduğu için ayrı
+ * bir sağlayıcıya taşımak, paylaşılan Gemini kotasını rahatlatır.
  *
  * POST { title, newPrice, oldPrice, category, storeName }
  * → { success: true, caption: string }
  */
 
-const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
+const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY || '';
 
 function corsHeaders(res: VercelResponse) {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -41,7 +47,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const cat = category || 'bilinmiyor';
     const discountPct = op > 0 && np > 0 ? Math.round(((op - np) / op) * 100) : 0;
 
-    if (!GEMINI_KEY) {
+    if (!OPENROUTER_KEY) {
         return res.status(200).json({ success: true, caption: fallbackCaption(title, np, op, store), source: 'fallback' });
     }
 
@@ -67,25 +73,28 @@ KURALLAR:
 6. SADECE caption metnini döndür, açıklama/markdown ekleme`;
 
     try {
-        const aiRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                    generationConfig: { temperature: 0.7 },
-                }),
-                signal: AbortSignal.timeout(25000),
-            }
-        );
+        const aiRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${OPENROUTER_KEY}`,
+                'HTTP-Referer': 'https://indiva-proxy.vercel.app',
+                'X-Title': 'INDIVA Panel',
+            },
+            body: JSON.stringify({
+                model: 'deepseek/deepseek-v4-flash',
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 0.7,
+            }),
+            signal: AbortSignal.timeout(25000),
+        });
 
         if (!aiRes.ok) {
-            return res.status(200).json({ success: true, caption: fallbackCaption(title, np, op, store), source: 'fallback', warning: `Gemini ${aiRes.status}` });
+            return res.status(200).json({ success: true, caption: fallbackCaption(title, np, op, store), source: 'fallback', warning: `OpenRouter ${aiRes.status}` });
         }
 
         const aiData = await aiRes.json();
-        const text = (aiData.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+        const text = (aiData.choices?.[0]?.message?.content || '').trim();
         if (!text) {
             return res.status(200).json({ success: true, caption: fallbackCaption(title, np, op, store), source: 'fallback' });
         }
