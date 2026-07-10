@@ -500,13 +500,35 @@ export const getPendingSocialContentCount = async (): Promise<number> => {
 };
 
 // Admin panelden elle seçilen bir fırsat için, puan eşiği beklemeden anında
-// içerik kuyruğuna ekler. Caption şablon tabanlıdır (AI çağrısı yok — anında
-// sonuç, tarayıcıda API anahtarı ifşa etme derdi yok).
+// içerik kuyruğuna ekler. Caption, tarayıcıda Gemini anahtarı ifşa etmemek
+// için sunucu tarafındaki (Vercel) generate-caption fonksiyonu üzerinden
+// satış diliyle AI ile üretilir; uç nokta ulaşılamazsa şablona düşer.
 export const addManualSocialContent = async (discount: Discount): Promise<void> => {
     const discountPct = discount.oldPrice > 0 && discount.newPrice > 0
         ? Math.round(((discount.oldPrice - discount.newPrice) / discount.oldPrice) * 100)
         : 0;
-    const caption = `🔥 %${discountPct} indirim: ${discount.title}\n${Math.floor(discount.newPrice)} TL — ${discount.brand}\n\nFırsatı kaçırmadan İNDİVA'dan yakala! 📲\n\n#indirim #firsat #kampanya #indivaapp`;
+    let caption = `🔥 %${discountPct} indirim: ${discount.title}\n${Math.floor(discount.newPrice)} TL — ${discount.brand}\n\nSen de İNDİVA'yı indir, fırsatları kaçırma! 📲\n\n#indirim #firsat #kampanya #indivaapp`;
+
+    try {
+        const res = await fetch('https://indiva-proxy.vercel.app/api/generate-caption', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title: discount.title,
+                newPrice: discount.newPrice,
+                oldPrice: discount.oldPrice,
+                category: discount.category || '',
+                storeName: discount.brand || '',
+            }),
+            signal: AbortSignal.timeout(20000),
+        });
+        if (res.ok) {
+            const data = await res.json();
+            if (data?.caption) caption = data.caption;
+        }
+    } catch {
+        // Ağ/servis hatasında yukarıdaki şablon caption ile devam edilir
+    }
 
     await addDoc(collection(db, 'social_content_queue'), {
         discountId: discount.id,
