@@ -45,7 +45,12 @@ if (fs.existsSync(envPath)) {
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const ONUAL_URL = 'https://www.onual.com';
-const MAX_NEW_PRODUCTS = 15; // Biraz artırılabilir, artık daha verimli
+// 15 -> 50: sayfadaki tum urunler zaten ucretsiz cekiliyor (ekstra network maliyeti
+// yok), sadece ilk 15'e bakmak yeni urunlerin 16-50 araligina dusunce hic
+// gorulmemesine yol aciyordu. Pahali adim (detay fetch + AI) sadece cache/DB'de
+// olmayan GERCEKTEN yeni urunler icin calisiyor, bu limit sadece "aday havuzu"nu
+// buyutuyor - maliyeti artirmiyor.
+const MAX_NEW_PRODUCTS = 50;
 const REQUEST_DELAY_MS = 1000; // İstekler arası bekleme (ms)
 
 // AI Config
