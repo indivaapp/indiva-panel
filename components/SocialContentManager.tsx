@@ -356,6 +356,8 @@ async function renderDealImage(
     if (canvas.height !== CANVAS_H) canvas.height = CANVAS_H;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
     const discountPct = item.oldPrice > 0 && item.newPrice > 0
@@ -652,6 +654,8 @@ async function renderPromoFrame(canvas: HTMLCanvasElement, appIconImg: HTMLImage
     if (canvas.height !== CANVAS_H) canvas.height = CANVAS_H;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
     drawBackground(ctx);
 
@@ -752,8 +756,8 @@ function easeInOutCubic(t: number): number {
 // canvas.captureStream + MediaRecorder ile kaydeder. Sırasıyla: fırsat sahnesi
 // (mevcut animasyon) → sayfa çevirme geçişi → "daha fazla fırsat" promo sayfası.
 // MP4 (H.264) destekleniyorsa onu, yoksa WebM'e düşer.
-// Toplam 18sn: ilk sayfa 12sn, geçiş 0.6sn, ikinci sayfa ~5.4sn (~6sn).
-const DEAL_DURATION_MS = 12000;
+// Toplam 20sn: ilk sayfa 14sn, geçiş 0.6sn, ikinci sayfa ~5.4sn (~6sn).
+const DEAL_DURATION_MS = 14000;
 const SLIDE_DURATION_MS = 600;
 const PROMO_DURATION_MS = 5400;
 const VIDEO_DURATION_MS = DEAL_DURATION_MS + SLIDE_DURATION_MS + PROMO_DURATION_MS;
@@ -786,6 +790,8 @@ async function recordDealVideo(
     if (canvas.height !== CANVAS_H) canvas.height = CANVAS_H;
     const visibleCtx = canvas.getContext('2d');
     if (!visibleCtx) throw new Error('Canvas context alınamadı.');
+    visibleCtx.imageSmoothingEnabled = true;
+    visibleCtx.imageSmoothingQuality = 'high';
 
     // Her kare önce bu görünmez arabellek canvas'ına çiziliyor, sonra TEK
     // senkron drawImage ile asıl (captureStream'e bağlı) canvas'a aktarılıyor.
@@ -799,7 +805,7 @@ async function recordDealVideo(
 
     const stream: MediaStream = (canvas as any).captureStream(VIDEO_FPS);
     const mimeType = pickSupportedMimeType();
-    const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 8_000_000 });
+    const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 12_000_000 });
     const chunks: Blob[] = [];
 
     let appIconImg: HTMLImageElement | null = null;
@@ -847,6 +853,8 @@ async function recordDealVideo(
 
         const blit = () => visibleCtx.drawImage(buffer, 0, 0);
         const bufferCtx = buffer.getContext('2d')!;
+        bufferCtx.imageSmoothingEnabled = true;
+        bufferCtx.imageSmoothingQuality = 'high';
         const DEAL_SNAPSHOT_PREWARM_MS = 300;
 
         const startTime = performance.now();
