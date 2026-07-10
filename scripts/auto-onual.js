@@ -1,7 +1,7 @@
 /**
  * auto-onual.js — INDIVA Otomatik Fırsat Pipeline
  * 
- * onual.com/fiyat/ sitesini tarar, Gemini 2.5 Flash Lite (OpenRouter) ile açıklama üretir,
+ * onual.com/fiyat/ sitesini tarar, Gemini 2.5 Flash ile açıklama üretir,
  * gerçek mağaza linkini resolve ederek Firebase'e kaydeder.
  * 
  * Çalıştırma: node scripts/auto-onual.js
@@ -54,7 +54,11 @@ const MAX_NEW_PRODUCTS = 50;
 const REQUEST_DELAY_MS = 1000; // İstekler arası bekleme (ms)
 
 // AI Config
-const MODEL = 'gemini-2.5-flash-lite'; // Maliyet optimizasyonu için Flash Lite kullanılıyor
+// flash-lite'in bu projede gunluk 20 istek gibi asiri dusuk (muhtemelen throttle
+// edilmis) bir ucretsiz kotasi var; flash modelinin kendi ayri kota havuzu var
+// ve ucretsiz katmanda cok daha cömert (1500/gun) - odeme yapmadan once gecici
+// cozum olarak buraya gecildi.
+const MODEL = 'gemini-2.5-flash';
 
 // Kategorileri tespit için anahtar kelimeler — uygulama kategori isimleriyle BİREBİR eşleşmeli
 const CATEGORY_MAP = [
@@ -196,7 +200,7 @@ function simulateOldPrice(newPrice) {
 }
 
 /**
- * Gemini SDK kullanarak yapay zeka analizi yapar (Model: gemini-2.5-flash-lite)
+ * Gemini SDK kullanarak yapay zeka analizi yapar (Model: gemini-2.5-flash)
  */
 async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, metaDescription = '') {
     if (!apiKey) return { category: detectCategory(productTitle), aiFomoScore: 5 };
@@ -421,7 +425,7 @@ async function fetchOnualViaGemini(apiKey) {
     console.log('🤖 Gemini URL Context ile onual.com çekiliyor...');
     try {
         const response = await genAI.models.generateContent({
-            model: 'gemini-2.5-flash-lite',
+            model: 'gemini-2.5-flash',
             contents: [{
                 role: 'user',
                 parts: [{ text: `Visit: https://www.onual.com
