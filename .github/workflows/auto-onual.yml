@@ -1,8 +1,8 @@
 name: Auto Onual Deal Fetcher
 
 on:
-  schedule:
-    - cron: '*/30 * * * *'  # Yedek: zincir kırılırsa 30 dk'da bir devreye girer
+  # schedule: DEVRE DIŞI — kullanıcı isteğiyle OnuAl'dan veri çekme geçici olarak durduruldu.
+  #   - cron: '*/30 * * * *'
   workflow_dispatch:
 
 # Aynı anda sadece bir run çalışsın; yenisi gelirse beklesin (iptal etmesin)
