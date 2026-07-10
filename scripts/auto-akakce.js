@@ -40,7 +40,7 @@ const MAX_NEW_PRODUCTS = 12;
 
 // Gemini: URL Context + açıklama üretimi
 const MODEL_URL_CONTEXT = 'gemini-2.5-flash';
-const MODEL_DESCRIPTION = 'gemini-2.5-flash-lite';
+const MODEL_DESCRIPTION = 'gemini-2.5-flash';
 
 // ─── Kategori & Mağaza Haritaları ────────────────────────────────────────────
 const CATEGORY_MAP = [

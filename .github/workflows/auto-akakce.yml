@@ -1,8 +1,10 @@
 name: Auto Akakce Deal Fetcher
 
 on:
-  # schedule: DEVRE DIŞI — maliyet optimizasyonu yapılıyor
-  #   - cron: '*/30 * * * *'
+  schedule:
+    # Tamamen bulut tabanli (Gemini URL Context ile Cloudflare atlatiliyor) -
+    # PC'ye ihtiyac duymuyor. Maliyet artik onemsiz oldugu icin yeniden acildi.
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 jobs:
