@@ -1,0 +1,33 @@
+name: Auto IndirimRadar Deal Fetcher
+
+on:
+  schedule:
+    # Tamamen bulut tabanli - Cloudflare/bot korumasi yok, PC gerekmiyor.
+    # Veri zaten yapilandirilmis JSON oldugu icin AI extraction maliyeti de yok
+    # (sadece kalite puanlama + caption uretiminde AI kullaniliyor).
+    - cron: '*/20 * * * *'
+  workflow_dispatch:
+
+jobs:
+  fetch-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Run Auto-IndirimRadar Pipeline
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node scripts/auto-indirimradar.js
