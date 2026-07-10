@@ -278,6 +278,10 @@ async function main() {
                 originalStoreLink: storeLink,
                 oldPrice: item.oldPrice,
                 newPrice: item.newPrice,
+                // Gercek indirim sinyali (list_price) yoksa uydurma "eski fiyat"
+                // gostermiyoruz - bu alan, uygulama tarafinda bu urunleri "indirim"
+                // yerine "duz fiyat/fiyat takibi" gibi ayri gosterebilmek icin.
+                hasDiscount: item.oldPrice > 0,
                 imageUrl: item.raw.thumbnail || '',
                 deleteUrl: '',
                 submittedBy: 'auto-indirimradar-bot',
