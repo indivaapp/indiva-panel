@@ -37,13 +37,14 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: node scripts/auto-indirimradar.js
 
-      # İş bittikten 5 dk sonra kendini tekrar tetikle — GitHub cron gecikmesini bypass eder,
-      # tamamen bulut tabanli oldugu icin (Cloudflare/bot korumasi yok) bu sıklıkta calismak
-      # ek maliyet/risk getirmiyor.
-      - name: Sonraki çalışmayı planla (5 dk)
+      # ~5 dakikalik bekleme artik script'in kendi icinde (bulunan urunleri
+      # pencereye yayarak yayinlama sirasinda) yapiliyor - burada sadece,
+      # script cok erken cokerse (orn. Firebase baglanti hatasi) art arda
+      # hizli tetiklenmeyi onlemek icin kucuk bir guvenlik payi birakiyoruz.
+      - name: Sonraki çalışmayı planla
         if: always()
         run: |
-          sleep 300
+          sleep 10
           curl -s -o /dev/null -w "%{http_code}" -X POST \
             -H "Authorization: token ${{ github.token }}" \
             -H "Accept: application/vnd.github.v3+json" \

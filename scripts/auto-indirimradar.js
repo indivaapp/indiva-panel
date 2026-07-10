@@ -153,8 +153,28 @@ async function fetchIndirimRadarProducts() {
     return data.products || [];
 }
 
+// Self-chain zinciri ~5 dakikada bir sonraki çalışmayı tetikliyor (workflow
+// dosyasında). Yeni ürünleri hemen art arda yayınlamak yerine, bulunanları bu
+// ~5 dakikalık pencereye yayarak paylaşıyoruz — böylece site "canlı" görünür,
+// birden 27 ürün patlaması yerine düzenli aralıklarla akan bir yayın olur.
+// Hiç yeni ürün yoksa veya yayınlama pencereden erken biterse, sonraki
+// self-chain tetiklemesinin hâlâ ~5 dakikada bir olması için kalan süre
+// beklenir (aksi halde "0 yeni ürün" durumunda zincir çok hızlı dönerdi).
+const TARGET_WINDOW_MS = 290_000; // 290s — 300s'lik self-chain periyodundan biraz az, tampon payı
+const MIN_SPACING_MS = 3_000;
+
+async function padToTargetWindow(mainStartTime) {
+    const elapsed = Date.now() - mainStartTime;
+    const remaining = TARGET_WINDOW_MS - elapsed;
+    if (remaining > 0) {
+        console.log(`⏳ Pencereyi tamamlamak için ${Math.round(remaining / 1000)}sn bekleniyor...`);
+        await sleep(remaining);
+    }
+}
+
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 async function main() {
+    const mainStartTime = Date.now();
     console.log('\n🚀 INDIVA Auto-IndirimRadar Pipeline Başlatıldı');
     console.log('═══════════════════════════════════════════');
     console.log(`⏰ ${new Date().toLocaleString('tr-TR')}\n`);
@@ -196,6 +216,7 @@ async function main() {
 
     if (withDiscount.length === 0) {
         console.log('✅ Bu turda yeterli indirimli ürün yok. Pipeline tamamlandı.');
+        await padToTargetWindow(mainStartTime);
         return;
     }
 
@@ -209,6 +230,7 @@ async function main() {
 
     if (finalList.length === 0) {
         console.log('✅ Yeni ürün yok. Pipeline tamamlandı.');
+        await padToTargetWindow(mainStartTime);
         return;
     }
 
@@ -224,17 +246,28 @@ async function main() {
     const gateResults = await runQualityGate(gateCandidates, { apiKey: qualityGateKey, threshold: 6, db });
     const gateMap = new Map(gateResults.map(r => [r.id, r]));
 
-    console.log(`🛡️  Kalite kapısı: ${gateResults.filter(r => r.publish).length}/${gateResults.length} onaylandı\n`);
+    const approved = finalList.filter(item => gateMap.get(item._docId)?.publish);
+    const rejected = finalList.filter(item => !gateMap.get(item._docId)?.publish);
+    console.log(`🛡️  Kalite kapısı: ${approved.length}/${gateResults.length} onaylandı\n`);
 
-    let successCount = 0, rejectedCount = 0, failCount = 0;
-
-    for (const item of finalList) {
+    for (const item of rejected) {
         const verdict = gateMap.get(item._docId);
-        if (!verdict?.publish) {
-            console.log(`   🚫 Reddedildi (${item._docId}): ${verdict?.reason || 'bilinmeyen'}`);
-            rejectedCount++;
-            continue;
-        }
+        console.log(`   🚫 Reddedildi (${item._docId}): ${verdict?.reason || 'bilinmeyen'}`);
+    }
+    const rejectedCount = rejected.length;
+    let successCount = 0, failCount = 0;
+
+    // Onaylanan ürünleri hemen art arda değil, kalan pencereye (~5dk) yayarak
+    // yayınlıyoruz — site "canlı" görünsün, tek seferde toplu patlama olmasın.
+    const remainingForSpread = Math.max(0, TARGET_WINDOW_MS - (Date.now() - mainStartTime));
+    const spacingMs = approved.length > 0
+        ? Math.max(MIN_SPACING_MS, Math.floor(remainingForSpread / approved.length))
+        : 0;
+    console.log(`⏱️  ${approved.length} ürün, aralarında ~${Math.round(spacingMs / 1000)}sn boşlukla yayınlanacak\n`);
+
+    for (let i = 0; i < approved.length; i++) {
+        const item = approved[i];
+        const verdict = gateMap.get(item._docId);
 
         try {
             const storeLink = buildAmazonSearchLink(item.raw.title);
@@ -293,10 +326,14 @@ async function main() {
             }).catch(() => {});
 
             successCount++;
-            await sleep(300);
         } catch (err) {
             console.error(`   ❌ Kaydetme hatası (${item._docId}): ${err.message}`);
             failCount++;
+        }
+
+        // Son üründen sonra beklemeye gerek yok — pencere zaten doldu.
+        if (i < approved.length - 1) {
+            await sleep(spacingMs);
         }
     }
 
