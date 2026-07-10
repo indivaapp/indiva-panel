@@ -24,7 +24,6 @@ import { getMessaging } from 'firebase-admin/messaging';
 import * as fs from 'fs';
 import * as path from 'path';
 import { sendAdminAlert } from './alertService.js';
-import { runQualityGate } from './qualityGate.js';
 import { maybeNotifyHighScoreDeal } from './notifyGate.js';
 import { maybeQueueSocialContent } from './socialContentGate.js';
 
@@ -197,7 +196,11 @@ async function main() {
 
     console.log(`📡 ${rawProducts.length} ürün çekildi.`);
 
-    // ── 2. Gerçek indirimi olanları filtrele ────────────────────────────────
+    // ── 2. GEÇİCİ: filtre yok — çekilen her ürünü işliyoruz ─────────────────
+    // NOT: MIN_DISCOUNT_PERCENT eşiği ve AI kalite kapısı bilinçli olarak
+    // devre dışı bırakıldı (kullanıcı isteği: önce hacmi görelim, filtreyi
+    // sonra ekleriz). list_price olmayan ürünlerde oldPrice=0 olarak kalır -
+    // panel/uygulama bunu zaten "indirim yok, düz fiyat" olarak gösteriyor.
     const withDiscount = rawProducts
         .filter(p => p.title && p.current_price > 0 && p.is_in_stock !== false)
         .map(p => {
@@ -208,14 +211,12 @@ async function main() {
                 : 0;
             return { raw: p, newPrice, oldPrice, discountPct };
         })
-        .filter(p => p.discountPct >= MIN_DISCOUNT_PERCENT)
-        .sort((a, b) => b.discountPct - a.discountPct)
         .slice(0, MAX_NEW_PRODUCTS);
 
-    console.log(`📊 Gerçek indirimli (%${MIN_DISCOUNT_PERCENT}+): ${withDiscount.length} ürün\n`);
+    console.log(`📊 İşlenecek aday: ${withDiscount.length} ürün (filtre kapalı)\n`);
 
     if (withDiscount.length === 0) {
-        console.log('✅ Bu turda yeterli indirimli ürün yok. Pipeline tamamlandı.');
+        console.log('✅ Bu turda ürün yok. Pipeline tamamlandı.');
         await padToTargetWindow(mainStartTime);
         return;
     }
@@ -234,21 +235,15 @@ async function main() {
         return;
     }
 
-    // ── 4. AI kalite kapısı — TEK istekte toplu puanlama ────────────────────
-    const gateCandidates = finalList.map(p => ({
-        id: p._docId,
-        title: p.raw.title,
-        oldPrice: p.oldPrice,
-        newPrice: p.newPrice,
-        category: detectCategory(p.raw.title),
-        link: buildAmazonSearchLink(p.raw.title),
-    }));
-    const gateResults = await runQualityGate(gateCandidates, { apiKey: qualityGateKey, threshold: 6, db });
-    const gateMap = new Map(gateResults.map(r => [r.id, r]));
+    // ── 4. GEÇİCİ: AI kalite kapısı kapalı — hepsi onaylanmış sayılıyor ─────
+    // (kullanıcı isteği: filtreyi sonra ekleriz). Sabit nötr puan (6) veriliyor
+    // ki bildirim/sosyal-içerik eşikleri (9+) kırılmasın — bunlar hâlâ sadece
+    // gerçekten yüksek puanlı fırsatlar için tetiklenmeli.
+    const gateMap = new Map(finalList.map(p => [p._docId, { publish: true, score: 6, reason: 'Filtre geçici olarak kapalı' }]));
 
-    const approved = finalList.filter(item => gateMap.get(item._docId)?.publish);
-    const rejected = finalList.filter(item => !gateMap.get(item._docId)?.publish);
-    console.log(`🛡️  Kalite kapısı: ${approved.length}/${gateResults.length} onaylandı\n`);
+    const approved = finalList;
+    const rejected = [];
+    console.log(`🛡️  Kalite kapısı KAPALI: ${approved.length}/${finalList.length} (hepsi) yayınlanacak\n`);
 
     for (const item of rejected) {
         const verdict = gateMap.get(item._docId);
