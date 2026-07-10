@@ -155,6 +155,10 @@ function getQualityGateKey() {
  */
 function cleanProductTitle(title) {
     return title
+        // onual.com'un kendi SEO başlık eki (h1/og:title'da ürün adının sonuna
+        // ekleniyor, gerçek ürün adının bir parçası değil)
+        .replace(/\s*[-–]\s*(En Ucuz|En Uygun|En İyi)\s+Fiyat[ıi]?\s*(ve\s+(Özellikleri|Yorumları|Modelleri))?\s*$/i, '')
+        .replace(/\s*[-–]\s*Fiyat[ıi]?\s+ve\s+(Özellikleri|Yorumları|Modelleri)\s*$/i, '')
         // Sondaki uzun sayısal ürün kodları (066842-70758, 207900-7459)
         .replace(/\s+\d{5,}[-]\d+\s*$/g, '')
         // Sondaki alfanumerik model kodları (Ch-91D401L-Tr, Ccb001Btbk, 000Cg20917)

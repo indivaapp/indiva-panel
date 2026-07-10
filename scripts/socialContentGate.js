@@ -26,8 +26,9 @@ async function generateCaption(apiKey, deal) {
     }
 
     const genAI = new GoogleGenAI({ apiKey });
-    const prompt = `Sen İNDİVA uygulamasının sosyal medya içerik editörüsün. Instagram'da
-paylaşılacak, dikkat çekici bir gönderi metni (caption) yaz.
+    const prompt = `Sen İNDİVA uygulamasının sosyal medya içerik editörü ve satış metni
+yazarısın (copywriter). Instagram'da paylaşılacak, ürünü SATMAYA çalışan, indirimli
+alışverişe teşvik eden dikkat çekici bir gönderi metni (caption) yaz.
 
 Ürün: "${title}"
 Fiyat: ${oldPrice} TL -> ${newPrice} TL (%${discountPct} indirim)
@@ -35,9 +36,13 @@ Mağaza: ${storeName || 'bilinmiyor'}
 Kategori: ${category || 'bilinmiyor'}
 
 KURALLAR:
-1. İlk satır dikkat çekici bir kanca, emoji ile başla
-2. Ürünü ve fırsatı 2-3 cümlede heyecanlı ama gerçekçi anlat (abartma, güven ver)
-3. Son satır İNDİVA uygulamasına yönlendiren kısa bir çağrı olsun
+1. İlk satır dikkat çekici bir kanca, emoji ile başla (fiyat/indirim vurgulu)
+2. Ürünü tanıt ve fırsatı 2-3 cümlede heyecanlı, ikna edici bir satış diliyle anlat
+   (abartma/yalan yok ama "kaçırma", "şimdi al", "stoklar tükenmeden" gibi aciliyet
+   hissi ver — gerçek bir e-ticaret pazarlamacısı gibi yaz)
+3. Son satır MUTLAKA İNDİVA uygulamasını indirmeye teşvik eden, "Sen de İNDİVA'yı
+   indir, fırsatları kaçırma!" temalı bir slogan cümlesi olsun (birebir aynı cümleyi
+   kullanmak zorunda değilsin, ama anlamı ve enerjisi aynı olsun)
 4. Altına 5-8 adet ilgili Türkçe hashtag ekle (#indirim #firsat gibi genel + kategoriye özel + #indivaapp)
 5. Emoji kullan ama abartma, samimi bir Instagram tonu olsun
 6. SADECE caption metnini döndür, açıklama/markdown ekleme`;
