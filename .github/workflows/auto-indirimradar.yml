@@ -2,16 +2,21 @@ name: Auto IndirimRadar Deal Fetcher
 
 on:
   schedule:
-    # Tamamen bulut tabanli - Cloudflare/bot korumasi yok, PC gerekmiyor.
-    # Veri zaten yapilandirilmis JSON oldugu icin AI extraction maliyeti de yok
-    # (sadece kalite puanlama + caption uretiminde AI kullaniliyor).
-    - cron: '*/20 * * * *'
+    - cron: '*/30 * * * *'  # Yedek: zincir kırılırsa 30 dk'da bir devreye girer
   workflow_dispatch:
+
+# Aynı anda sadece bir run çalışsın; yenisi gelirse beklesin (iptal etmesin)
+concurrency:
+  group: auto-indirimradar-chain
+  cancel-in-progress: false
 
 jobs:
   fetch-and-publish:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    permissions:
+      actions: write  # workflow_dispatch tetiklemek için
 
     steps:
       - name: Checkout
@@ -31,3 +36,19 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: node scripts/auto-indirimradar.js
+
+      # İş bittikten 5 dk sonra kendini tekrar tetikle — GitHub cron gecikmesini bypass eder,
+      # tamamen bulut tabanli oldugu icin (Cloudflare/bot korumasi yok) bu sıklıkta calismak
+      # ek maliyet/risk getirmiyor.
+      - name: Sonraki çalışmayı planla (5 dk)
+        if: always()
+        run: |
+          sleep 300
+          curl -s -o /dev/null -w "%{http_code}" -X POST \
+            -H "Authorization: token ${{ github.token }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/auto-indirimradar.yml/dispatches" \
+            -d '{"ref":"main"}' \
+          | grep -q "^204$" \
+            && echo "✅ Sonraki run planlandı." \
+            || echo "⚠️ Dispatch başarısız (yedek schedule devralır)."
