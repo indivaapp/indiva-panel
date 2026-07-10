@@ -275,14 +275,48 @@ function withSlideFade(ctx: CanvasRenderingContext2D, offsetY: number, alpha: nu
     ctx.restore();
 }
 
+// ── Arka plan renk paletleri ─────────────────────────────────────────────
+// Her palet [koyu köşe, orta canlı ton, parlak vurgu] — aynı ışık/kontrast
+// yapısını korur (koyudan parlağa) ki üstteki beyaz/altın metin/rozetler
+// her palette'te okunaklı kalsın. Ürün bazında seçilir (bkz. pickPalette)
+// — aynı gönderi içindeki fırsat + promo sahnesi aynı paleti kullanır,
+// ama gönderiden gönderiye renk değişir; profil tek tonda dolmaz.
+const BG_PALETTES: [string, string, string][] = [
+    ['#3a1454', '#c2287a', '#ff7a1a'], // mor-pembe-turuncu (orijinal)
+    ['#0f2f4a', '#0e6ba8', '#2ec4b6'], // lacivert-mavi-turkuaz
+    ['#1a1a2e', '#e94560', '#ff9f1c'], // gece lacivert-kırmızı-amber
+    ['#2d1b4e', '#8338ec', '#ff006e'], // mor-eflatun-magenta
+    ['#0b3d2e', '#1b998b', '#f4d35e'], // koyu yeşil-teal-sarı
+    ['#3d0e14', '#d7263d', '#f46036'], // bordo-kırmızı-mercan
+    ['#131a3a', '#3f37c9', '#4cc9f0'], // gece mavisi-indigo-camgöbeği
+    ['#3a1c1c', '#c1440e', '#ffbe0b'], // toprak kırmızı-turuncu-altın
+    ['#1b1035', '#5f2eea', '#ff5da2'], // mor-menekşe-pembe
+    ['#0d2b3e', '#118ab2', '#06d6a0'], // koyu mavi-turkuaz-yeşil
+    ['#2b0f0f', '#9d0208', '#faa307'], // bordo-kızıl-amber
+    ['#1e1a3c', '#7209b7', '#f72585'], // koyu mor-mor-pembe
+    ['#0a2f2f', '#00a896', '#f0e442'], // koyu teal-yeşil-limon
+    ['#2c1a4d', '#a4133c', '#ff8500'], // mor-bordo-turuncu
+];
+
+// Ürün id'sinden (discountId/id) deterministik palet seçer — aynı ürün her
+// zaman aynı paleti alır (fırsat sahnesi + promo sayfası tutarlı olur),
+// farklı ürünler dağılır.
+function pickPalette(seed: string): [string, string, string] {
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+        hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+    }
+    return BG_PALETTES[hash % BG_PALETTES.length];
+}
+
 // ── Arka plan: gradyan + ışık lekeleri + % işaretleri + parıltılar ──────────
 // renderDealImage VE promo sayfası (renderPromoFrame) ortak kullanır — marka
 // kimliği (İNDİVA renkleri, "indirim çılgınlığı" dokusu) her yerde aynı kalsın.
-function drawBackground(ctx: CanvasRenderingContext2D) {
+function drawBackground(ctx: CanvasRenderingContext2D, palette: [string, string, string] = BG_PALETTES[0]) {
     const bgGrad = ctx.createLinearGradient(0, 0, CANVAS_W, CANVAS_H);
-    bgGrad.addColorStop(0, '#3a1454');
-    bgGrad.addColorStop(0.55, '#c2287a');
-    bgGrad.addColorStop(1, '#ff7a1a');
+    bgGrad.addColorStop(0, palette[0]);
+    bgGrad.addColorStop(0.55, palette[1]);
+    bgGrad.addColorStop(1, palette[2]);
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
@@ -378,7 +412,8 @@ async function renderDealImage(
     const savingsP    = easeOutBack(segProgress(progress, 0.330, 0.410));
     const ctaP        = easeOutBack(segProgress(progress, 0.380, 0.470));
 
-    drawBackground(ctx);
+    const palette = pickPalette(item.discountId || item.id);
+    drawBackground(ctx, palette);
 
     // ── Ürün kartı: beyaz zemin + altın çerçeve (hafif zıplayarak büyür) ─────
     // NOT: cardH 860'tan 740'a küçültüldü — geri kalan her şey (uyarı, başlık,
@@ -647,9 +682,10 @@ async function renderDealImage(
     return loadedImg;
 }
 
-// ── "Daha fazla fırsat" promo sayfası — videonun son bölümü. Üründen bağımsız,
-// her video için aynı — uygulamayı indirmeye teşvik eden kapanış ekranı. ────
-async function renderPromoFrame(canvas: HTMLCanvasElement, appIconImg: HTMLImageElement | null): Promise<void> {
+// ── "Daha fazla fırsat" promo sayfası — videonun son bölümü. İçeriği üründen
+// bağımsız (her video için aynı metin/logo), ama arka plan rengi fırsat
+// sahnesiyle tutarlı olsun diye aynı palette parametresini alır. ────────────
+async function renderPromoFrame(canvas: HTMLCanvasElement, appIconImg: HTMLImageElement | null, palette: [string, string, string] = BG_PALETTES[0]): Promise<void> {
     if (canvas.width !== CANVAS_W) canvas.width = CANVAS_W;
     if (canvas.height !== CANVAS_H) canvas.height = CANVAS_H;
     const ctx = canvas.getContext('2d');
@@ -657,7 +693,7 @@ async function renderPromoFrame(canvas: HTMLCanvasElement, appIconImg: HTMLImage
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-    drawBackground(ctx);
+    drawBackground(ctx, palette);
 
     const iconSize = 220, iconX = CANVAS_W / 2 - iconSize / 2, iconY = 360;
     if (appIconImg) {
@@ -827,7 +863,7 @@ async function recordDealVideo(
     const promoSnapshot = document.createElement('canvas');
     promoSnapshot.width = CANVAS_W;
     promoSnapshot.height = CANVAS_H;
-    await renderPromoFrame(promoSnapshot, appIconImg);
+    await renderPromoFrame(promoSnapshot, appIconImg, pickPalette(item.discountId || item.id));
 
     let dealSnapshotPromise: Promise<HTMLCanvasElement> | null = null;
     const getDealSnapshot = () => {
