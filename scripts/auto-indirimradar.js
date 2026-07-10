@@ -47,7 +47,7 @@ if (fs.existsSync(envPath)) {
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const API_URL = 'https://www.indirimradarapp.com/api/products';
-const MAX_NEW_PRODUCTS = 30;
+const MAX_NEW_PRODUCTS = 50;
 // En az bu oranda gerçek indirim yoksa (list_price yoksa/newPrice'tan düşükse)
 // ürünü atla — düz katalog fiyatı, indirim değil.
 const MIN_DISCOUNT_PERCENT = 8;
@@ -141,7 +141,11 @@ async function fetchIndirimRadarProducts() {
             'Content-Type': 'application/json',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         },
-        body: JSON.stringify({}),
+        // API'nin bulduğumuz sunucu tavanı: 50/istek (varsayılan 20). En son
+        // güncellenen ürünleri döndürüyor (canlı akış, tam katalog değil) -
+        // limit'i tavana çekmek, her taramada daha geniş bir zaman penceresi
+        // kapsamamızı sağlıyor, ek maliyet yok.
+        body: JSON.stringify({ limit: 50 }),
         signal: AbortSignal.timeout(20000),
     });
     if (!response.ok) throw new Error(`API HTTP ${response.status}`);
