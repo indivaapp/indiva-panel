@@ -587,7 +587,7 @@ export const addManualSocialContent = async (discount: Discount): Promise<void> 
 // --- AI Sosyal Medya İçerik Önerisi ---
 // Admin tetikler: son 50 ilanı okuyup (tek Firestore sorgusu), OpenRouter proxy'sine
 // gönderir. AI satış potansiyeli + indirim oranı + geniş kitleye hitap etme
-// kriterlerine göre TEK ürün seçer ve 3 farklı içerik varyasyonu döndürür.
+// kriterlerine göre 3 FARKLI ürün seçer, her biri için ayrı başlık+caption üretir.
 
 /** Sosyal medya AI önerisi için son 50 ilanı getirir (reklamlar hariç). */
 export const getRecentDiscountsForSocialAi = async (): Promise<Discount[]> => {
@@ -598,18 +598,14 @@ export const getRecentDiscountsForSocialAi = async (): Promise<Discount[]> => {
         .filter(d => !d.isAd);
 };
 
-export interface SocialContentOption {
+export interface SocialContentPick {
+    productId: string;
+    reasoning: string;
     title: string;
     caption: string;
 }
 
-export interface SocialContentSuggestion {
-    productId: string;
-    reasoning: string;
-    options: SocialContentOption[];
-}
-
-export const suggestSocialContent = async (discounts: Discount[]): Promise<SocialContentSuggestion> => {
+export const suggestSocialContent = async (discounts: Discount[]): Promise<SocialContentPick[]> => {
     const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -629,25 +625,25 @@ export const suggestSocialContent = async (discounts: Discount[]): Promise<Socia
 
     const data = await res.json();
     if (!data.success) throw new Error(data.error || 'AI önerisi alınamadı');
-    return data as SocialContentSuggestion;
+    return data.picks as SocialContentPick[];
 };
 
-/** AI önerisinden seçilen içerik doğrudan kuyruğa eklenir — generate-caption.ts'i
+/** AI önerisinden seçilen ürün+içerik doğrudan kuyruğa eklenir — generate-caption.ts'i
  *  tekrar çağırmaz, zaten üretilmiş caption'ı kullanır. */
 export const addSocialContentFromAiSuggestion = async (
     discount: Discount,
-    option: SocialContentOption
+    pick: SocialContentPick
 ): Promise<void> => {
     await addDoc(collection(db, 'social_content_queue'), {
         discountId: discount.id,
-        title: option.title || discount.title,
+        title: pick.title || discount.title,
         imageUrl: discount.imageUrl,
         category: discount.category || '',
         storeName: discount.brand || '',
         newPrice: discount.newPrice,
         oldPrice: discount.oldPrice,
         score: 10,
-        caption: option.caption,
+        caption: pick.caption,
         source: 'manual',
         status: 'pending',
         createdAt: serverTimestamp(),
