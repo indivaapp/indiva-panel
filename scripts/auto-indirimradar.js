@@ -250,7 +250,7 @@ async function main() {
         console.log(`   🚫 Reddedildi (${item._docId}): ${verdict?.reason || 'bilinmeyen'}`);
     }
     const rejectedCount = rejected.length;
-    let successCount = 0, failCount = 0;
+    let successCount = 0, failCount = 0, skippedNoImage = 0;
 
     // Onaylanan ürünleri hemen art arda değil, kalan pencereye (~5dk) yayarak
     // yayınlıyoruz — site "canlı" görünsün, tek seferde toplu patlama olmasın.
@@ -269,6 +269,19 @@ async function main() {
             const title = cleanTitle(item.raw.title);
             const category = detectCategory(item.raw.title);
 
+            // Bazı ürünlerde "thumbnail" boş geliyor — "thumbnails" (çoğul) dizisinde
+            // alternatif bir görsel varsa ona düş. İkisi de yoksa ürünü YAYINLAMA
+            // (görselsiz ilan hem panelde hem sosyal medya içeriğinde kırık görünüyordu).
+            const fallbackThumb = Array.isArray(item.raw.thumbnails)
+                ? item.raw.thumbnails.find(t => typeof t === 'string' && t.trim())
+                : null;
+            const resolvedImageUrl = (item.raw.thumbnail && item.raw.thumbnail.trim()) || fallbackThumb || '';
+            if (!resolvedImageUrl) {
+                console.warn(`   ⏭️  Görsel yok, atlandı (${item._docId}): ${title.substring(0, 50)}`);
+                skippedNoImage++;
+                continue;
+            }
+
             const discountData = {
                 title,
                 brand: item.raw.marketplace_display_name || 'Amazon',
@@ -282,7 +295,7 @@ async function main() {
                 // gostermiyoruz - bu alan, uygulama tarafinda bu urunleri "indirim"
                 // yerine "duz fiyat/fiyat takibi" gibi ayri gosterebilmek icin.
                 hasDiscount: item.oldPrice > 0,
-                imageUrl: item.raw.thumbnail || '',
+                imageUrl: resolvedImageUrl,
                 deleteUrl: '',
                 submittedBy: 'auto-indirimradar-bot',
                 isAd: false,
@@ -340,6 +353,7 @@ async function main() {
     console.log('📊 INDIRIMRADAR PIPELINE TAMAMLANDI');
     console.log(`   ✅ Başarılı: ${successCount}`);
     console.log(`   🚫 Kalite kapısında reddedildi: ${rejectedCount}`);
+    console.log(`   🖼️  Görsel yok, atlandı: ${skippedNoImage}`);
     console.log(`   ❌ Başarısız: ${failCount}`);
     console.log(`   ⏰ ${new Date().toLocaleString('tr-TR')}`);
     console.log('═══════════════════════════════════════════\n');

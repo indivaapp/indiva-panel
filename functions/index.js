@@ -5,6 +5,38 @@ const https = require('https');
 const http = require('http');
 admin.initializeApp();
 
+// ─── AI Kullanım/Maliyet Takibi ───────────────────────────────────────────────
+// gemini-2.5-flash-lite tahmini fiyatlandırması (USD / 1M token). Google'ın
+// güncel fiyat sayfasından kontrol edin: https://ai.google.dev/pricing
+const AI_PRICE_INPUT_PER_1M_USD = 0.10;
+const AI_PRICE_OUTPUT_PER_1M_USD = 0.40;
+
+async function trackAiUsage(geminiData) {
+    try {
+        const usage = geminiData?.usageMetadata;
+        if (!usage) return;
+        const inputTokens = usage.promptTokenCount || 0;
+        const outputTokens = usage.candidatesTokenCount || 0;
+        const costUsd = (inputTokens / 1e6) * AI_PRICE_INPUT_PER_1M_USD + (outputTokens / 1e6) * AI_PRICE_OUTPUT_PER_1M_USD;
+
+        const db = admin.firestore();
+        const now = new Date();
+        const dayId = now.toISOString().slice(0, 10);
+        const monthId = now.toISOString().slice(0, 7);
+        const fields = {
+            calls: admin.firestore.FieldValue.increment(1),
+            inputTokens: admin.firestore.FieldValue.increment(inputTokens),
+            outputTokens: admin.firestore.FieldValue.increment(outputTokens),
+            costUsd: admin.firestore.FieldValue.increment(costUsd),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        await Promise.all([
+            db.collection('aiUsage').doc(`daily_${dayId}`).set(fields, { merge: true }),
+            db.collection('aiUsage').doc(`monthly_${monthId}`).set(fields, { merge: true }),
+        ]);
+    } catch { /* takip hatası ana akışı bozmasın */ }
+}
+
 // Geçerli kategori listesi — D:\INDIVAAPP2026\constants\categories.ts ile birebir aynı olmalı
 const VALID_CATEGORIES = [
     'Teknoloji',
@@ -144,6 +176,7 @@ Bu ürünü analiz et ve SADECE aşağıdaki JSON formatında yanıt ver (başka
                 },
                 60000
             );
+            await trackAiUsage(geminiData);
 
             const aiText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
             let result = {};
@@ -228,7 +261,15 @@ function postJson(url, body, timeoutMs = 60000) {
 
 /**
  * Trigger: When a new document is created in 'notifications' collection.
- * Action: Sends FCM multicast message to all tokens in 'fcmTokens'.
+ * Action: 'all_users' topic'ine FCM mesajı gönderir.
+ *
+ * NOT: Bu fonksiyon eskiden her tetiklendiğinde TÜM 'fcmTokens' koleksiyonunu
+ * okuyup sendEachForMulticast ile tek tek gönderiyordu — Firestore read
+ * maliyeti (token sayısı × bildirim sayısı) kadardı. Kod tabanındaki diğer
+ * tüm gönderim yerleri (price-checker.js, auto-onual.js, notifyGate.js,
+ * services/fcmService.ts) zaten topic bazlı gönderim kullanıyor ve cihazlar
+ * zaten 'all_users' topic'ine abone — bu fonksiyon da aynı yönteme geçirildi.
+ * Topic gönderimi Firestore'dan HİÇ read yapmaz (tek bir FCM API çağrısı).
  */
 exports.sendPushNotification = functions.firestore
     .document('notifications/{docId}')
@@ -236,18 +277,6 @@ exports.sendPushNotification = functions.firestore
         const data = snap.data();
         console.log(`[sendPushNotification] Tetiklendi. title="${data.title}"`);
 
-        // 1. Token'ları al
-        const tokensSnap = await admin.firestore().collection('fcmTokens').get();
-        const tokens = tokensSnap.docs.map(doc => doc.id).filter(t => !!t);
-
-        console.log(`[sendPushNotification] Bulunan token sayısı: ${tokens.length}`);
-
-        if (tokens.length === 0) {
-            console.warn('[sendPushNotification] fcmTokens koleksiyonu boş. Bildirim gönderilemedi.');
-            return snap.ref.update({ status: 'failed', error: 'No tokens found' });
-        }
-
-        // 2. Mesajları tek tek oluştur (firebase-admin v12 sendEachForMulticast)
         const message = {
             notification: {
                 title: data.title,
@@ -268,40 +297,13 @@ exports.sendPushNotification = functions.firestore
                     ...(data.image ? { imageUrl: data.image } : {}),
                 },
             },
-            tokens,
+            topic: 'all_users',
         };
 
         try {
-            // 3. Gönder (v12 uyumlu)
-            const response = await admin.messaging().sendEachForMulticast(message);
-
-            console.log(`[sendPushNotification] Başarılı: ${response.successCount}, Başarısız: ${response.failureCount}`);
-
-            // 4. Geçersiz token'ları temizle
-            if (response.failureCount > 0) {
-                const invalidTokens = [];
-                response.responses.forEach((resp, idx) => {
-                    if (!resp.success) {
-                        const code = resp.error?.code || '';
-                        console.warn(`Token başarısız [${code}]: ${tokens[idx].substring(0, 20)}...`);
-                        if (
-                            code === 'messaging/invalid-registration-token' ||
-                            code === 'messaging/registration-token-not-registered'
-                        ) {
-                            invalidTokens.push(tokens[idx]);
-                        }
-                    }
-                });
-                if (invalidTokens.length > 0) {
-                    const batch = admin.firestore().batch();
-                    invalidTokens.forEach(t => batch.delete(admin.firestore().collection('fcmTokens').doc(t)));
-                    await batch.commit();
-                    console.log(`${invalidTokens.length} geçersiz token silindi.`);
-                }
-            }
-
+            const messageId = await admin.messaging().send(message);
+            console.log(`[sendPushNotification] Gönderildi: ${messageId}`);
             return snap.ref.update({ status: 'sent', sentAt: admin.firestore.FieldValue.serverTimestamp() });
-
         } catch (error) {
             console.error('[sendPushNotification] Hata:', error);
             return snap.ref.update({ status: 'failed', error: error.message });

@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, Suspense, lazy } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
 
 import type { ViewType } from './types';
@@ -22,29 +22,40 @@ interface SharedStoryData {
     clipboardLink: string; // pano'daki URL (boş olabilir)
 }
 
+// Sidebar/BottomNav/Dashboard/Login/QuickShareOverlay ilk açılışta hemen gerekli
+// — eager import. Diğer tüm sayfalar sadece o sekmeye geçildiğinde indirilir
+// (React.lazy) — ilk açılışta indirilen/parse edilen JS miktarını azaltır.
 import Sidebar from './components/Sidebar';
 import BottomNav from './components/BottomNav';
-import DiscountManager from './components/DiscountManager';
-import BrochureManager from './components/BrochureManager';
-import SubmissionReview from './components/SubmissionReview';
-import AdManager from './components/AdManager';
-import NotificationSender from './components/NotificationSender';
-import DealFinder from './components/DealFinder';
-import ManageDiscounts from './components/ManageDiscounts';
-import EditDealPage from './components/EditDealPage';
-import AffiliateLinkManager from './components/AffiliateLinkManager';
-import AutoDiscoveryPanel from './components/AutoDiscoveryPanel';
-import TrendyolScraper from './components/TrendyolScraper';
 import Dashboard from './components/Dashboard';
-import AddDiscountForm from './components/AddDiscountForm';
-import StoryManager from './components/StoryManager';
-import SocialContentManager from './components/SocialContentManager';
-import ShareTarget from './components/ShareTarget';
-import ShareUrlTarget from './components/ShareUrlTarget';
-import QuickShareOverlay from './components/QuickShareOverlay';
-import { watchUser } from './services/auth';
 import Login from './components/Login';
+import QuickShareOverlay from './components/QuickShareOverlay';
+
+const DiscountManager = lazy(() => import('./components/DiscountManager'));
+const BrochureManager = lazy(() => import('./components/BrochureManager'));
+const SubmissionReview = lazy(() => import('./components/SubmissionReview'));
+const AdManager = lazy(() => import('./components/AdManager'));
+const NotificationSender = lazy(() => import('./components/NotificationSender'));
+const DealFinder = lazy(() => import('./components/DealFinder'));
+const ManageDiscounts = lazy(() => import('./components/ManageDiscounts'));
+const EditDealPage = lazy(() => import('./components/EditDealPage'));
+const AffiliateLinkManager = lazy(() => import('./components/AffiliateLinkManager'));
+const AutoDiscoveryPanel = lazy(() => import('./components/AutoDiscoveryPanel'));
+const TrendyolScraper = lazy(() => import('./components/TrendyolScraper'));
+const AddDiscountForm = lazy(() => import('./components/AddDiscountForm'));
+const StoryManager = lazy(() => import('./components/StoryManager'));
+const SocialContentManager = lazy(() => import('./components/SocialContentManager'));
+const ShareTarget = lazy(() => import('./components/ShareTarget'));
+const ShareUrlTarget = lazy(() => import('./components/ShareUrlTarget'));
+
+import { watchUser } from './services/auth';
 import { getPendingAffiliateCount, getPendingAdRequestCount, getPendingDiscountCount, getPendingSocialContentCount } from './services/firebase';
+
+const ViewLoadingFallback: React.FC = () => (
+    <div className="flex items-center justify-center py-24">
+        <div className="w-6 h-6 border-2 border-gray-600 border-t-blue-500 rounded-full animate-spin" />
+    </div>
+);
 
 const SYSTEM_KEY = 'indiva_system_active';
 
@@ -252,14 +263,22 @@ const App: React.FC = () => {
     useEffect(() => {
         if (!authReady) return;
         const loadCounts = async () => {
+            if (document.visibilityState !== 'visible') return; // arka plandaki sekmede okuma yapma
             try { setPendingAffiliateCount(await getPendingAffiliateCount()); } catch {}
             try { setPendingAdRequestCount(await getPendingAdRequestCount()); } catch {}
             try { setPendingDiscountCount(await getPendingDiscountCount()); } catch {}
             try { setPendingSocialContentCount(await getPendingSocialContentCount()); } catch {}
         };
         loadCounts();
-        const interval = setInterval(loadCounts, 30000);
-        return () => clearInterval(interval);
+        // 30sn -> 5dk: rozet sayıları için gerçek zamanlılık gerekmiyor, bu 4 sorgu
+        // panel açık kaldığı sürece tekrarlanıyordu (bkz. services/firebase.ts notu).
+        const interval = setInterval(loadCounts, 5 * 60 * 1000);
+        const onVisible = () => { if (document.visibilityState === 'visible') loadCounts(); };
+        document.addEventListener('visibilitychange', onVisible);
+        return () => {
+            clearInterval(interval);
+            document.removeEventListener('visibilitychange', onVisible);
+        };
     }, [authReady]);
 
     // ShareActivity: sadece QuickShareOverlay göster, tüm app'i atla
@@ -337,20 +356,22 @@ const App: React.FC = () => {
     return (
         <div className="flex flex-col bg-gray-900 text-gray-100 overflow-hidden" style={{ height: '100dvh' }}>
 
-            {/* ── PWA Share Target Overlay ─────────────────────────────────────
-                Kullanıcı bir ekran görüntüsünü paylaştığında otomatik açılır,
-                işlemi tamamlayınca kapanır. Tüm UI'ın üzerinde görünür.      */}
-            {showShareTarget && authReady && (
-                <ShareTarget onClose={handleShareTargetClose} />
-            )}
+            <Suspense fallback={null}>
+                {/* ── PWA Share Target Overlay ─────────────────────────────────────
+                    Kullanıcı bir ekran görüntüsünü paylaştığında otomatik açılır,
+                    işlemi tamamlayınca kapanır. Tüm UI'ın üzerinde görünür.      */}
+                {showShareTarget && authReady && (
+                    <ShareTarget onClose={handleShareTargetClose} />
+                )}
 
-            {/* URL Share Target — Trendyol/HB vb.'den link paylaşılınca açılır */}
-            {sharedLink && authReady && (
-                <ShareUrlTarget
-                    url={sharedLink}
-                    onClose={() => setSharedLink(null)}
-                />
-            )}
+                {/* URL Share Target — Trendyol/HB vb.'den link paylaşılınca açılır */}
+                {sharedLink && authReady && (
+                    <ShareUrlTarget
+                        url={sharedLink}
+                        onClose={() => setSharedLink(null)}
+                    />
+                )}
+            </Suspense>
 
             <div className="flex flex-1 overflow-hidden">
                 <Sidebar
@@ -373,7 +394,9 @@ const App: React.FC = () => {
 
                     {/* Kaydırılabilir içerik alanı */}
                     <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-32 md:pb-8">
-                        {renderContent()}
+                        <Suspense fallback={<ViewLoadingFallback />}>
+                            {renderContent()}
+                        </Suspense>
                     </main>
                 </div>
 

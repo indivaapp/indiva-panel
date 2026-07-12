@@ -13,8 +13,10 @@ import {
     query,
     orderBy,
     where,
+    limit,
     Timestamp,
-    writeBatch
+    writeBatch,
+    getCountFromServer
 } from 'firebase/firestore';
 import type { Discount, Brochure, Advertisement, PendingDiscount, AdRequest, ScheduledNotification, StagingProduct, SocialContentItem } from '../types';
 import { deleteFromImgbb } from './imgbb';
@@ -466,20 +468,28 @@ export const deleteAdRequest = async (id: string) => {
     await deleteDoc(docRef);
 };
 
+// getCountFromServer: sunucudan sadece sayı ister, doküman içeriği hiç indirilmez —
+// koleksiyon büyüklüğünden bağımsız olarak 1 read maliyetiyle çalışır. App.tsx bu
+// fonksiyonları 30sn'de bir çağırıyor, bu yüzden burada tam doküman okumak
+// (getDocs) yerine sayaç kullanmak read maliyetini büyük ölçüde düşürür.
 export const getPendingAdRequestCount = async (): Promise<number> => {
-    const q = query(collection(db, 'adRequests'), where('status', '==', 'pending'));
-    const snap = await getDocs(q);
-    return snap.size;
+    const snap = await getCountFromServer(
+        query(collection(db, 'adRequests'), where('status', '==', 'pending'))
+    );
+    return snap.data().count;
 };
 
 export const getPendingDiscountCount = async (): Promise<number> => {
-    const snap = await getDocs(collection(db, 'pendingDiscounts'));
-    return snap.size;
+    const snap = await getCountFromServer(collection(db, 'pendingDiscounts'));
+    return snap.data().count;
 };
 
 // --- Sosyal Medya İçerik Kuyruğu ---
 // Otomatik pipeline'lar (auto-onual, trendyol-scraper) yüksek puanlı fırsatları
 // buraya yazar. Status client-side filtrelenir (composite index gerektirmesin diye).
+// NOT: getSocialContentQueue() tam liste için (SocialContentManager.tsx), sadece
+// oradan çağrıldığında tüm dokümanları okur. Rozet sayacı (getPendingSocialContentCount)
+// ise bunu ÇAĞIRMAZ — ayrı, ucuz bir getCountFromServer sorgusu kullanır.
 
 export const getSocialContentQueue = async (): Promise<SocialContentItem[]> => {
     const q = query(collection(db, 'social_content_queue'), orderBy('createdAt', 'desc'));
@@ -495,8 +505,47 @@ export const markSocialContentPosted = async (id: string) => {
 };
 
 export const getPendingSocialContentCount = async (): Promise<number> => {
-    const items = await getSocialContentQueue();
-    return items.length;
+    const snap = await getCountFromServer(
+        query(collection(db, 'social_content_queue'), where('status', '==', 'pending'))
+    );
+    return snap.data().count;
+};
+
+// --- AI Kullanım/Maliyet İstatistikleri ---
+// scripts/*.js, functions/index.js ve vercel-proxy/api/*.ts her AI çağrısından
+// sonra 'aiUsage/daily_YYYY-MM-DD' ve 'aiUsage/monthly_YYYY-MM' dokümanlarını
+// increment ile günceller. Burada sadece 2 doküman okunur.
+export interface AiUsageStats {
+    calls: number;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+}
+
+const emptyAiUsage: AiUsageStats = { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+
+export const getAiUsageStats = async (): Promise<{ today: AiUsageStats; month: AiUsageStats }> => {
+    const now = new Date();
+    const dayId = now.toISOString().slice(0, 10);
+    const monthId = now.toISOString().slice(0, 7);
+
+    const [dailySnap, monthlySnap] = await Promise.all([
+        getDoc(doc(db, 'aiUsage', `daily_${dayId}`)),
+        getDoc(doc(db, 'aiUsage', `monthly_${monthId}`)),
+    ]);
+
+    const toStats = (d: typeof dailySnap): AiUsageStats => {
+        if (!d.exists()) return { ...emptyAiUsage };
+        const data = d.data() as any;
+        return {
+            calls: data.calls || 0,
+            inputTokens: data.inputTokens || 0,
+            outputTokens: data.outputTokens || 0,
+            costUsd: data.costUsd || 0,
+        };
+    };
+
+    return { today: toStats(dailySnap), month: toStats(monthlySnap) };
 };
 
 // Admin panelden elle seçilen bir fırsat için, puan eşiği beklemeden anında
@@ -540,6 +589,81 @@ export const addManualSocialContent = async (discount: Discount): Promise<void> 
         oldPrice: discount.oldPrice,
         score: 10,
         caption,
+        source: 'manual',
+        status: 'pending',
+        createdAt: serverTimestamp(),
+    });
+};
+
+// --- AI Sosyal Medya İçerik Önerisi ---
+// Admin tetikler: son 50 ilanı okuyup (tek Firestore sorgusu), OpenRouter proxy'sine
+// gönderir. AI satış potansiyeli + indirim oranı + geniş kitleye hitap etme
+// kriterlerine göre 3 FARKLI ürün seçer, her biri için ayrı başlık+caption üretir.
+
+/** Sosyal medya AI önerisi için son 50 ilanı getirir (reklamlar hariç). */
+export const getRecentDiscountsForSocialAi = async (): Promise<Discount[]> => {
+    const q = query(collection(db, 'discounts'), orderBy('createdAt', 'desc'), limit(50));
+    const querySnapshot = await getDocs(q);
+    return querySnapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() } as Discount))
+        .filter(d => !d.isAd);
+};
+
+export interface SocialContentPick {
+    productId: string;
+    reasoning: string;
+    title: string;
+    caption: string;
+}
+
+export const suggestSocialContent = async (discounts: Discount[]): Promise<SocialContentPick[]> => {
+    const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            discounts: discounts.map(d => ({
+                id: d.id,
+                title: d.title,
+                brand: d.brand,
+                category: d.category,
+                oldPrice: d.oldPrice,
+                newPrice: d.newPrice,
+                reviewCount: d.reviewCount,
+            })),
+        }),
+        signal: AbortSignal.timeout(65000),
+    });
+
+    // Fonksiyon zaman aşımına uğrarsa Vercel JSON olmayan bir hata sayfası
+    // döndürebilir — res.json() burada anlaşılmaz bir "Unexpected token" hatası
+    // fırlatmasın diye önce metin olarak okuyup kendimiz parse ediyoruz.
+    const raw = await res.text();
+    let data: any;
+    try {
+        data = JSON.parse(raw);
+    } catch {
+        throw new Error(res.ok ? 'AI sunucudan geçersiz yanıt geldi' : `Sunucu hatası (${res.status}) — tekrar deneyin`);
+    }
+    if (!data.success) throw new Error(data.error || 'AI önerisi alınamadı');
+    return data.picks as SocialContentPick[];
+};
+
+/** AI önerisinden seçilen ürün+içerik doğrudan kuyruğa eklenir — generate-caption.ts'i
+ *  tekrar çağırmaz, zaten üretilmiş caption'ı kullanır. */
+export const addSocialContentFromAiSuggestion = async (
+    discount: Discount,
+    pick: SocialContentPick
+): Promise<void> => {
+    await addDoc(collection(db, 'social_content_queue'), {
+        discountId: discount.id,
+        title: pick.title || discount.title,
+        imageUrl: discount.imageUrl,
+        category: discount.category || '',
+        storeName: discount.brand || '',
+        newPrice: discount.newPrice,
+        oldPrice: discount.oldPrice,
+        score: 10,
+        caption: pick.caption,
         source: 'manual',
         status: 'pending',
         createdAt: serverTimestamp(),

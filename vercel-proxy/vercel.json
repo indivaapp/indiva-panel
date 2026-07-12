@@ -5,6 +5,9 @@
         },
         "api/ai-scrape.ts": {
             "maxDuration": 60
+        },
+        "api/social-content.ts": {
+            "maxDuration": 60
         }
     },
     "headers": [

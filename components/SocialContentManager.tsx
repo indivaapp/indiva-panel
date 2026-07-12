@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { getSocialContentQueue, markSocialContentPosted, getDiscounts, addManualSocialContent } from '../services/firebase';
+import {
+    getSocialContentQueue, markSocialContentPosted, getDiscounts, addManualSocialContent,
+    getRecentDiscountsForSocialAi, suggestSocialContent, addSocialContentFromAiSuggestion,
+    type SocialContentPick,
+} from '../services/firebase';
 import { uploadImageFromUrl } from '../services/dealFinder';
 import { Clipboard } from '@capacitor/clipboard';
 import { Capacitor } from '@capacitor/core';
@@ -1204,6 +1208,14 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     const [pickerQuery, setPickerQuery] = useState('');
     const [creatingId, setCreatingId] = useState<string | null>(null);
 
+    // AI ile sosyal medya içerik önerisi — 3 FARKLI ürün, her biri kendi
+    // görseli/fiyatı/linkiyle birlikte gösterilir (tek ürünün 3 varyasyonu değil).
+    const [aiLoading, setAiLoading] = useState(false);
+    const [aiError, setAiError] = useState<string | null>(null);
+    const [aiPicks, setAiPicks] = useState<Array<{ pick: SocialContentPick; product: Discount }>>([]);
+    const [showAiModal, setShowAiModal] = useState(false);
+    const [usingPickId, setUsingPickId] = useState<string | null>(null);
+
     const fetchItems = useCallback(async () => {
         setIsLoading(true);
         setError(null);
@@ -1244,6 +1256,51 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         : allDiscounts
     ).slice(0, 30);
 
+    // Son 50 ilanı tarayıp AI'a 3 FARKLI ürün + her biri için içerik öneren akış.
+    // Sadece bu buton tıklandığında çalışır — otomatik/periyodik değil.
+    const handleAiSuggest = async () => {
+        setAiLoading(true);
+        setAiError(null);
+        try {
+            const discounts = await getRecentDiscountsForSocialAi();
+            if (discounts.length === 0) {
+                setAiError('Henüz analiz edilecek yeterli ilan yok.');
+                return;
+            }
+            const picks = await suggestSocialContent(discounts);
+            const matched = picks
+                .map(pick => {
+                    const product = discounts.find(d => d.id === pick.productId);
+                    return product ? { pick, product } : null;
+                })
+                .filter((x): x is { pick: SocialContentPick; product: Discount } => x !== null);
+
+            if (matched.length === 0) {
+                setAiError('AI geçerli ürün seçemedi, tekrar deneyin.');
+                return;
+            }
+            setAiPicks(matched);
+            setShowAiModal(true);
+        } catch (e: any) {
+            setAiError(e?.message || 'AI önerisi alınamadı.');
+        } finally {
+            setAiLoading(false);
+        }
+    };
+
+    const handleUseAiPick = async (item: { pick: SocialContentPick; product: Discount }) => {
+        setUsingPickId(item.pick.productId);
+        try {
+            await addSocialContentFromAiSuggestion(item.product, item.pick);
+            await fetchItems();
+            setShowAiModal(false);
+        } catch {
+            setAiError('İçerik kuyruğa eklenemedi, tekrar deneyin.');
+        } finally {
+            setUsingPickId(null);
+        }
+    };
+
     const handleManualCreate = async (discount: Discount) => {
         setCreatingId(discount.id);
         try {
@@ -1267,13 +1324,28 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                         Kalite puanı 9/10 ve üzeri fırsatlar için otomatik üretilen, Instagram'a hazır görsel + metin.
                     </p>
                 </div>
-                <button
-                    onClick={fetchItems}
-                    className="text-sm text-gray-400 hover:text-white px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors"
-                >
-                    ↻ Yenile
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                    <button
+                        onClick={handleAiSuggest}
+                        disabled={aiLoading}
+                        className="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 disabled:opacity-50 text-white transition-all"
+                    >
+                        {aiLoading
+                            ? <><span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Taranıyor…</>
+                            : <>🤖 AI ile Öner</>}
+                    </button>
+                    <button
+                        onClick={fetchItems}
+                        className="text-sm text-gray-400 hover:text-white px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors"
+                    >
+                        ↻ Yenile
+                    </button>
+                </div>
             </div>
+
+            {aiError && (
+                <p className="text-red-400 text-xs mb-4 -mt-3">{aiError}</p>
+            )}
 
             <div className="mb-6 bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
                 <button
@@ -1354,6 +1426,74 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                     <SocialContentCard key={item.id} item={item} onPosted={handlePosted} />
                 ))}
             </div>
+
+            {/* AI Sosyal Medya İçerik Önerisi Modalı */}
+            {showAiModal && aiPicks.length > 0 && (
+                <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={() => setShowAiModal(false)}>
+                    <div
+                        className="bg-gray-800 border border-purple-600/40 rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto p-5"
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between mb-1">
+                            <h3 className="text-white font-bold text-base flex items-center gap-2">🤖 AI'nın Önerdiği 3 Ürün</h3>
+                            <button onClick={() => setShowAiModal(false)} className="text-gray-400 hover:text-white text-xl leading-none">×</button>
+                        </div>
+                        <p className="text-gray-500 text-xs mb-4">Her kart farklı bir ürün — istediğinizi seçin, önce linkten kontrol edebilirsiniz.</p>
+
+                        <div className="space-y-3">
+                            {aiPicks.map((item) => {
+                                const discountPct = item.product.oldPrice > item.product.newPrice && item.product.oldPrice > 0
+                                    ? Math.round(((item.product.oldPrice - item.product.newPrice) / item.product.oldPrice) * 100)
+                                    : 0;
+                                return (
+                                    <div key={item.pick.productId} className="bg-gray-900/60 border border-gray-700 hover:border-purple-500/50 rounded-xl p-3 transition-colors">
+                                        <div className="flex items-center gap-3 mb-2.5">
+                                            {item.product.imageUrl && (
+                                                <img src={item.product.imageUrl} alt="" className="w-14 h-14 object-contain bg-white rounded-lg shrink-0" />
+                                            )}
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-white text-sm font-semibold line-clamp-1">{item.product.title}</p>
+                                                <p className="text-purple-300 text-xs mt-0.5">
+                                                    {Math.floor(item.product.newPrice)} TL
+                                                    {item.product.oldPrice > item.product.newPrice && (
+                                                        <span className="text-gray-500 line-through ml-1.5">{Math.floor(item.product.oldPrice)} TL</span>
+                                                    )}
+                                                    {discountPct > 0 && <span className="text-green-400 ml-1.5">%{discountPct}</span>}
+                                                </p>
+                                                {item.product.link && (
+                                                    <a
+                                                        href={item.product.link}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className="text-blue-400 text-[11px] hover:underline"
+                                                        onClick={e => e.stopPropagation()}
+                                                    >
+                                                        🔗 İndirimi linkten kontrol et
+                                                    </a>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {item.pick.reasoning && (
+                                            <p className="text-gray-500 text-[11px] mb-2 italic">"{item.pick.reasoning}"</p>
+                                        )}
+
+                                        <p className="text-white text-sm font-bold mb-1">{item.pick.title}</p>
+                                        <p className="text-gray-300 text-xs mb-2.5 leading-relaxed whitespace-pre-line">{item.pick.caption}</p>
+                                        <button
+                                            onClick={() => handleUseAiPick(item)}
+                                            disabled={usingPickId !== null}
+                                            className="w-full py-1.5 text-xs font-semibold bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white rounded-lg transition-colors"
+                                        >
+                                            {usingPickId === item.pick.productId ? 'Ekleniyor…' : 'Bunu Kullan'}
+                                        </button>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

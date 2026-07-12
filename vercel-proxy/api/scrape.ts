@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import * as cheerio from 'cheerio';
+import { trackOpenRouterUsage } from './_aiUsageTracker';
 
 // Types
 interface ScrapedDeal {
@@ -509,12 +510,14 @@ async function openrouterPriceFallback(html: string): Promise<{ newPrice: number
                 max_tokens: 60,
                 temperature: 0,
                 include_reasoning: false,
+                usage: { include: true },
             }),
         });
 
         if (!res.ok) return { newPrice: 0, oldPrice: 0 };
 
         const data = await res.json();
+        await trackOpenRouterUsage(data);
         const text = data.choices?.[0]?.message?.content || '';
         const result = parseAIPriceResponse(text);
         if (result.newPrice > 0) {
@@ -601,6 +604,7 @@ async function searchPriceViaPerplexity(productUrl: string): Promise<{
                 }],
                 max_tokens: 150,
                 temperature: 0,
+                usage: { include: true },
             }),
             signal: AbortSignal.timeout(25000),
         });
@@ -611,6 +615,7 @@ async function searchPriceViaPerplexity(productUrl: string): Promise<{
         }
 
         const data = await res.json();
+        await trackOpenRouterUsage(data);
         const text = data.choices?.[0]?.message?.content || '';
         console.log(`Perplexity yanıtı: ${text.substring(0, 300)}`);
 

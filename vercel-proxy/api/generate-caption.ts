@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { trackOpenRouterUsage } from './_aiUsageTracker';
 
 /**
  * Generate Caption — panelden manuel seçilen fırsatlar için satış dilinde
@@ -85,6 +86,7 @@ KURALLAR:
                 model: 'deepseek/deepseek-v4-flash',
                 messages: [{ role: 'user', content: prompt }],
                 temperature: 0.7,
+                usage: { include: true }, // OpenRouter gerçek USD maliyetini de döndürsün
             }),
             signal: AbortSignal.timeout(25000),
         });
@@ -94,6 +96,7 @@ KURALLAR:
         }
 
         const aiData = await aiRes.json();
+        await trackOpenRouterUsage(aiData);
         const text = (aiData.choices?.[0]?.message?.content || '').trim();
         if (!text) {
             return res.status(200).json({ success: true, caption: fallbackCaption(title, np, op, store), source: 'fallback' });

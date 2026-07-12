@@ -53,17 +53,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     try {
         // 1. Görseli server-side olarak indir
+        // NOT: Bu endpoint başlangıçta sadece Telegram CDN için yazıldı ve Referer
+        // sabit "https://t.me/" idi. Artık indirimradar (Amazon CDN) gibi başka
+        // kaynaklardan da çağrılıyor — alakasız bir referer bazı CDN'lerin hotlink
+        // korumasını tetikleyip görseli reddetmesine yol açabilir. Referer'ı
+        // hedef domain'e göre koşullu gönderiyoruz (Telegram için t.me, diğerleri
+        // için hiç Referer göndermiyoruz — Amazon/diğer CDN'ler bunu genelde
+        // sorunsuz kabul ediyor).
+        const isTelegramCdn = /telegram|t\.me|cdn-telegram/i.test(imageUrl);
+        const fetchHeaders: Record<string, string> = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+            'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7'
+        };
+        if (isTelegramCdn) fetchHeaders['Referer'] = 'https://t.me/';
+
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 saniye timeout
 
         const imageResponse = await fetch(imageUrl, {
             signal: controller.signal,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
-                'Referer': 'https://t.me/',
-                'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7'
-            }
+            headers: fetchHeaders,
         });
 
         clearTimeout(timeoutId);
