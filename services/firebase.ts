@@ -13,6 +13,7 @@ import {
     query,
     orderBy,
     where,
+    limit,
     Timestamp,
     writeBatch
 } from 'firebase/firestore';
@@ -577,6 +578,76 @@ export const addManualSocialContent = async (discount: Discount): Promise<void> 
         oldPrice: discount.oldPrice,
         score: 10,
         caption,
+        source: 'manual',
+        status: 'pending',
+        createdAt: serverTimestamp(),
+    });
+};
+
+// --- AI Sosyal Medya İçerik Önerisi ---
+// Admin tetikler: son 50 ilanı okuyup (tek Firestore sorgusu), OpenRouter proxy'sine
+// gönderir. AI satış potansiyeli + indirim oranı + geniş kitleye hitap etme
+// kriterlerine göre TEK ürün seçer ve 3 farklı içerik varyasyonu döndürür.
+
+/** Sosyal medya AI önerisi için son 50 ilanı getirir (reklamlar hariç). */
+export const getRecentDiscountsForSocialAi = async (): Promise<Discount[]> => {
+    const q = query(collection(db, 'discounts'), orderBy('createdAt', 'desc'), limit(50));
+    const querySnapshot = await getDocs(q);
+    return querySnapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() } as Discount))
+        .filter(d => !d.isAd);
+};
+
+export interface SocialContentOption {
+    title: string;
+    caption: string;
+}
+
+export interface SocialContentSuggestion {
+    productId: string;
+    reasoning: string;
+    options: SocialContentOption[];
+}
+
+export const suggestSocialContent = async (discounts: Discount[]): Promise<SocialContentSuggestion> => {
+    const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            discounts: discounts.map(d => ({
+                id: d.id,
+                title: d.title,
+                brand: d.brand,
+                category: d.category,
+                oldPrice: d.oldPrice,
+                newPrice: d.newPrice,
+                reviewCount: d.reviewCount,
+            })),
+        }),
+        signal: AbortSignal.timeout(50000),
+    });
+
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'AI önerisi alınamadı');
+    return data as SocialContentSuggestion;
+};
+
+/** AI önerisinden seçilen içerik doğrudan kuyruğa eklenir — generate-caption.ts'i
+ *  tekrar çağırmaz, zaten üretilmiş caption'ı kullanır. */
+export const addSocialContentFromAiSuggestion = async (
+    discount: Discount,
+    option: SocialContentOption
+): Promise<void> => {
+    await addDoc(collection(db, 'social_content_queue'), {
+        discountId: discount.id,
+        title: option.title || discount.title,
+        imageUrl: discount.imageUrl,
+        category: discount.category || '',
+        storeName: discount.brand || '',
+        newPrice: discount.newPrice,
+        oldPrice: discount.oldPrice,
+        score: 10,
+        caption: option.caption,
         source: 'manual',
         status: 'pending',
         createdAt: serverTimestamp(),
