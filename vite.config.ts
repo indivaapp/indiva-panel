@@ -17,6 +17,18 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
-      }
+      },
+      build: {
+        rollupOptions: {
+          output: {
+            // react/firebase nadiren değişir — app kodundan ayrı chunk'ta tutmak
+            // tekrar ziyaretlerde tarayıcı cache'inden karşılanmasını sağlar.
+            manualChunks: {
+              'vendor-react': ['react', 'react-dom'],
+              'vendor-firebase': ['firebase/app', 'firebase/auth', 'firebase/firestore'],
+            },
+          },
+        },
+      },
     };
 });

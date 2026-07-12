@@ -6,7 +6,7 @@
 // Import the functions you need from the SDKs you need
 import { FirebaseApp, getApps, initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyB4sjujBvM9WwvrsIllRAsP3EhPDkjmMCs",
@@ -20,7 +20,19 @@ const firebaseConfig = {
 // Tekil app instance garantisi
 export const app: FirebaseApp = getApps().length ? getApps()[0]! : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+// IndexedDB kalıcı önbellek: aynı sorgunun tekrar sunucudan okunmasını önler
+// (sekmeler arası geçiş, component remount vb. durumlarda cache'den karşılanır).
+// try/catch: dev sunucusunda HMR ile bu modül ikinci kez çalışırsa (app instance
+// zaten var) initializeFirestore hata fırlatır — o durumda mevcut instance'a düş.
+let firestoreDb;
+try {
+  firestoreDb = initializeFirestore(app, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+  });
+} catch {
+  firestoreDb = getFirestore(app);
+}
+export const db = firestoreDb;
 
 // Geliştirici uyarıları (yer tutucu/boş kontrolü)
 const hasPlaceholder = Object.values(firebaseConfig).some(v => typeof v === "string" && v.includes("<<<"));

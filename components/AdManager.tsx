@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { addAdvertisement, getAdvertisements, deleteAdvertisement, getAdRequests } from '../services/firebase';
+import { addAdvertisement, getAdvertisements, deleteAdvertisement, getPendingAdRequestCount } from '../services/firebase';
 import { uploadToImgbb } from '../services/imgbb';
 import type { Discount } from '../types';
 import DeleteImgButton from './DeleteImgButton';
@@ -69,20 +69,18 @@ const AdManager: React.FC<AdManagerProps> = ({ isAdmin }) => {
         }
     }, []);
 
-    // Check for pending requests
+    // Check for pending requests — sadece sayaç için getCountFromServer kullanılır
+    // (tam liste sadece AdRequestListModal açıldığında kendi içinde çekilir).
     useEffect(() => {
         const checkRequests = async () => {
             try {
-                const reqs = await getAdRequests();
-                const pending = reqs.filter(r => r.status === 'pending');
-                setPendingRequestCount(pending.length);
+                setPendingRequestCount(await getPendingAdRequestCount());
             } catch {
                 // pending request count yüklenemedi
             }
         };
         checkRequests();
 
-        // Optional: Interval to check every minute
         const interval = setInterval(checkRequests, 60000);
         return () => clearInterval(interval);
     }, []);
