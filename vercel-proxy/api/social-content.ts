@@ -35,7 +35,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ success: false, error: 'discounts listesi boş olamaz' });
     }
 
-    const compact = discounts.slice(0, 50).map((d: any) => ({
+    // NOT: AI'a Firestore doküman ID'sini (uzun/rastgele string) birebir geri
+    // ürettirmiyoruz — LLM'ler bunu güvenilir kopyalayamıyor (deepseek-v4-flash'ta
+    // sıkça hatalı/uydurma ID döndürüyordu). Bunun yerine listedeki sıra numarasını
+    // ("index") seçtiriyoruz; gerçek ID'yi burada biz index'ten buluyoruz.
+    const compact = discounts.slice(0, 50).map((d: any, i: number) => ({
+        index: i + 1,
         id: d.id,
         title: d.title,
         brand: d.brand,
@@ -65,12 +70,13 @@ Her içerik için:
 - "title": max 60 karakter, dikkat çekici başlık
 - "caption": Instagram story/post metni (2-4 cümle + hashtag'ler), emoji kullanılabilir, sonunda İNDİVA'yı indirmeye teşvik eden bir cümle olsun
 
-İLANLAR:
+İLANLAR (her ilanın başındaki "index" numarasıyla referans ver, "id" alanını YAZMA/KOPYALAMA):
 ${JSON.stringify(compact)}
 
-SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma:
+SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma. "index" MUTLAKA
+yukarıdaki listeden seçtiğin ilanın "index" alanındaki TAM SAYI olmalı (1 ile ${compact.length} arası):
 {
-  "productId": "seçilen ürünün id'si",
+  "index": 1,
   "reasoning": "neden bu ürünü seçtiğin, kısa Türkçe açıklama (max 100 karakter)",
   "options": [
     {"title": "...", "caption": "..."},
@@ -111,18 +117,19 @@ SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma:
         }
 
         const result = JSON.parse(jsonMatch[0]);
-        if (!result.productId || !Array.isArray(result.options) || result.options.length === 0) {
+        const idx = Number(result.index);
+        if (!Number.isInteger(idx) || !Array.isArray(result.options) || result.options.length === 0) {
             return res.status(502).json({ success: false, error: 'AI eksik veri döndürdü' });
         }
 
-        const chosen = compact.find((d: any) => d.id === result.productId);
+        const chosen = compact[idx - 1];
         if (!chosen) {
-            return res.status(502).json({ success: false, error: 'AI geçersiz bir ürün id döndürdü' });
+            return res.status(502).json({ success: false, error: `AI geçersiz bir sıra numarası döndürdü (${idx})` });
         }
 
         return res.status(200).json({
             success: true,
-            productId: result.productId,
+            productId: chosen.id,
             reasoning: result.reasoning || '',
             options: result.options.slice(0, 3),
         });
