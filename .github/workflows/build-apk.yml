@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-12-2 (sosyal medya AI: 3 farklı ürün önerisi)
+# manuel tetikleme: 2026-07-12-3 (sosyal medya AI: timeout/JSON parse düzeltmesi)
 
 on:
   workflow_dispatch:
