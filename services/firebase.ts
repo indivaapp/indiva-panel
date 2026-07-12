@@ -620,10 +620,19 @@ export const suggestSocialContent = async (discounts: Discount[]): Promise<Socia
                 reviewCount: d.reviewCount,
             })),
         }),
-        signal: AbortSignal.timeout(50000),
+        signal: AbortSignal.timeout(65000),
     });
 
-    const data = await res.json();
+    // Fonksiyon zaman aşımına uğrarsa Vercel JSON olmayan bir hata sayfası
+    // döndürebilir — res.json() burada anlaşılmaz bir "Unexpected token" hatası
+    // fırlatmasın diye önce metin olarak okuyup kendimiz parse ediyoruz.
+    const raw = await res.text();
+    let data: any;
+    try {
+        data = JSON.parse(raw);
+    } catch {
+        throw new Error(res.ok ? 'AI sunucudan geçersiz yanıt geldi' : `Sunucu hatası (${res.status}) — tekrar deneyin`);
+    }
     if (!data.success) throw new Error(data.error || 'AI önerisi alınamadı');
     return data.picks as SocialContentPick[];
 };
