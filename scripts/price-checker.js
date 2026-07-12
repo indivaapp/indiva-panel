@@ -15,6 +15,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fetchWithFallback } from './scraperService.js';
 import { sendAdminAlert } from './alertService.js';
+import { trackGeminiUsage } from './aiUsageTracker.js';
 
 // ─── .env Yükle ─────────────────────────────────────────────────────────────
 const ROOT_DIR = process.cwd();
@@ -185,7 +186,7 @@ function verifyWithHTML(product, html) {
 // (hiçbir şey silinmez). Karar SADECE somut sinyalle ('stok yok' veya fiyat net
 // %25+ yüksek) verilir; AI'nın kendi "expired" tahminine körü körüne güvenilmez.
 // Döndürür: { decision: 'expired'|'active'|'unknown', currentPrice, reason }
-async function verifyWithAI(product, content) {
+async function verifyWithAI(product, content, db) {
     const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
     if (!apiKey) return { decision: 'unknown', reason: 'Gemini API Key yok' };
     if (!contentLooksUsable(content)) return { decision: 'unknown', reason: 'İçerik güvenilmez (bot/boş)' };
@@ -228,6 +229,7 @@ YALNIZCA JSON: {"currentPrice":0,"inStock":true,"expired":false,"confidence":0,"
         if (!response.ok) return { decision: 'unknown', reason: `Gemini HTTP ${response.status}` };
 
         const data = await response.json();
+        await trackGeminiUsage(db, data, 'gemini-2.5-flash');
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (!jsonMatch) return { decision: 'unknown', reason: 'AI JSON döndürmedi' };
@@ -392,7 +394,7 @@ async function checkPrices() {
                 // GEMINI_API_KEY varsa AI birincil (Jina metnini okur, zor sitelerde
                 // fiyatı ancak AI okuyabilir). Yoksa temkinli HTML yedeği.
                 const hasKey = !!(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY);
-                const verdict = hasKey ? await verifyWithAI(deal, html) : verifyWithHTML(deal, html);
+                const verdict = hasKey ? await verifyWithAI(deal, html, db) : verifyWithHTML(deal, html);
 
                 if (verdict.decision === 'unknown') {
                     // Karar verilemedi (bot-engeli/belirsiz) → DOKUNMA. Strike değişmez.
@@ -502,7 +504,7 @@ async function checkPrices() {
                     const isHardSite = /trendyol|amazon|hepsiburada|n11/.test(url.toLowerCase());
                     const html = await fetchHtml(url, isHardSite);
                     if (!html) return;
-                    const verdict = hasKey ? await verifyWithAI(deal, html) : verifyWithHTML(deal, html);
+                    const verdict = hasKey ? await verifyWithAI(deal, html, db) : verifyWithHTML(deal, html);
                     if (verdict.decision === 'active') {
                         await doc.ref.update({
                             status: 'aktif',

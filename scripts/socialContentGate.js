@@ -12,10 +12,11 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
+import { trackGeminiUsage } from './aiUsageTracker.js';
 
 const QUEUE_THRESHOLD = 9;
 
-async function generateCaption(apiKey, deal) {
+async function generateCaption(apiKey, deal, db) {
     const { title, newPrice, oldPrice, category, storeName } = deal;
     const discountPct = oldPrice > 0 && newPrice > 0
         ? Math.round(((oldPrice - newPrice) / oldPrice) * 100)
@@ -53,6 +54,7 @@ KURALLAR:
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
             config: { temperature: 0.7 },
         });
+        await trackGeminiUsage(db, response, 'gemini-2.5-flash');
         const text = (response.text || '').trim();
         if (text) return text;
     } catch (err) {
@@ -74,7 +76,7 @@ export async function maybeQueueSocialContent(db, apiKey, deal) {
     if (!(score >= QUEUE_THRESHOLD)) return { queued: false, reason: 'eşik altı' };
 
     try {
-        const caption = await generateCaption(apiKey, { title, newPrice, oldPrice, category, storeName });
+        const caption = await generateCaption(apiKey, { title, newPrice, oldPrice, category, storeName }, db);
         await db.collection('social_content_queue').add({
             discountId, title, imageUrl, category: category || '', storeName: storeName || '',
             newPrice, oldPrice, score, caption,

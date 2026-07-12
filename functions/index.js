@@ -5,6 +5,38 @@ const https = require('https');
 const http = require('http');
 admin.initializeApp();
 
+// ─── AI Kullanım/Maliyet Takibi ───────────────────────────────────────────────
+// gemini-2.5-flash-lite tahmini fiyatlandırması (USD / 1M token). Google'ın
+// güncel fiyat sayfasından kontrol edin: https://ai.google.dev/pricing
+const AI_PRICE_INPUT_PER_1M_USD = 0.10;
+const AI_PRICE_OUTPUT_PER_1M_USD = 0.40;
+
+async function trackAiUsage(geminiData) {
+    try {
+        const usage = geminiData?.usageMetadata;
+        if (!usage) return;
+        const inputTokens = usage.promptTokenCount || 0;
+        const outputTokens = usage.candidatesTokenCount || 0;
+        const costUsd = (inputTokens / 1e6) * AI_PRICE_INPUT_PER_1M_USD + (outputTokens / 1e6) * AI_PRICE_OUTPUT_PER_1M_USD;
+
+        const db = admin.firestore();
+        const now = new Date();
+        const dayId = now.toISOString().slice(0, 10);
+        const monthId = now.toISOString().slice(0, 7);
+        const fields = {
+            calls: admin.firestore.FieldValue.increment(1),
+            inputTokens: admin.firestore.FieldValue.increment(inputTokens),
+            outputTokens: admin.firestore.FieldValue.increment(outputTokens),
+            costUsd: admin.firestore.FieldValue.increment(costUsd),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        await Promise.all([
+            db.collection('aiUsage').doc(`daily_${dayId}`).set(fields, { merge: true }),
+            db.collection('aiUsage').doc(`monthly_${monthId}`).set(fields, { merge: true }),
+        ]);
+    } catch { /* takip hatası ana akışı bozmasın */ }
+}
+
 // Geçerli kategori listesi — D:\INDIVAAPP2026\constants\categories.ts ile birebir aynı olmalı
 const VALID_CATEGORIES = [
     'Teknoloji',
@@ -144,6 +176,7 @@ Bu ürünü analiz et ve SADECE aşağıdaki JSON formatında yanıt ver (başka
                 },
                 60000
             );
+            await trackAiUsage(geminiData);
 
             const aiText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || '';
             let result = {};

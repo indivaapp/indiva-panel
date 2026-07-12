@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { trackOpenRouterUsage } from './_aiUsageTracker';
 
 /**
  * Vision API — Ekran görüntüsünden ürün bilgisi çıkarır
@@ -75,6 +76,7 @@ SADECE JSON yaz, başka hiçbir şey ekleme:
                 }],
                 max_tokens: 300,
                 temperature: 0.1,
+                usage: { include: true }, // OpenRouter gerçek USD maliyetini de döndürsün
             }),
             signal: AbortSignal.timeout(25000),
         });
@@ -93,6 +95,7 @@ SADECE JSON yaz, başka hiçbir şey ekleme:
         }
 
         const data = await response.json();
+        await trackOpenRouterUsage(data);
         const text: string = data.choices?.[0]?.message?.content || '';
 
         if (!text) {
@@ -182,6 +185,7 @@ async function fallbackModel(
             }],
             max_tokens: 300,
             temperature: 0.1,
+            usage: { include: true },
         }),
         signal: AbortSignal.timeout(25000),
     });
@@ -192,6 +196,7 @@ async function fallbackModel(
     }
 
     const data = await response.json();
+    await trackOpenRouterUsage(data);
     const text: string = data.choices?.[0]?.message?.content || '';
     const jsonMatch = text.match(/\{[\s\S]*?\}/);
     if (!jsonMatch) {

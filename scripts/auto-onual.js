@@ -19,6 +19,7 @@ import { sendAdminAlert } from './alertService.js';
 import { runQualityGate } from './qualityGate.js';
 import { maybeNotifyHighScoreDeal } from './notifyGate.js';
 import { maybeQueueSocialContent } from './socialContentGate.js';
+import { trackGeminiUsage } from './aiUsageTracker.js';
 
 
 
@@ -202,7 +203,7 @@ function simulateOldPrice(newPrice) {
 /**
  * Gemini SDK kullanarak yapay zeka analizi yapar (Model: gemini-2.5-flash)
  */
-async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, metaDescription = '') {
+async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, metaDescription = '', db) {
     if (!apiKey) return { category: detectCategory(productTitle), aiFomoScore: 5 };
 
     const genAI = new GoogleGenAI({ apiKey });
@@ -239,6 +240,7 @@ async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, me
                 temperature: 0.2
             }
         });
+        await trackGeminiUsage(db, response, MODEL);
 
         const text = response.text || '';
         const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -418,7 +420,7 @@ function sleep(ms) {
  * Cloudflare engeli olduğunda Gemini URL Context ile onual.com ana sayfasını çek.
  * Google sunucuları Cloudflare'in güven listesinde — challenge sayfası görmezler.
  */
-async function fetchOnualViaGemini(apiKey) {
+async function fetchOnualViaGemini(apiKey, db) {
     const { GoogleGenAI } = await import('@google/genai');
     const genAI = new GoogleGenAI({ apiKey });
 
@@ -445,6 +447,7 @@ SADECE JSON array döndür, kesinlikle başka metin yok. Maks 20 ürün.
             }],
             config: { tools: [{ urlContext: {} }], temperature: 0 },
         });
+        await trackGeminiUsage(db, response, 'gemini-2.5-flash');
 
         const text = response.text ||
             (response.candidates?.[0]?.content?.parts || []).filter(p => p.text).map(p => p.text).join('');
@@ -479,7 +482,7 @@ SADECE JSON array döndür, kesinlikle başka metin yok. Maks 20 ürün.
  * onual.com ana sayfasını parse et.
  * Sıra: 1) Direct fetch+cheerio  2) Gemini URL Context (Cloudflare bypass)
  */
-async function fetchProductList() {
+async function fetchProductList(db) {
     console.log('📡 onual.com çekiliyor...');
     try {
         const { html } = await fetchWithFallback(ONUAL_URL);
@@ -496,7 +499,7 @@ async function fetchProductList() {
         console.warn('   ❌ GEMINI_API_KEY bulunamadı. Pipeline durdu.');
         return [];
     }
-    return await fetchOnualViaGemini(geminiKey);
+    return await fetchOnualViaGemini(geminiKey, db);
 }
 
 /**
@@ -709,7 +712,7 @@ async function main() {
         console.warn('⚠️  GEMINI_API_KEY yok — kalite kapısı/bildirim/sosyal içerik puanlaması devre dışı (varsayılan 6/10 ile geçecek).');
     }
     // 1. Ürün listesini çek (onual.com/fiyat/)
-    const allProducts = await fetchProductList();
+    const allProducts = await fetchProductList(db);
 
     // ── CACHE OPTIMIZATION ──────────────────────────────────────────────────
     // Daha önce işlediğimiz ID'leri yerel bir dosyada tutarak Firebase Read kotasını koruyoruz.
@@ -868,7 +871,8 @@ async function main() {
                     details.title || product.title,
                     details.newPrice || product.newPrice,
                     details.oldPrice || 0,
-                    details.metaDescription || ''
+                    details.metaDescription || '',
+                    db
                 );
 
                 const cleanedTitle = cleanProductTitle(details.title || product.title);

@@ -499,6 +499,43 @@ export const getPendingSocialContentCount = async (): Promise<number> => {
     return items.length;
 };
 
+// --- AI Kullanım/Maliyet İstatistikleri ---
+// scripts/*.js, functions/index.js ve vercel-proxy/api/*.ts her AI çağrısından
+// sonra 'aiUsage/daily_YYYY-MM-DD' ve 'aiUsage/monthly_YYYY-MM' dokümanlarını
+// increment ile günceller. Burada sadece 2 doküman okunur.
+export interface AiUsageStats {
+    calls: number;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+}
+
+const emptyAiUsage: AiUsageStats = { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+
+export const getAiUsageStats = async (): Promise<{ today: AiUsageStats; month: AiUsageStats }> => {
+    const now = new Date();
+    const dayId = now.toISOString().slice(0, 10);
+    const monthId = now.toISOString().slice(0, 7);
+
+    const [dailySnap, monthlySnap] = await Promise.all([
+        getDoc(doc(db, 'aiUsage', `daily_${dayId}`)),
+        getDoc(doc(db, 'aiUsage', `monthly_${monthId}`)),
+    ]);
+
+    const toStats = (d: typeof dailySnap): AiUsageStats => {
+        if (!d.exists()) return { ...emptyAiUsage };
+        const data = d.data() as any;
+        return {
+            calls: data.calls || 0,
+            inputTokens: data.inputTokens || 0,
+            outputTokens: data.outputTokens || 0,
+            costUsd: data.costUsd || 0,
+        };
+    };
+
+    return { today: toStats(dailySnap), month: toStats(monthlySnap) };
+};
+
 // Admin panelden elle seçilen bir fırsat için, puan eşiği beklemeden anında
 // içerik kuyruğuna ekler. Caption, tarayıcıda Gemini anahtarı ifşa etmemek
 // için sunucu tarafındaki (Vercel) generate-caption fonksiyonu üzerinden

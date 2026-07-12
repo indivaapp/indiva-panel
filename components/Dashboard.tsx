@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { ViewType } from '../types';
-import { addDiscount } from '../services/firebase';
+import { addDiscount, getAiUsageStats, type AiUsageStats } from '../services/firebase';
 import { analyzeProductLink, isValidProductLink } from '../services/linkAnalyzer';
 
 async function pasteFromClipboard(): Promise<string> {
@@ -139,6 +139,80 @@ const AIAnalyzer: React.FC = () => {
                         <p className="text-green-300 text-xs leading-relaxed line-clamp-2">Yayınlandı: <span className="font-medium">{success}</span></p>
                     </div>
                 )}
+            </div>
+        </div>
+    );
+};
+
+// ─── AI Kullanım/Maliyet Kutusu ────────────────────────────────────────────────
+// Tüm AI pipeline'ları (price-checker, auto-onual, auto-akakce, kalite kapısı,
+// sosyal medya içerik, vercel-proxy AI uç noktaları) her çağrıdan sonra
+// 'aiUsage' koleksiyonuna token/maliyet increment'i yazıyor. Burada sadece
+// 2 doküman (bugün + bu ay) okunuyor — ekstra Firestore read yükü yok.
+// USD/TL kuru: canlı çekilemezse aşağıdaki FALLBACK_USD_TRY kullanılır (elle güncelleyin).
+const FALLBACK_USD_TRY = 34;
+
+const AiCostSection: React.FC = () => {
+    const [today, setToday] = useState<AiUsageStats | null>(null);
+    const [month, setMonth] = useState<AiUsageStats | null>(null);
+    const [rate, setRate] = useState<number>(FALLBACK_USD_TRY);
+    const [loading, setLoading] = useState(false);
+
+    const load = async () => {
+        setLoading(true);
+        try {
+            const stats = await getAiUsageStats();
+            setToday(stats.today);
+            setMonth(stats.month);
+        } catch { /* sessiz */ } finally { setLoading(false); }
+    };
+
+    useEffect(() => {
+        // Kuru bir kez çek (Firestore değil, harici ücretsiz bir API) — başarısız olursa fallback kalır
+        fetch('https://open.er-api.com/v6/latest/USD')
+            .then(r => r.json())
+            .then(j => { const r2 = j?.rates?.TRY; if (typeof r2 === 'number' && r2 > 0) setRate(r2); })
+            .catch(() => {});
+
+        load();
+        const t = setInterval(() => { if (document.visibilityState === 'visible') load(); }, 5 * 60 * 1000);
+        const onVisible = () => { if (document.visibilityState === 'visible') load(); };
+        document.addEventListener('visibilitychange', onVisible);
+        return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVisible); };
+    }, []);
+
+    const fmtUsd = (n?: number) => `$${(n ?? 0).toFixed(3)}`;
+    const fmtTry = (n?: number) => `₺${((n ?? 0) * rate).toFixed(2)}`;
+
+    return (
+        <div className="rounded-2xl overflow-hidden border border-purple-500/20 bg-gray-800/80"
+             style={{ boxShadow: '0 0 0 1px rgba(168,85,247,0.08), 0 4px 24px rgba(0,0,0,0.3)' }}>
+
+            <div className="px-4 py-3 flex items-center gap-2 bg-gradient-to-r from-purple-500/10 to-transparent border-b border-purple-500/15">
+                <div className="w-6 h-6 rounded-lg bg-purple-600/80 flex items-center justify-center text-xs shadow">🤖</div>
+                <span className="text-xs font-bold text-purple-300 uppercase tracking-widest flex-1">AI Maliyeti (tahmini)</span>
+                <button onClick={load} disabled={loading} title="Yenile"
+                    className="text-gray-400 hover:text-white text-sm disabled:opacity-40 transition-colors">🔄</button>
+            </div>
+
+            <div className="p-4 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-gray-900/60 border border-gray-700 rounded-xl px-4 py-3">
+                        <p className="text-purple-300 text-lg font-bold leading-none">{fmtUsd(today?.costUsd)}</p>
+                        <p className="text-purple-200/80 text-sm font-semibold mt-0.5">{fmtTry(today?.costUsd)}</p>
+                        <p className="text-gray-400 text-xs mt-1">bugün · {today?.calls ?? 0} çağrı</p>
+                    </div>
+                    <div className="bg-gray-900/60 border border-gray-700 rounded-xl px-4 py-3">
+                        <p className="text-purple-300 text-lg font-bold leading-none">{fmtUsd(month?.costUsd)}</p>
+                        <p className="text-purple-200/80 text-sm font-semibold mt-0.5">{fmtTry(month?.costUsd)}</p>
+                        <p className="text-gray-400 text-xs mt-1">bu ay · {month?.calls ?? 0} çağrı</p>
+                    </div>
+                </div>
+                <p className="text-gray-500 text-[11px] leading-relaxed">
+                    price-checker, auto-onual/akakçe, kalite kapısı ve sosyal medya AI'ının toplamıdır.
+                    OpenRouter çağrıları gerçek maliyeti, doğrudan Gemini çağrıları token bazlı tahmini
+                    maliyeti kullanır. Kur: 1$ ≈ ₺{rate.toFixed(2)}.
+                </p>
             </div>
         </div>
     );
@@ -290,6 +364,9 @@ const Dashboard: React.FC<DashboardProps> = ({ setActiveView, pendingAffiliateCo
                     </svg>
                 </div>
             </button>
+
+            {/* AI Kullanım/Maliyet Takibi */}
+            <AiCostSection />
         </div>
     );
 };

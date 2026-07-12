@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { trackGeminiUsage } from './_aiUsageTracker';
 
 /**
  * AI Scrape — Jina Reader + Gemini ile ürün verisi çıkarır
@@ -226,6 +227,7 @@ SADECE aşağıdaki JSON formatında döndür, başka hiçbir şey yazma:
         }
 
         const aiData = await aiRes.json();
+        await trackGeminiUsage(aiData, 'gemini-2.5-flash');
         const rawText = aiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
         const jsonMatch = rawText.match(/\{[\s\S]*\}/);
         if (!jsonMatch) {

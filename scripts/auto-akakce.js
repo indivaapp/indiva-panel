@@ -16,6 +16,7 @@ import { getFirestore, FieldValue, FieldPath } from 'firebase-admin/firestore';
 import * as fs from 'fs';
 import * as path from 'path';
 import { sendAdminAlert } from './alertService.js';
+import { trackGeminiUsage } from './aiUsageTracker.js';
 
 // ─── .env Yükle (lokal geliştirme) ──────────────────────────────────────────
 const ROOT_DIR = process.cwd();
@@ -137,7 +138,7 @@ function extractProductId(url) {
 }
 
 // ─── Gemini ile Akakce Ürün Listesi (URL Context + Google Search fallback) ─────
-async function fetchAkakceViaGemini(apiKey) {
+async function fetchAkakceViaGemini(apiKey, db) {
     const genAI = new GoogleGenAI({ apiKey });
 
     const productPrompt = `akakce.com sitesinin "Son Yakalanan İndirimler" veya "Fark Atan Fiyatlar" bölümündeki güncel indirimli ürünleri listele.
@@ -179,6 +180,7 @@ Format: [{"title":"Samsung Galaxy S25","newPrice":35000,"oldPrice":42000,"discou
                 temperature: 0.1,
             },
         });
+        await trackGeminiUsage(db, response, MODEL_URL_CONTEXT);
         const text = extractText(response);
         console.log(`   📝 Yanıt (ilk 800): ${text.substring(0, 800)}`);
         const match = text.match(/\[[\s\S]*?\]/);
@@ -215,6 +217,7 @@ Format: [{"title":"Samsung TV","newPrice":15000,"oldPrice":20000,"discountPercen
             contents: [{ role: 'user', parts: [{ text: searchPrompt }] }],
             config: { tools: [{ googleSearch: {} }], temperature: 0.1 },
         });
+        await trackGeminiUsage(db, response, MODEL_URL_CONTEXT);
         const text = extractText(response);
         console.log(`   📝 Yanıt (ilk 800): ${text.substring(0, 800)}`);
         const match = text.match(/\[[\s\S]*?\]/);
@@ -234,7 +237,7 @@ Format: [{"title":"Samsung TV","newPrice":15000,"oldPrice":20000,"discountPercen
 }
 
 // ─── Ürün Detayı Zenginleştirme: Görsel + Gerçek Mağaza Linki ────────────────
-async function enrichProductDetails(apiKey, productTitle, akakceProductUrl) {
+async function enrichProductDetails(apiKey, productTitle, akakceProductUrl, db) {
     const genAI = new GoogleGenAI({ apiKey });
     const isGenericUrl = !akakceProductUrl ||
         akakceProductUrl === AKAKCE_URL ||
@@ -251,6 +254,7 @@ async function enrichProductDetails(apiKey, productTitle, akakceProductUrl) {
                 contents: [{ role: 'user', parts: [{ text: `Search Google for: akakce.com "${productTitle}"\n\nFind the specific akakce.com product page URL. Return ONLY the URL (e.g. https://www.akakce.com/kategori/urun,12345678.html), nothing else.` }] }],
                 config: { tools: [{ googleSearch: {} }], temperature: 0 },
             });
+            await trackGeminiUsage(db, searchResp, MODEL_URL_CONTEXT);
             const searchText = searchResp.text || '';
             const urlMatch = searchText.match(/https:\/\/www\.akakce\.com\/[^\s"'<>\n]+\.html/);
             if (urlMatch) {
@@ -300,6 +304,7 @@ Rules:
                 contents: [{ role: 'user', parts: [{ text: detailPrompt }] }],
                 config: { tools: [{ urlContext: {} }], temperature: 0 },
             });
+            await trackGeminiUsage(db, detailResp, MODEL_URL_CONTEXT);
             const text = detailResp.text || '';
             console.log(`   🔎 Detay yanıtı: ${text.substring(0, 200)}`);
             const match = text.match(/\{[\s\S]*?\}/);
@@ -320,7 +325,7 @@ Rules:
 }
 
 // ─── Gemini Açıklama Üretimi (AI_ENABLED=true ise) ───────────────────────────
-async function generateDescription(apiKey, title, newPrice, oldPrice) {
+async function generateDescription(apiKey, title, newPrice, oldPrice, db) {
     if (!apiKey || process.env.AI_ENABLED !== 'true') {
         return { category: detectCategory(title), description: '', aiFomoScore: 5 };
     }
@@ -336,6 +341,7 @@ Kategori seçenekleri: Teknoloji, Giyim, Kozmetik, Ev, Market, Bebek, Sağlık, 
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
             config: { temperature: 0.2 },
         });
+        await trackGeminiUsage(db, response, MODEL_DESCRIPTION);
         const text = response.text || '';
         const match = text.match(/\{[\s\S]*\}/);
         const data = JSON.parse((match ? match[0] : text).trim());
@@ -399,7 +405,7 @@ async function main() {
     // ── 1. Akakce'den ürün listesini çek ────────────────────────────────────
     let rawProducts;
     try {
-        rawProducts = await fetchAkakceViaGemini(apiKey);
+        rawProducts = await fetchAkakceViaGemini(apiKey, db);
     } catch (err) {
         console.error(`❌ Akakce fetch hatası: ${err.message}`);
         await sendAdminAlert('Akakce Pipeline Hatası', `Gemini URL fetch başarısız: ${err.message}`);
@@ -457,7 +463,7 @@ async function main() {
 
             // Görsel + gerçek mağaza linki çek
             console.log(`   🔍 Ürün detayı zenginleştiriliyor...`);
-            const details = await enrichProductDetails(apiKey, product.title, product.productUrl);
+            const details = await enrichProductDetails(apiKey, product.title, product.productUrl, db);
             const storeUrl = details.storeUrl || product.productUrl;
             const imageUrl = details.imageUrl || product.imageUrl || '';
 
@@ -466,7 +472,7 @@ async function main() {
             console.log(`   🖼️  Görsel: ${imageUrl ? '✅' : '❌ Yok'} | Link: ${storeUrl.substring(0, 60)}...`);
 
             // Opsiyonel: AI açıklama üretimi
-            const aiData = await generateDescription(apiKey, product.title, newPrice, oldPrice);
+            const aiData = await generateDescription(apiKey, product.title, newPrice, oldPrice, db);
 
             const discountData = {
                 title: cleanTitle(product.title),

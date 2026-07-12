@@ -94,6 +94,14 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    // AI kullanım/maliyet istatistikleri — sadece Admin SDK (scripts, Cloud
+    // Functions, Vercel proxy) yazar; o yazmalar zaten rules'u atlar.
+    // Client SDK üzerinden asla yazılmamalı; panel sadece okur.
+    match /aiUsage/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
     // TODO(review): Bu koleksiyona tüketici (mobil) uygulamasından nasıl
     // yazıldığını bu repo'da tam doğrulayamadım. Deploy etmeden önce gerçek
     // yazma akışını kontrol edip aşağıdaki kuralı daraltın.
