@@ -263,14 +263,22 @@ const App: React.FC = () => {
     useEffect(() => {
         if (!authReady) return;
         const loadCounts = async () => {
+            if (document.visibilityState !== 'visible') return; // arka plandaki sekmede okuma yapma
             try { setPendingAffiliateCount(await getPendingAffiliateCount()); } catch {}
             try { setPendingAdRequestCount(await getPendingAdRequestCount()); } catch {}
             try { setPendingDiscountCount(await getPendingDiscountCount()); } catch {}
             try { setPendingSocialContentCount(await getPendingSocialContentCount()); } catch {}
         };
         loadCounts();
-        const interval = setInterval(loadCounts, 30000);
-        return () => clearInterval(interval);
+        // 30sn -> 5dk: rozet sayıları için gerçek zamanlılık gerekmiyor, bu 4 sorgu
+        // panel açık kaldığı sürece tekrarlanıyordu (bkz. services/firebase.ts notu).
+        const interval = setInterval(loadCounts, 5 * 60 * 1000);
+        const onVisible = () => { if (document.visibilityState === 'visible') loadCounts(); };
+        document.addEventListener('visibilitychange', onVisible);
+        return () => {
+            clearInterval(interval);
+            document.removeEventListener('visibilitychange', onVisible);
+        };
     }, [authReady]);
 
     // ShareActivity: sadece QuickShareOverlay göster, tüm app'i atla

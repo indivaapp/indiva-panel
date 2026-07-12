@@ -15,7 +15,8 @@ import {
     where,
     limit,
     Timestamp,
-    writeBatch
+    writeBatch,
+    getCountFromServer
 } from 'firebase/firestore';
 import type { Discount, Brochure, Advertisement, PendingDiscount, AdRequest, ScheduledNotification, StagingProduct, SocialContentItem } from '../types';
 import { deleteFromImgbb } from './imgbb';
@@ -467,20 +468,28 @@ export const deleteAdRequest = async (id: string) => {
     await deleteDoc(docRef);
 };
 
+// getCountFromServer: sunucudan sadece sayı ister, doküman içeriği hiç indirilmez —
+// koleksiyon büyüklüğünden bağımsız olarak 1 read maliyetiyle çalışır. App.tsx bu
+// fonksiyonları 30sn'de bir çağırıyor, bu yüzden burada tam doküman okumak
+// (getDocs) yerine sayaç kullanmak read maliyetini büyük ölçüde düşürür.
 export const getPendingAdRequestCount = async (): Promise<number> => {
-    const q = query(collection(db, 'adRequests'), where('status', '==', 'pending'));
-    const snap = await getDocs(q);
-    return snap.size;
+    const snap = await getCountFromServer(
+        query(collection(db, 'adRequests'), where('status', '==', 'pending'))
+    );
+    return snap.data().count;
 };
 
 export const getPendingDiscountCount = async (): Promise<number> => {
-    const snap = await getDocs(collection(db, 'pendingDiscounts'));
-    return snap.size;
+    const snap = await getCountFromServer(collection(db, 'pendingDiscounts'));
+    return snap.data().count;
 };
 
 // --- Sosyal Medya İçerik Kuyruğu ---
 // Otomatik pipeline'lar (auto-onual, trendyol-scraper) yüksek puanlı fırsatları
 // buraya yazar. Status client-side filtrelenir (composite index gerektirmesin diye).
+// NOT: getSocialContentQueue() tam liste için (SocialContentManager.tsx), sadece
+// oradan çağrıldığında tüm dokümanları okur. Rozet sayacı (getPendingSocialContentCount)
+// ise bunu ÇAĞIRMAZ — ayrı, ucuz bir getCountFromServer sorgusu kullanır.
 
 export const getSocialContentQueue = async (): Promise<SocialContentItem[]> => {
     const q = query(collection(db, 'social_content_queue'), orderBy('createdAt', 'desc'));
@@ -496,8 +505,10 @@ export const markSocialContentPosted = async (id: string) => {
 };
 
 export const getPendingSocialContentCount = async (): Promise<number> => {
-    const items = await getSocialContentQueue();
-    return items.length;
+    const snap = await getCountFromServer(
+        query(collection(db, 'social_content_queue'), where('status', '==', 'pending'))
+    );
+    return snap.data().count;
 };
 
 // --- AI Kullanım/Maliyet İstatistikleri ---
