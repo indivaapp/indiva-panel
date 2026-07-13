@@ -37,9 +37,12 @@ const TrendyolScraper: React.FC = () => {
 
   useEffect(() => {
     fetchStatus();
-    const t = setInterval(fetchStatus, 4000);
+    // Tarama sürerken daha sık (kullanıcı ilerlemeyi görmek ister), boştayken
+    // seyrek — 4sn yerine sabit bir aralık günlük yüzlerce gereksiz okumaya
+    // yol açıyordu (bu ekran açık bırakılırsa özellikle).
+    const t = setInterval(fetchStatus, status?.isRunning ? 5000 : 20000);
     return () => clearInterval(t);
-  }, [fetchStatus]);
+  }, [fetchStatus, status?.isRunning]);
 
   // ── Staging ürünleri ──────────────────────────────────────────────────────
   const loadStaging = useCallback(async () => {
