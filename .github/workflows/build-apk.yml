@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-13-5 (AI Analist tetikleme düğmesi)
+# manuel tetikleme: 2026-07-13-6 (AI maliyet kaynak kırılımı + bütçe tavanı)
 
 on:
   workflow_dispatch:
