@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-13-3 (AI Analist asistanı eklendi)
+# manuel tetikleme: 2026-07-13-4 (affiliate sayaç + Düzenle sayfalama düzeltmesi)
 
 on:
   workflow_dispatch:
