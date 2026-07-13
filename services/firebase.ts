@@ -788,6 +788,26 @@ export const markAiAnalystReportRead = async (id: string): Promise<void> => {
     await updateDoc(doc(db, 'ai_analyst_reports', id), { read: true });
 };
 
+/** AI Analist raporunu elle (anlık) tetikler — GitHub Actions workflow'unu
+ *  workflow_dispatch ile başlatır. Rapor senkron dönmez, birkaç dakika
+ *  içinde push bildirimi + yeni rapor olarak Firestore'a düşer. */
+export const triggerAiAnalystReport = async (mode: 'daily' | 'weekly' = 'daily'): Promise<void> => {
+    const res = await fetch('https://indiva-proxy.vercel.app/api/trigger-ai-analyst', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+        signal: AbortSignal.timeout(20000),
+    });
+    const raw = await res.text();
+    let data: any;
+    try {
+        data = JSON.parse(raw);
+    } catch {
+        throw new Error(res.ok ? 'Sunucudan geçersiz yanıt geldi' : `Sunucu hatası (${res.status}) — tekrar deneyin`);
+    }
+    if (!data.success) throw new Error(data.error || 'Tetikleme başarısız oldu');
+};
+
 // --- Notifications (Instant) ---
 
 // Updated to match Android App expectation: title, body, url, image

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-    getAiAnalystReports, getAiAnalystReport, markAiAnalystReportRead,
+    getAiAnalystReports, getAiAnalystReport, markAiAnalystReportRead, triggerAiAnalystReport,
     type AiAnalystReport, type AiAnalystSection,
 } from '../services/firebase';
 
@@ -106,6 +106,8 @@ const AiAnalystReports: React.FC<AiAnalystReportsProps> = ({ initialReportId, on
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [selected, setSelected] = useState<AiAnalystReport | null>(null);
+    const [isTriggering, setIsTriggering] = useState(false);
+    const [triggerMessage, setTriggerMessage] = useState<string | null>(null);
 
     const fetchReports = useCallback(async () => {
         setIsLoading(true);
@@ -138,6 +140,20 @@ const AiAnalystReports: React.FC<AiAnalystReportsProps> = ({ initialReportId, on
         })();
     }, [initialReportId, onInitialReportConsumed]);
 
+    const handleTrigger = async (mode: 'daily' | 'weekly') => {
+        if (isTriggering) return;
+        setIsTriggering(true);
+        setTriggerMessage(null);
+        try {
+            await triggerAiAnalystReport(mode);
+            setTriggerMessage('Rapor oluşturma başlatıldı — birkaç dakika içinde bildirim gelecek.');
+        } catch (e: any) {
+            setTriggerMessage(e?.message || 'Tetikleme başarısız oldu.');
+        } finally {
+            setIsTriggering(false);
+        }
+    };
+
     const openReport = async (report: AiAnalystReport) => {
         setSelected(report);
         if (!report.read) {
@@ -163,13 +179,33 @@ const AiAnalystReports: React.FC<AiAnalystReportsProps> = ({ initialReportId, on
                         Günde 2 kez (14:00 / 22:00) ve haftalık — sorun tespiti + öncelikli öneriler.
                     </p>
                 </div>
-                <button
-                    onClick={fetchReports}
-                    className="text-sm text-gray-400 hover:text-white px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors shrink-0"
-                >
-                    ↻ Yenile
-                </button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                        onClick={() => handleTrigger('daily')}
+                        disabled={isTriggering}
+                        className="flex items-center gap-1.5 text-sm text-purple-300 bg-purple-900/30 hover:bg-purple-900/50 border border-purple-700/40 px-3 py-2 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                        {isTriggering ? (
+                            <span className="w-3.5 h-3.5 border-2 border-purple-300/30 border-t-purple-300 rounded-full animate-spin" />
+                        ) : (
+                            <span>⚡</span>
+                        )}
+                        Şimdi Analiz Et
+                    </button>
+                    <button
+                        onClick={fetchReports}
+                        className="text-sm text-gray-400 hover:text-white px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors"
+                    >
+                        ↻
+                    </button>
+                </div>
             </div>
+
+            {triggerMessage && (
+                <div className="mb-4 text-xs bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-300">
+                    {triggerMessage}
+                </div>
+            )}
 
             {isLoading && (
                 <div className="text-center py-16">
