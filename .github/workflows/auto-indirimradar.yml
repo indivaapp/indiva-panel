@@ -31,6 +31,14 @@ jobs:
       - name: Install dependencies
         run: npm ci --include=dev
 
+      - name: Cache Processed IDs
+        uses: actions/cache@v4
+        with:
+          path: data/processed_indirimradar_ids.json
+          key: indirimradar-ids-v1-${{ github.run_number }}
+          restore-keys: |
+            indirimradar-ids-v1-
+
       - name: Run Auto-IndirimRadar Pipeline
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

@@ -235,12 +235,41 @@ async function main() {
     }
 
     // ── 3. Cache & DB filtreleme ─────────────────────────────────────────────
-    const withIds = withDiscount.map(p => ({ ...p, _docId: `indirimradar_${p.raw.id}` }));
-    const existingInDb = await filterExistingIds(db, withIds.map(p => p._docId));
-    if (existingInDb.size > 0) console.log(`   ⏭️  ${existingInDb.size} ürün Firebase'de zaten var`);
+    // QUOTA SAVING (auto-onual.js'deki kanıtlanmış desenle aynı): API her
+    // taramada "son güncellenen" ürünleri döndürüyor — ardışık ~5-10 dk'lık
+    // taramalar arasında büyük örtüşme var. Önce yerel diskteki cache'e
+    // bakılır (Firestore okuması YOK), sadece cache'te olmayanlar için
+    // Firestore'a sorulur. Bu, filterExistingIds'in her turda ~50 okuma
+    // yapmasını (günde binlerce gereksiz okuma) neredeyse sıfıra indirir.
+    const CACHE_DIR = path.join(ROOT_DIR, 'data');
+    const CACHE_FILE = path.join(CACHE_DIR, 'processed_indirimradar_ids.json');
+    if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
 
-    const finalList = withIds.filter(p => !existingInDb.has(p._docId));
+    let idCache = { ids: {}, lastUpdate: new Date().toISOString() };
+    if (fs.existsSync(CACHE_FILE)) {
+        try {
+            idCache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+            const cacheAgeDays = (new Date() - new Date(idCache.lastUpdate)) / (1000 * 60 * 60 * 24);
+            if (cacheAgeDays > 7) idCache = { ids: {}, lastUpdate: new Date().toISOString() };
+        } catch (e) { console.error('Cache okuma hatası:', e.message); }
+    }
+
+    const withIds = withDiscount.map(p => ({ ...p, _docId: `indirimradar_${p.raw.id}` }));
+    const uncachedIds = withIds.filter(p => !idCache.ids[p._docId]);
+    const skippedLocal = withIds.length - uncachedIds.length;
+    if (skippedLocal > 0) console.log(`   ⏭️  ${skippedLocal} ürün yerel cache'den dolayı elendi (Firestore okunmadı)`);
+
+    const existingInDb = await filterExistingIds(db, uncachedIds.map(p => p._docId));
+    if (existingInDb.size > 0) {
+        console.log(`   ⏭️  ${existingInDb.size} ürün Firebase'de zaten var, cache'e alınıyor`);
+        existingInDb.forEach(id => { idCache.ids[id] = true; });
+    }
+
+    const finalList = uncachedIds.filter(p => !existingInDb.has(p._docId));
     console.log(`   🆕 İşlenecek net yeni ürün: ${finalList.length}\n`);
+
+    idCache.lastUpdate = new Date().toISOString();
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(idCache, null, 2));
 
     if (finalList.length === 0) {
         console.log('✅ Yeni ürün yok. Pipeline tamamlandı.');
@@ -332,6 +361,7 @@ async function main() {
             };
 
             await db.collection('discounts').doc(item._docId).set(discountData);
+            idCache.ids[item._docId] = true;
             console.log(`   🔥 Kaydedildi ✅ (${item._docId}): ${title.substring(0, 50)} | ${item.oldPrice} TL -> ${item.newPrice} TL (%${item.discountPct})`);
 
             await maybeNotifyHighScoreDeal(db, getMessaging(), {
@@ -365,6 +395,9 @@ async function main() {
             await sleep(spacingMs);
         }
     }
+
+    idCache.lastUpdate = new Date().toISOString();
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(idCache, null, 2));
 
     console.log('\n═══════════════════════════════════════════');
     console.log('📊 INDIRIMRADAR PIPELINE TAMAMLANDI');
