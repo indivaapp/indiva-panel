@@ -40,6 +40,11 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    // @capacitor/push-notifications bu bağımlılığı kendi modülünde 'implementation'
+    // kapsamıyla tanımlıyor (node_modules/@capacitor/push-notifications/android/build.gradle),
+    // yani buraya (app modülü) transitif olarak geçmiyor — MainActivity.java'daki
+    // doğrudan FirebaseMessaging.getInstance() kullanımı için burada da eklenmesi gerekiyor.
+    implementation "com.google.firebase:firebase-messaging:24.1.0"
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
