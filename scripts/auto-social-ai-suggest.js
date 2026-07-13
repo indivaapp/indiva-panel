@@ -136,7 +136,7 @@ ve üç index birbirinden FARKLI olmalı:
     }
 
     const data = await response.json();
-    await trackOpenRouterUsage(db, data);
+    await trackOpenRouterUsage(db, data, 'auto-social-ai-suggest');
     const text = data?.choices?.[0]?.message?.content || '';
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('AI JSON döndürmedi');

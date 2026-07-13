@@ -158,6 +158,8 @@ const AiCostSection: React.FC = () => {
     const [rate, setRate] = useState<number>(FALLBACK_USD_TRY);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [showBreakdown, setShowBreakdown] = useState(false);
+    const [breakdownPeriod, setBreakdownPeriod] = useState<'today' | 'month'>('today');
 
     const load = async () => {
         setLoading(true);
@@ -219,13 +221,84 @@ const AiCostSection: React.FC = () => {
                 {error ? (
                     <p className="text-red-400 text-[11px] leading-relaxed">⚠️ {error}</p>
                 ) : (
-                    <p className="text-gray-500 text-[11px] leading-relaxed">
-                        price-checker, auto-onual/akakçe, kalite kapısı ve sosyal medya AI'ının toplamıdır.
-                        OpenRouter çağrıları gerçek maliyeti, doğrudan Gemini çağrıları token bazlı tahmini
-                        maliyeti kullanır. Kur: 1$ ≈ ₺{rate.toFixed(2)}.
-                    </p>
+                    <>
+                        <p className="text-gray-500 text-[11px] leading-relaxed">
+                            price-checker, auto-onual/akakçe, kalite kapısı ve sosyal medya AI'ının toplamıdır.
+                            OpenRouter çağrıları gerçek maliyeti, doğrudan Gemini çağrıları token bazlı tahmini
+                            maliyeti kullanır. Kur: 1$ ≈ ₺{rate.toFixed(2)}.
+                        </p>
+                        <button
+                            onClick={() => setShowBreakdown(v => !v)}
+                            className="text-purple-300 text-xs font-semibold hover:text-purple-200 transition-colors"
+                        >
+                            {showBreakdown ? '▾' : '▸'} Kaynak bazında dökümü {showBreakdown ? 'gizle' : 'göster'}
+                        </button>
+                        {showBreakdown && (
+                            <div className="pt-1">
+                                <div className="flex gap-1.5 mb-2">
+                                    {(['today', 'month'] as const).map(p => (
+                                        <button
+                                            key={p}
+                                            onClick={() => setBreakdownPeriod(p)}
+                                            className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors ${
+                                                breakdownPeriod === p
+                                                    ? 'bg-purple-600 text-white'
+                                                    : 'bg-gray-900/60 text-gray-400 hover:text-gray-200'
+                                            }`}
+                                        >
+                                            {p === 'today' ? 'Bugün' : 'Bu Ay'}
+                                        </button>
+                                    ))}
+                                </div>
+                                <SourceBreakdownList
+                                    bySource={(breakdownPeriod === 'today' ? today : month)?.bySource}
+                                    fmtUsd={fmtUsd}
+                                    fmtTry={fmtTry}
+                                />
+                            </div>
+                        )}
+                    </>
                 )}
             </div>
+        </div>
+    );
+};
+
+const SourceBreakdownList: React.FC<{
+    bySource?: Record<string, { calls: number; costUsd: number }>;
+    fmtUsd: (n?: number) => string;
+    fmtTry: (n?: number) => string;
+}> = ({ bySource, fmtUsd, fmtTry }) => {
+    const safeBySource: Record<string, { calls: number; costUsd: number }> = bySource ?? {};
+    const entries = Object.entries(safeBySource).sort((a, b) => (b[1]?.costUsd || 0) - (a[1]?.costUsd || 0));
+
+    if (entries.length === 0) {
+        return <p className="text-gray-500 text-xs">Bu dönem için kırılım verisi yok.</p>;
+    }
+
+    const maxCost = Math.max(...entries.map(([, v]) => v?.costUsd || 0), 0.0001);
+
+    return (
+        <div className="space-y-1.5">
+            {entries.map(([source, v]) => (
+                <div key={source} className="bg-gray-900/60 border border-gray-700/60 rounded-lg px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-gray-300 text-xs font-mono truncate">{source}</span>
+                        <span className="text-purple-200 text-xs font-semibold shrink-0">
+                            {fmtUsd(v?.costUsd)} <span className="text-gray-500">({fmtTry(v?.costUsd)})</span>
+                        </span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1.5">
+                        <div className="flex-1 h-1 bg-gray-800 rounded-full overflow-hidden">
+                            <div
+                                className="h-full bg-purple-500/70 rounded-full"
+                                style={{ width: `${Math.max(4, ((v?.costUsd || 0) / maxCost) * 100)}%` }}
+                            />
+                        </div>
+                        <span className="text-gray-500 text-[10px] shrink-0">{v?.calls ?? 0} çağrı</span>
+                    </div>
+                </div>
+            ))}
         </div>
     );
 };

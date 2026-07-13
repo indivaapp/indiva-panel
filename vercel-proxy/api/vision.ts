@@ -95,7 +95,7 @@ SADECE JSON yaz, başka hiçbir şey ekleme:
         }
 
         const data = await response.json();
-        await trackOpenRouterUsage(data);
+        await trackOpenRouterUsage(data, 'vision');
         const text: string = data.choices?.[0]?.message?.content || '';
 
         if (!text) {
@@ -196,7 +196,7 @@ async function fallbackModel(
     }
 
     const data = await response.json();
-    await trackOpenRouterUsage(data);
+    await trackOpenRouterUsage(data, 'vision:fallback-model');
     const text: string = data.choices?.[0]?.message?.content || '';
     const jsonMatch = text.match(/\{[\s\S]*?\}/);
     if (!jsonMatch) {

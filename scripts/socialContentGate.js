@@ -16,7 +16,7 @@ import { trackGeminiUsage } from './aiUsageTracker.js';
 
 const QUEUE_THRESHOLD = 9;
 
-async function generateCaption(apiKey, deal, db) {
+async function generateCaption(apiKey, deal, db, source) {
     const { title, newPrice, oldPrice, category, storeName } = deal;
     const discountPct = oldPrice > 0 && newPrice > 0
         ? Math.round(((oldPrice - newPrice) / oldPrice) * 100)
@@ -54,7 +54,7 @@ KURALLAR:
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
             config: { temperature: 0.7 },
         });
-        await trackGeminiUsage(db, response, 'gemini-2.5-flash');
+        await trackGeminiUsage(db, response, 'gemini-2.5-flash', source);
         const text = (response.text || '').trim();
         if (text) return text;
     } catch (err) {
@@ -68,7 +68,7 @@ KURALLAR:
  * @param {string} apiKey Gemini API key (opsiyonel — yoksa şablon caption kullanılır)
  * @param {{discountId, title, imageUrl, category, storeName, score, newPrice, oldPrice}} deal
  */
-export async function maybeQueueSocialContent(db, apiKey, deal) {
+export async function maybeQueueSocialContent(db, apiKey, deal, source = 'social-content-gate') {
     if (process.env.SOCIAL_CONTENT_ENABLED === 'false') {
         return { queued: false, reason: 'SOCIAL_CONTENT_ENABLED=false' };
     }
@@ -76,7 +76,7 @@ export async function maybeQueueSocialContent(db, apiKey, deal) {
     if (!(score >= QUEUE_THRESHOLD)) return { queued: false, reason: 'eşik altı' };
 
     try {
-        const caption = await generateCaption(apiKey, { title, newPrice, oldPrice, category, storeName }, db);
+        const caption = await generateCaption(apiKey, { title, newPrice, oldPrice, category, storeName }, db, source);
         await db.collection('social_content_queue').add({
             discountId, title, imageUrl, category: category || '', storeName: storeName || '',
             newPrice, oldPrice, score, caption,

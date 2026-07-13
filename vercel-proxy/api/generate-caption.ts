@@ -96,7 +96,7 @@ KURALLAR:
         }
 
         const aiData = await aiRes.json();
-        await trackOpenRouterUsage(aiData);
+        await trackOpenRouterUsage(aiData, 'generate-caption');
         const text = (aiData.choices?.[0]?.message?.content || '').trim();
         if (!text) {
             return res.status(200).json({ success: true, caption: fallbackCaption(title, np, op, store), source: 'fallback' });

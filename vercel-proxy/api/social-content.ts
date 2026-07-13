@@ -114,7 +114,7 @@ ve üç index birbirinden FARKLI olmalı:
         }
 
         const data = await response.json();
-        await trackOpenRouterUsage(data);
+        await trackOpenRouterUsage(data, 'social-content');
         const text = data?.choices?.[0]?.message?.content || '';
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (!jsonMatch) {

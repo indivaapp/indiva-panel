@@ -352,7 +352,7 @@ async function main() {
                 score: verdict.score,
                 newPrice: item.newPrice,
                 oldPrice: item.oldPrice,
-            }).catch(() => {});
+            }, 'auto-indirimradar:social-caption').catch(() => {});
 
             successCount++;
         } catch (err) {

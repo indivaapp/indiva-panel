@@ -227,7 +227,7 @@ SADECE aşağıdaki JSON formatında döndür, başka hiçbir şey yazma:
         }
 
         const aiData = await aiRes.json();
-        await trackGeminiUsage(aiData, 'gemini-2.5-flash');
+        await trackGeminiUsage(aiData, 'gemini-2.5-flash', 'ai-scrape');
         const rawText = aiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
         const jsonMatch = rawText.match(/\{[\s\S]*\}/);
         if (!jsonMatch) {

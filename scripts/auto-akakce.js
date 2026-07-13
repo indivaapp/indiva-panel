@@ -180,7 +180,7 @@ Format: [{"title":"Samsung Galaxy S25","newPrice":35000,"oldPrice":42000,"discou
                 temperature: 0.1,
             },
         });
-        await trackGeminiUsage(db, response, MODEL_URL_CONTEXT);
+        await trackGeminiUsage(db, response, MODEL_URL_CONTEXT, 'auto-akakce:url-context-list');
         const text = extractText(response);
         console.log(`   📝 Yanıt (ilk 800): ${text.substring(0, 800)}`);
         const match = text.match(/\[[\s\S]*?\]/);
@@ -217,7 +217,7 @@ Format: [{"title":"Samsung TV","newPrice":15000,"oldPrice":20000,"discountPercen
             contents: [{ role: 'user', parts: [{ text: searchPrompt }] }],
             config: { tools: [{ googleSearch: {} }], temperature: 0.1 },
         });
-        await trackGeminiUsage(db, response, MODEL_URL_CONTEXT);
+        await trackGeminiUsage(db, response, MODEL_URL_CONTEXT, 'auto-akakce:google-search-list');
         const text = extractText(response);
         console.log(`   📝 Yanıt (ilk 800): ${text.substring(0, 800)}`);
         const match = text.match(/\[[\s\S]*?\]/);
@@ -254,7 +254,7 @@ async function enrichProductDetails(apiKey, productTitle, akakceProductUrl, db) 
                 contents: [{ role: 'user', parts: [{ text: `Search Google for: akakce.com "${productTitle}"\n\nFind the specific akakce.com product page URL. Return ONLY the URL (e.g. https://www.akakce.com/kategori/urun,12345678.html), nothing else.` }] }],
                 config: { tools: [{ googleSearch: {} }], temperature: 0 },
             });
-            await trackGeminiUsage(db, searchResp, MODEL_URL_CONTEXT);
+            await trackGeminiUsage(db, searchResp, MODEL_URL_CONTEXT, 'auto-akakce:find-product-url');
             const searchText = searchResp.text || '';
             const urlMatch = searchText.match(/https:\/\/www\.akakce\.com\/[^\s"'<>\n]+\.html/);
             if (urlMatch) {
@@ -304,7 +304,7 @@ Rules:
                 contents: [{ role: 'user', parts: [{ text: detailPrompt }] }],
                 config: { tools: [{ urlContext: {} }], temperature: 0 },
             });
-            await trackGeminiUsage(db, detailResp, MODEL_URL_CONTEXT);
+            await trackGeminiUsage(db, detailResp, MODEL_URL_CONTEXT, 'auto-akakce:enrich-details');
             const text = detailResp.text || '';
             console.log(`   🔎 Detay yanıtı: ${text.substring(0, 200)}`);
             const match = text.match(/\{[\s\S]*?\}/);
@@ -341,7 +341,7 @@ Kategori seçenekleri: Teknoloji, Giyim, Kozmetik, Ev, Market, Bebek, Sağlık, 
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
             config: { temperature: 0.2 },
         });
-        await trackGeminiUsage(db, response, MODEL_DESCRIPTION);
+        await trackGeminiUsage(db, response, MODEL_DESCRIPTION, 'auto-akakce:ai-description');
         const text = response.text || '';
         const match = text.match(/\{[\s\S]*\}/);
         const data = JSON.parse((match ? match[0] : text).trim());

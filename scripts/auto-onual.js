@@ -240,7 +240,7 @@ async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, me
                 temperature: 0.2
             }
         });
-        await trackGeminiUsage(db, response, MODEL);
+        await trackGeminiUsage(db, response, MODEL, 'auto-onual:ai-sentiment');
 
         const text = response.text || '';
         const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -447,7 +447,7 @@ SADECE JSON array döndür, kesinlikle başka metin yok. Maks 20 ürün.
             }],
             config: { tools: [{ urlContext: {} }], temperature: 0 },
         });
-        await trackGeminiUsage(db, response, 'gemini-2.5-flash');
+        await trackGeminiUsage(db, response, 'gemini-2.5-flash', 'auto-onual:cloudflare-bypass');
 
         const text = response.text ||
             (response.candidates?.[0]?.content?.parts || []).filter(p => p.text).map(p => p.text).join('');
@@ -849,7 +849,7 @@ async function main() {
             category: detectCategory(p.details.title || p.product.title),
             link: p.storeLink,
         }));
-        const gateResults = await runQualityGate(gateCandidates, { apiKey: qualityGateKey, threshold: 6, db });
+        const gateResults = await runQualityGate(gateCandidates, { apiKey: qualityGateKey, threshold: 6, db, source: 'auto-onual:quality-gate' });
         const gateMap = new Map(gateResults.map(r => [r.id, r]));
 
         console.log(`\n🛡️  Kalite kapısı: ${gateResults.filter(r => r.publish).length}/${gateResults.length} onaylandı\n`);
@@ -928,7 +928,7 @@ async function main() {
                     score: verdict.score,
                     newPrice,
                     oldPrice,
-                }).catch(() => {});
+                }, 'auto-onual:social-caption').catch(() => {});
 
                 idCache.ids[docId] = true;
                 successCount++;

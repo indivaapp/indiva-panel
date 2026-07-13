@@ -134,7 +134,7 @@ export async function checkExistingLinks(db, normalizedLinks) {
  * Adayları TEK Gemini isteğinde toplu puanla (1-10). Token tasarrufu için
  * her aday için ayrı istek ATILMAZ.
  */
-export async function scoreDealsBatch(apiKey, items, db) {
+export async function scoreDealsBatch(apiKey, items, db, source = 'quality-gate') {
     if (!apiKey || items.length === 0) {
         return items.map(it => ({ id: it.id, score: DEFAULT_SCORE_ON_SKIP, reason: 'AI atlandı (anahtar yok), varsayılan geç' }));
     }
@@ -178,7 +178,7 @@ SADECE JSON array döndür, her id için sırayla:
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
             config: { temperature: 0.2 },
         });
-        await trackGeminiUsage(db, response, 'gemini-2.5-flash');
+        await trackGeminiUsage(db, response, 'gemini-2.5-flash', source);
         const text = response.text ||
             (response.candidates?.[0]?.content?.parts || []).filter(p => p.text).map(p => p.text).join('');
         const match = text.match(/\[[\s\S]*\]/);
@@ -216,7 +216,7 @@ SADECE JSON array döndür, her id için sırayla:
  * @returns {Promise<Array<{id, publish: boolean, score?, reason, normalizedLink?: string}>>}
  */
 export async function runQualityGate(candidates, options = {}) {
-    const { apiKey, threshold = DEFAULT_THRESHOLD, db } = options;
+    const { apiKey, threshold = DEFAULT_THRESHOLD, db, source = 'quality-gate' } = options;
     const results = [];
     const survivors = [];
 
@@ -251,7 +251,7 @@ export async function runQualityGate(candidates, options = {}) {
 
     if (afterDedup.length === 0) return results;
 
-    const scores = await scoreDealsBatch(apiKey, afterDedup, db);
+    const scores = await scoreDealsBatch(apiKey, afterDedup, db, source);
     afterDedup.forEach(c => {
         const s = scores.find(x => x.id === c.id) || { score: DEFAULT_SCORE_ON_SKIP, reason: 'skor bulunamadı' };
         results.push({

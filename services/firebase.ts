@@ -541,14 +541,18 @@ export const getPendingSocialContentCount = async (): Promise<number> => {
 // scripts/*.js, functions/index.js ve vercel-proxy/api/*.ts her AI çağrısından
 // sonra 'aiUsage/daily_YYYY-MM-DD' ve 'aiUsage/monthly_YYYY-MM' dokümanlarını
 // increment ile günceller. Burada sadece 2 doküman okunur.
-export interface AiUsageStats {
+export interface AiUsageSourceStats {
     calls: number;
     inputTokens: number;
     outputTokens: number;
     costUsd: number;
 }
 
-const emptyAiUsage: AiUsageStats = { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+export interface AiUsageStats extends AiUsageSourceStats {
+    bySource: Record<string, AiUsageSourceStats>;
+}
+
+const emptyAiUsage: AiUsageStats = { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, bySource: {} };
 
 export const getAiUsageStats = async (): Promise<{ today: AiUsageStats; month: AiUsageStats }> => {
     const now = new Date();
@@ -561,13 +565,23 @@ export const getAiUsageStats = async (): Promise<{ today: AiUsageStats; month: A
     ]);
 
     const toStats = (d: typeof dailySnap): AiUsageStats => {
-        if (!d.exists()) return { ...emptyAiUsage };
+        if (!d.exists()) return { ...emptyAiUsage, bySource: {} };
         const data = d.data() as any;
+        const bySource: Record<string, AiUsageSourceStats> = {};
+        for (const [key, val] of Object.entries<any>(data.bySource || {})) {
+            bySource[key] = {
+                calls: val?.calls || 0,
+                inputTokens: val?.inputTokens || 0,
+                outputTokens: val?.outputTokens || 0,
+                costUsd: val?.costUsd || 0,
+            };
+        }
         return {
             calls: data.calls || 0,
             inputTokens: data.inputTokens || 0,
             outputTokens: data.outputTokens || 0,
             costUsd: data.costUsd || 0,
+            bySource,
         };
     };
 

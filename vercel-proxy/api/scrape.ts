@@ -517,7 +517,7 @@ async function openrouterPriceFallback(html: string): Promise<{ newPrice: number
         if (!res.ok) return { newPrice: 0, oldPrice: 0 };
 
         const data = await res.json();
-        await trackOpenRouterUsage(data);
+        await trackOpenRouterUsage(data, 'scrape:openrouter-price-fallback');
         const text = data.choices?.[0]?.message?.content || '';
         const result = parseAIPriceResponse(text);
         if (result.newPrice > 0) {
@@ -615,7 +615,7 @@ async function searchPriceViaPerplexity(productUrl: string): Promise<{
         }
 
         const data = await res.json();
-        await trackOpenRouterUsage(data);
+        await trackOpenRouterUsage(data, 'scrape:perplexity-price-search');
         const text = data.choices?.[0]?.message?.content || '';
         console.log(`Perplexity yanıtı: ${text.substring(0, 300)}`);
 

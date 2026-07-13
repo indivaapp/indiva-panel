@@ -27,17 +27,26 @@ function getDb() {
     return getFirestore();
 }
 
-async function writeUsage(calls: number, inputTokens: number, outputTokens: number, costUsd: number) {
+function safeFieldKey(source: string) {
+    return String(source || 'unknown').replace(/[.$#[\]/]/g, '_').slice(0, 60);
+}
+
+async function writeUsage(calls: number, inputTokens: number, outputTokens: number, costUsd: number, source: string) {
     const db = getDb();
     const now = new Date();
     const dayId = now.toISOString().slice(0, 10);
     const monthId = now.toISOString().slice(0, 7);
+    const sourceKey = safeFieldKey(source);
     const fields = {
         calls: FieldValue.increment(calls),
         inputTokens: FieldValue.increment(inputTokens),
         outputTokens: FieldValue.increment(outputTokens),
         costUsd: FieldValue.increment(costUsd),
         updatedAt: FieldValue.serverTimestamp(),
+        [`bySource.${sourceKey}.calls`]: FieldValue.increment(calls),
+        [`bySource.${sourceKey}.inputTokens`]: FieldValue.increment(inputTokens),
+        [`bySource.${sourceKey}.outputTokens`]: FieldValue.increment(outputTokens),
+        [`bySource.${sourceKey}.costUsd`]: FieldValue.increment(costUsd),
     };
     await Promise.all([
         db.collection('aiUsage').doc(`daily_${dayId}`).set(fields, { merge: true }),
@@ -46,7 +55,7 @@ async function writeUsage(calls: number, inputTokens: number, outputTokens: numb
 }
 
 /** Ham Gemini REST yanıtındaki `usageMetadata` alanını okur. */
-export async function trackGeminiUsage(geminiResponseJson: any, model: string) {
+export async function trackGeminiUsage(geminiResponseJson: any, model: string, source: string = 'unknown') {
     try {
         const usage = geminiResponseJson?.usageMetadata;
         if (!usage) return;
@@ -54,18 +63,18 @@ export async function trackGeminiUsage(geminiResponseJson: any, model: string) {
         const outputTokens = usage.candidatesTokenCount || 0;
         const price = GEMINI_PRICING_PER_1M_USD[model] || DEFAULT_GEMINI_PRICING;
         const costUsd = (inputTokens / 1e6) * price.input + (outputTokens / 1e6) * price.output;
-        await writeUsage(1, inputTokens, outputTokens, costUsd);
+        await writeUsage(1, inputTokens, outputTokens, costUsd, source);
     } catch { /* takip hatası ana akışı bozmasın */ }
 }
 
 /** OpenRouter yanıtındaki `usage` alanını okur (mümkünse gerçek `usage.cost`). */
-export async function trackOpenRouterUsage(openRouterResponseJson: any) {
+export async function trackOpenRouterUsage(openRouterResponseJson: any, source: string = 'unknown') {
     try {
         const usage = openRouterResponseJson?.usage;
         if (!usage) return;
         const inputTokens = usage.prompt_tokens || 0;
         const outputTokens = usage.completion_tokens || 0;
         const costUsd = typeof usage.cost === 'number' ? usage.cost : 0;
-        await writeUsage(1, inputTokens, outputTokens, costUsd);
+        await writeUsage(1, inputTokens, outputTokens, costUsd, source);
     } catch { /* takip hatası ana akışı bozmasın */ }
 }

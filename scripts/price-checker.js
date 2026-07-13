@@ -230,7 +230,7 @@ YALNIZCA JSON: {"currentPrice":0,"inStock":true,"expired":false,"confidence":0,"
         if (!response.ok) return { decision: 'unknown', reason: `Gemini HTTP ${response.status}` };
 
         const data = await response.json();
-        await trackGeminiUsage(db, data, 'gemini-2.5-flash');
+        await trackGeminiUsage(db, data, 'gemini-2.5-flash', 'price-checker:liveness-check');
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (!jsonMatch) return { decision: 'unknown', reason: 'AI JSON döndürmedi' };
