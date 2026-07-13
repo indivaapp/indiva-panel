@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-13 (google-services.json eklendi, push bildirimleri aktif)
+# manuel tetikleme: 2026-07-13-2 (firebase-messaging gradle bağımlılığı düzeltmesi)
 
 on:
   workflow_dispatch:
