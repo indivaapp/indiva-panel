@@ -10,7 +10,7 @@
  */
 
 import { FieldValue } from 'firebase-admin/firestore';
-import { trackOpenRouterUsage } from './aiUsageTracker.js';
+import { trackOpenRouterUsage, isDailyBudgetExceeded } from './aiUsageTracker.js';
 import { sendAdminNotification, sendAdminAlert } from './alertService.js';
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
@@ -240,6 +240,7 @@ async function callDeepSeek(db, prompt) {
 
 export async function runAnalyst(db, mode) {
     if (!OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY tanımlı değil.');
+    if (await isDailyBudgetExceeded(db)) throw new Error('Günlük AI bütçe tavanı aşıldı — rapor bu çalıştırmada atlandı.');
 
     const now = new Date();
     const periodMs = mode === 'daily' ? 12 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;

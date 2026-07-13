@@ -19,7 +19,7 @@ import { sendAdminAlert } from './alertService.js';
 import { runQualityGate } from './qualityGate.js';
 import { maybeNotifyHighScoreDeal } from './notifyGate.js';
 import { maybeQueueSocialContent } from './socialContentGate.js';
-import { trackGeminiUsage } from './aiUsageTracker.js';
+import { trackGeminiUsage, isDailyBudgetExceeded } from './aiUsageTracker.js';
 
 
 
@@ -701,8 +701,10 @@ async function main() {
     // Bağımlılıkları başlat
     console.log('🏗️  Servisler başlatılıyor...');
     const db = initFirebase();
-    const aiKey = getGeminiKey();
-    const qualityGateKey = getQualityGateKey();
+    const budgetExceeded = await isDailyBudgetExceeded(db);
+    if (budgetExceeded) console.warn('💰 Günlük AI bütçe tavanı aşıldı — bu çalıştırmada AI zenginleştirme atlanıyor.');
+    const aiKey = budgetExceeded ? null : getGeminiKey();
+    const qualityGateKey = budgetExceeded ? null : getQualityGateKey();
     if (aiKey) {
         console.log('✅ Servisler hazır. (AI açıklama üretimi: AÇIK)');
     } else {

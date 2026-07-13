@@ -50,6 +50,29 @@ export async function trackOpenRouterUsage(db, openRouterResponseJson) {
     } catch { /* takip hatası ana akışı bozmasın */ }
 }
 
+// ─── Günlük harcama tavanı ────────────────────────────────────────────────
+// Kendi kendini zincirleyen pipeline'lar (auto-onual, auto-indirimradar) bir
+// hata sonrası bile 5-10 dk'da bir tekrar tetiklenir; bir hata AI çağrısından
+// SONRA oluşuyorsa (örn. Firestore yazma hatası) her tekrarda aynı ürünler
+// için AI'ya tekrar tekrar ücret ödenip sonuç yine kaybolabilir. Bu fonksiyon
+// gün içindeki toplam AI maliyetini (TL'ye çevirerek) kontrol eder; tavan
+// aşılmışsa çağıran script AI anahtarını `null` sayıp mevcut keyword tabanlı
+// fallback'e düşer (kod değişikliği gerekmez, sadece anahtar null geçilir).
+const USD_TRY_RATE = Number(process.env.USD_TRY_RATE) || 40;
+const DAILY_AI_BUDGET_TRY = Number(process.env.DAILY_AI_BUDGET_TRY) || 10;
+
+export async function isDailyBudgetExceeded(db) {
+    try {
+        if (!db) return false;
+        const dayId = new Date().toISOString().slice(0, 10);
+        const snap = await db.collection('aiUsage').doc(`daily_${dayId}`).get();
+        const costUsd = snap.exists ? (snap.data().costUsd || 0) : 0;
+        return (costUsd * USD_TRY_RATE) >= DAILY_AI_BUDGET_TRY;
+    } catch {
+        return false; // takip hatası ana akışı durdurmasın
+    }
+}
+
 async function writeUsage(db, { calls, inputTokens, outputTokens, costUsd }) {
     const now = new Date();
     const dayId = now.toISOString().slice(0, 10);

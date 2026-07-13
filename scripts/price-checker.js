@@ -15,7 +15,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fetchWithFallback } from './scraperService.js';
 import { sendAdminAlert } from './alertService.js';
-import { trackGeminiUsage } from './aiUsageTracker.js';
+import { trackGeminiUsage, isDailyBudgetExceeded } from './aiUsageTracker.js';
 import { logPipelineRun } from './pipelineRunLogger.js';
 
 // ─── .env Yükle ─────────────────────────────────────────────────────────────
@@ -283,6 +283,16 @@ async function checkPrices() {
 
     const db = initFirebase();
     const runStartTime = Date.now();
+
+    // Günlük AI bütçe tavanı aşıldıysa bu process boyunca AI anahtarlarını
+    // kaldır — mevcut "hasKey" kontrolleri (kod değişikliği gerekmeden) AI'sız
+    // fallback yoluna düşer. Her run kendi Node process'inde çalıştığı için
+    // (GitHub Actions), bu değişiklik başka hiçbir şeyi etkilemez.
+    if (await isDailyBudgetExceeded(db)) {
+        console.warn('💰 Günlük AI bütçe tavanı aşıldı — bu çalıştırmada AI analizi atlanıyor.');
+        delete process.env.GEMINI_API_KEY;
+        delete process.env.VITE_GEMINI_API_KEY;
+    }
 
     try {
         // --- AŞAMA 1: 12 SAAT KURALI İLE OTOMATİK TEMİZLİK ---

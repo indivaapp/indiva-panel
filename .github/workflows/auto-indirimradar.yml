@@ -41,15 +41,25 @@ jobs:
       # pencereye yayarak yayinlama sirasinda) yapiliyor - burada sadece,
       # script cok erken cokerse (orn. Firebase baglanti hatasi) art arda
       # hizli tetiklenmeyi onlemek icin kucuk bir guvenlik payi birakiyoruz.
+      # Art arda 3 run da başarısız olduysa (sistemik bir hata var demektir)
+      # checkChainHealth.js zinciri durdurur ve uyarı gönderir — 30 dk'lık
+      # yedek schedule cron'u yine de devrede kalır (tam bir sessiz kalış olmaz).
       - name: Sonraki çalışmayı planla
         if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: |
           sleep 10
-          curl -s -o /dev/null -w "%{http_code}" -X POST \
-            -H "Authorization: token ${{ github.token }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/auto-indirimradar.yml/dispatches" \
-            -d '{"ref":"main"}' \
-          | grep -q "^204$" \
-            && echo "✅ Sonraki run planlandı." \
-            || echo "⚠️ Dispatch başarısız (yedek schedule devralır)."
+          if node scripts/checkChainHealth.js auto-indirimradar.yml 3; then
+            curl -s -o /dev/null -w "%{http_code}" -X POST \
+              -H "Authorization: token ${{ github.token }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/auto-indirimradar.yml/dispatches" \
+              -d '{"ref":"main"}' \
+            | grep -q "^204$" \
+              && echo "✅ Sonraki run planlandı." \
+              || echo "⚠️ Dispatch başarısız (yedek schedule devralır)."
+          else
+            echo "⛔ Zincir art arda hatalar nedeniyle durduruldu, sonraki run tetiklenmedi (30 dk'lık yedek schedule devam eder)."
+          fi

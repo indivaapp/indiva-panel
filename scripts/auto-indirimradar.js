@@ -27,6 +27,7 @@ import { sendAdminAlert } from './alertService.js';
 import { maybeNotifyHighScoreDeal } from './notifyGate.js';
 import { maybeQueueSocialContent } from './socialContentGate.js';
 import { logPipelineRun } from './pipelineRunLogger.js';
+import { isDailyBudgetExceeded } from './aiUsageTracker.js';
 
 // ─── .env Yükle (lokal geliştirme) ─────────────────────────────────────────
 const ROOT_DIR = process.cwd();
@@ -180,7 +181,9 @@ async function main() {
     console.log(`⏰ ${new Date().toLocaleString('tr-TR')}\n`);
 
     const db = initFirebase();
-    const qualityGateKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || null;
+    const budgetExceeded = await isDailyBudgetExceeded(db);
+    if (budgetExceeded) console.warn('💰 Günlük AI bütçe tavanı aşıldı — bu çalıştırmada AI zenginleştirme atlanıyor.');
+    const qualityGateKey = budgetExceeded ? null : (process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || null);
     if (!qualityGateKey) {
         console.warn('⚠️  GEMINI_API_KEY yok — kalite kapısı/bildirim/sosyal içerik puanlaması devre dışı (varsayılan 6/10 ile geçecek).');
     }
