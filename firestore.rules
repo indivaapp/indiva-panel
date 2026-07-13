@@ -1,127 +1,77 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// TASLAK — HENÜZ DEPLOY EDİLMEDİ.
-//
-// Bu dosya, kod tabanındaki kullanım örüntülerine bakılarak hazırlanmış bir
-// TASLAKTIR. Şu anda Firebase Console'da canlı olan kurallarla BİREBİR AYNI
-// olduğu garanti değildir — bu repo'da önceden hiç firestore.rules yoktu,
-// yani gerçek kurallar sadece Console'da tutuluyordu (versiyon kontrolü yoktu).
-//
-// DEPLOY ETMEDEN ÖNCE MUTLAKA:
-//   1. Firebase Console → Firestore Database → Rules sekmesindeki MEVCUT
-//      kuralları bu dosyayla karşılaştırın.
-//   2. Aşağıda "TODO(review)" işaretli bölümleri kontrol edin.
-//   3. Firebase Console'daki "Rules Playground" ile test edin.
-//   4. Sonra: firebase deploy --only firestore:rules
-//
-// Bu panelde admin girişi basit: Firebase Auth ile giriş yapan HERKES admin
-// kabul ediliyor, ayrı bir rol/claim sistemi yok (App.tsx: isAdmin = true her
-// zaman panel içi, gerçek kapı Login ekranı — request.auth != null admin demek).
-// ═══════════════════════════════════════════════════════════════════════════
-
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // Adminin e-postası — Auth'ta oluşturduğun hesabın e-postası
     function isAdmin() {
-      return request.auth != null;
+      return request.auth != null
+        && request.auth.token.email == 'indivaapp@gmail.com';
     }
 
-    // İndirimler/reklamlar (isAd:true de aynı koleksiyonda tutuluyor) — app'te
-    // herkese gösterilir, sadece panel admini yazabilir.
-    // NOT: scripts/*.js ve functions/index.js Admin SDK ile yazıyor — Admin SDK
-    // bu kuralları tamamen atlar, bu satırlar sadece tarayıcıdan (client SDK)
-    // yapılan yazmaları kapsar.
-    match /discounts/{discountId} {
+    // İlanlar: herkes okur; sadece admin ekler/siler/düzenler;
+    // herkes YALNIZCA oy sayacını +1 artırabilir
+    match /discounts/{id} {
+      allow read: if true;
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin()
+        || ( request.resource.data.diff(resource.data).affectedKeys().hasOnly(['activeVotes'])
+             && request.resource.data.activeVotes == resource.data.get('activeVotes', 0) + 1 )
+        || ( request.resource.data.diff(resource.data).affectedKeys().hasOnly(['expiredVotes'])
+             && request.resource.data.expiredVotes == resource.data.get('expiredVotes', 0) + 1 );
+    }
+
+    // Hikayeler & broşürler: herkes okur, sadece admin yazar
+    match /influencerStories/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+    match /circulars/{market}/brochures/{id} {
       allow read: if true;
       allow write: if isAdmin();
     }
 
-    // Kullanıcı ilan gönderim formu — herkes create edebilir, sadece admin
-    // okuyup onaylayabilir/reddedebilir.
+    // Kullanıcı form gönderimleri: app herkese açık OLUŞTURUR, sadece admin okur/yönetir
     match /pendingDiscounts/{id} {
       allow create: if true;
       allow read, update, delete: if isAdmin();
     }
-
-    // Reklam başvuru formu — herkes create edebilir, sadece admin yönetir.
     match /adRequests/{id} {
       allow create: if true;
       allow read, update, delete: if isAdmin();
     }
 
-    match /brochures/{id} {
-      allow read: if true;
-      allow write: if isAdmin();
+    // FCM token: app yazar, sadece admin okur
+    match /fcmTokens/{token} {
+      allow create, update: if true;
+      allow read, delete: if isAdmin();
     }
 
-    // circulars/{marketKey}/brochures alt koleksiyonu (paralel broşür yapısı)
-    match /circulars/{marketId} {
-      allow read: if true;
-      allow write: if isAdmin();
-      match /brochures/{id} {
-        allow read: if true;
-        allow write: if isAdmin();
-      }
-    }
+    // Bildirimler: sadece admin (Cloud Functions admin SDK ile zaten kuralları atlar)
+    match /notifications/{id}            { allow read, write: if isAdmin(); }
+    match /scheduled_notifications/{id}  { allow read, write: if isAdmin(); }
 
-    match /influencerStories/{id} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
+    // Trendyol scraper: kontrol belgeleri + onay bekleyen ürünler (yalnızca yönetici)
+    match /scraper_control/{id}  { allow read, write: if isAdmin(); }
+    match /trendyol_staging/{id} { allow read, write: if isAdmin(); }
 
-    // Push bildirim tetikleyici koleksiyonu — sadece admin panelden yazılır.
-    match /notifications/{id} {
-      allow read, write: if isAdmin();
-    }
-
-    match /scheduled_notifications/{id} {
-      allow read, write: if isAdmin();
-    }
-
-    // AI destekli sosyal medya içerik kuyruğu (qualityGate/socialContentGate
-    // scriptleri Admin SDK ile yazıyor) — panel sadece okur/onaylar.
-    match /social_content_queue/{id} {
-      allow read, write: if isAdmin();
-    }
-
-    // Otomatik kaynaklardan (trendyol vb.) gelen, henüz onaylanmamış ürünler.
-    match /trendyol_staging/{id} {
-      allow read, write: if isAdmin();
-    }
-
-    // Scraper/otomasyon aç-kapa kontrolleri — sadece admin panelden değişir.
-    match /scraper_control/{id} {
-      allow read, write: if isAdmin();
-    }
+    // Sosyal medya içerik kuyruğu: otomatik üretilen Instagram içerikleri (yalnızca yönetici)
+    match /social_content_queue/{id} { allow read, write: if isAdmin(); }
 
     // AI kullanım/maliyet istatistikleri — sadece Admin SDK (scripts, Cloud
     // Functions, Vercel proxy) yazar; o yazmalar zaten rules'u atlar.
     // Client SDK üzerinden asla yazılmamalı; panel sadece okur.
     match /aiUsage/{id} {
-      allow read: if isAdmin();
+      allow read: if request.auth != null;
       allow write: if false;
     }
 
     // Zamanlı sosyal medya AI önerisi (scripts/auto-social-ai-suggest.js Admin
     // SDK ile yazar, rules'u atlar). Panel sadece okur ve "opened" alanını
-    // işaretlemek için update eder (bkz. services/firebase.ts:markAiSocialSuggestionOpened).
+    // işaretlemek için update eder (services/firebase.ts:markAiSocialSuggestionOpened).
     match /social_content_ai_suggestions/{id} {
       allow read: if isAdmin();
       allow update: if isAdmin();
       allow create, delete: if false;
-    }
-
-    // TODO(review): Bu koleksiyona tüketici (mobil) uygulamasından nasıl
-    // yazıldığını bu repo'da tam doğrulayamadım. Deploy etmeden önce gerçek
-    // yazma akışını kontrol edip aşağıdaki kuralı daraltın.
-    match /fcmTokens/{id} {
-      allow read: if isAdmin();
-      allow write: if true; // TODO(review): muhtemelen create-only + kendi token'ı olmalı
-    }
-
-    // Listelenmeyen/eski koleksiyonlar için varsayılan: reddet (least privilege).
-    match /{document=**} {
-      allow read, write: if false;
     }
   }
 }
