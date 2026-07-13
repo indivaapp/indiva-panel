@@ -14,14 +14,26 @@ import {
     orderBy,
     where,
     limit,
+    startAfter,
     Timestamp,
     writeBatch,
-    getCountFromServer
+    getCountFromServer,
+    QueryDocumentSnapshot,
+    DocumentData
 } from 'firebase/firestore';
 import type { Discount, Brochure, Advertisement, PendingDiscount, AdRequest, ScheduledNotification, StagingProduct, SocialContentItem } from '../types';
 import { deleteFromImgbb } from './imgbb';
 
-const ALLOWED_AFFILIATE_STORES = ['Trendyol', 'Hepsiburada', 'Amazon', 'Pazarama'];
+// Gerçek affiliate link üretimi şu an sadece Trendyol/Hepsiburada için
+// çalışıyor (AffiliateLinkManager.tsx'in isSupportedStore'u ile birebir
+// aynı olmalı — storeName/brand alanı genelde doğru olsa da asıl gerçeği
+// link URL'i söylüyor, ikisi arasında sapma bu yüzden sayaç/liste
+// uyumsuzluğuna yol açıyordu).
+const isSupportedAffiliateLink = (deal: Pick<Discount, 'link' | 'originalStoreLink'>): boolean => {
+    const url = deal.originalStoreLink || deal.link || '';
+    return url.includes('trendyol.com') || url.includes('ty.gl')
+        || url.includes('hepsiburada.com') || url.includes('hb.biz');
+};
 
 // --- Discounts ---
 
@@ -38,6 +50,31 @@ export const getDiscounts = async (): Promise<Discount[]> => {
     const q = query(collection(db, 'discounts'), orderBy('createdAt', 'desc'));
     const querySnapshot = await getDocs(q);
     return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Discount));
+};
+
+export interface DiscountsPage {
+    discounts: Discount[];
+    lastDoc: QueryDocumentSnapshot<DocumentData> | null;
+    hasMore: boolean;
+}
+
+/**
+ * "Düzenle" sayfası için sayfalı (cursor tabanlı) sorgu — tüm koleksiyonu
+ * çekmek yerine her seferinde sadece pageSize kadar okur.
+ */
+export const getDiscountsPage = async (
+    pageSize: number = 6,
+    cursor: QueryDocumentSnapshot<DocumentData> | null = null
+): Promise<DiscountsPage> => {
+    const q = cursor
+        ? query(collection(db, 'discounts'), orderBy('createdAt', 'desc'), startAfter(cursor), limit(pageSize))
+        : query(collection(db, 'discounts'), orderBy('createdAt', 'desc'), limit(pageSize));
+    const querySnapshot = await getDocs(q);
+    return {
+        discounts: querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Discount)),
+        lastDoc: querySnapshot.docs.length > 0 ? querySnapshot.docs[querySnapshot.docs.length - 1] : null,
+        hasMore: querySnapshot.docs.length === pageSize,
+    };
 };
 
 export const updateDiscount = async (id: string, dataToUpdate: Partial<Omit<Discount, 'id'>>) => {
@@ -136,13 +173,8 @@ export const getDiscountsNeedingAffiliate = async (): Promise<Discount[]> => {
     const querySnapshot = await getDocs(q);
     const discounts = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Discount));
 
-    // Mağazaya göre filtrele
-    const filteredDiscounts = discounts.filter(deal =>
-        ALLOWED_AFFILIATE_STORES.some(store =>
-            (deal.storeName || '').toLowerCase() === store.toLowerCase() ||
-            (deal.brand || '').toLowerCase() === store.toLowerCase()
-        )
-    );
+    // Sadece gerçekten affiliate linki üretilebilen mağazalar (Trendyol/Hepsiburada)
+    const filteredDiscounts = discounts.filter(isSupportedAffiliateLink);
 
     // Client-side sıralama: en yeniden en eskiye
     return filteredDiscounts.sort((a, b) => {
@@ -161,15 +193,9 @@ export const getPendingAffiliateCount = async (): Promise<number> => {
         where('affiliateLinkUpdated', '==', false)
     );
     const querySnapshot = await getDocs(q);
-    const allowedLower = ALLOWED_AFFILIATE_STORES.map(s => s.toLowerCase());
     let count = 0;
     for (const docSnap of querySnapshot.docs) {
-        const data = docSnap.data();
-        const store = (data.storeName || '').toLowerCase();
-        const brand = (data.brand || '').toLowerCase();
-        if (allowedLower.includes(store) || allowedLower.includes(brand)) {
-            count++;
-        }
+        if (isSupportedAffiliateLink(docSnap.data() as Discount)) count++;
     }
     return count;
 };

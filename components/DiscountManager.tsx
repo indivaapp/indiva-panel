@@ -1,7 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { getDiscounts, deleteDiscount } from '../services/firebase';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { getDiscountsPage, deleteDiscount, DiscountsPage } from '../services/firebase';
 import type { Discount, ViewType } from '../types';
 import EditDiscountModal from './EditDiscountModal';
+import type { QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
+
+const PAGE_SIZE = 6;
 
 // ─── Kart Bileşeni ────────────────────────────────────────────────────────────
 interface CardProps {
@@ -142,20 +145,50 @@ const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmi
     const [discounts, setDiscounts] = useState<Discount[]>([]);
     const [filtered, setFiltered] = useState<Discount[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [hasMore, setHasMore] = useState(true);
     const [search, setSearch] = useState('');
     const [selectedDiscount, setSelectedDiscount] = useState<Discount | null>(null);
+    const lastDocRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
+    const sentinelRef = useRef<HTMLDivElement | null>(null);
 
-    const load = useCallback(async () => {
+    // İlk sayfayı yükle (baştan)
+    const loadFirstPage = useCallback(async () => {
         setIsLoading(true);
         try {
-            const data = await getDiscounts();
-            setDiscounts(data);
-            setFiltered(data);
+            const page: DiscountsPage = await getDiscountsPage(PAGE_SIZE, null);
+            lastDocRef.current = page.lastDoc;
+            setHasMore(page.hasMore);
+            setDiscounts(page.discounts);
         } catch {/* sessiz */}
         finally { setIsLoading(false); }
     }, []);
 
-    useEffect(() => { load(); }, [load]);
+    // Aşağı kaydırınca bir sonraki sayfayı ekle
+    const loadMore = useCallback(async () => {
+        if (isLoadingMore || !hasMore || !lastDocRef.current) return;
+        setIsLoadingMore(true);
+        try {
+            const page: DiscountsPage = await getDiscountsPage(PAGE_SIZE, lastDocRef.current);
+            lastDocRef.current = page.lastDoc;
+            setHasMore(page.hasMore);
+            setDiscounts(prev => [...prev, ...page.discounts]);
+        } catch {/* sessiz */}
+        finally { setIsLoadingMore(false); }
+    }, [isLoadingMore, hasMore]);
+
+    useEffect(() => { loadFirstPage(); }, [loadFirstPage]);
+
+    // Sayfanın sonuna yaklaşınca otomatik yeni sayfa yükle
+    useEffect(() => {
+        const el = sentinelRef.current;
+        if (!el) return;
+        const observer = new IntersectionObserver(entries => {
+            if (entries[0].isIntersecting) loadMore();
+        }, { rootMargin: '400px' });
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [loadMore]);
 
     useEffect(() => {
         const q = search.trim().toLowerCase();
@@ -167,7 +200,7 @@ const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmi
 
     const handleSaveSuccess = () => {
         setSelectedDiscount(null);
-        load();
+        loadFirstPage();
     };
 
     const handleDelete = async (d: Discount) => {
@@ -245,6 +278,17 @@ const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmi
                             />
                         );
                     })}
+                </div>
+            )}
+
+            {/* Sonsuz kaydırma tetikleyici + yükleniyor göstergesi */}
+            {!isLoading && !search.trim() && (
+                <div ref={sentinelRef} className="py-6 flex justify-center">
+                    {isLoadingMore ? (
+                        <div className="w-5 h-5 border-2 border-orange-500/30 border-t-orange-500 rounded-full animate-spin" />
+                    ) : !hasMore && discounts.length > 0 ? (
+                        <p className="text-xs text-gray-600">Tüm ilanlar yüklendi</p>
+                    ) : null}
                 </div>
             )}
 

@@ -15,6 +15,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore';
+import { logPipelineRun } from './pipelineRunLogger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.join(__dirname, '..');
@@ -230,34 +231,38 @@ async function cleanupOldBrochures(db, daysToKeep = 15) {
     let totalDeleted = 0;
 
     for (const market of MARKETS) {
-        const col = db.collection('circulars').doc(market.key).collection('brochures');
+        try {
+            const col = db.collection('circulars').doc(market.key).collection('brochures');
 
-        // publishDate varsa onu kullan; yoksa createdAt'e bak
-        const snapByPublish = await col.where('publishDate', '<', cutoffTs).get();
-        const snapByCreated = await col.where('createdAt', '<', cutoffTs).get();
+            // publishDate varsa onu kullan; yoksa createdAt'e bak
+            const snapByPublish = await col.where('publishDate', '<', cutoffTs).get();
+            const snapByCreated = await col.where('createdAt', '<', cutoffTs).get();
 
-        // İki sorgunun birleşimi (id bazında tekilleştir)
-        const docsMap = new Map();
-        [...snapByPublish.docs, ...snapByCreated.docs].forEach(d => docsMap.set(d.id, d));
+            // İki sorgunun birleşimi (id bazında tekilleştir)
+            const docsMap = new Map();
+            [...snapByPublish.docs, ...snapByCreated.docs].forEach(d => docsMap.set(d.id, d));
 
-        if (docsMap.size === 0) {
-            console.log(`  ${market.name}: silinecek eski afiş yok`);
-            continue;
-        }
-
-        let deleted = 0;
-        for (const doc of docsMap.values()) {
-            const { deleteUrl } = doc.data();
-            // ImgBB'ye yüklenmişse oradan da sil
-            if (deleteUrl) {
-                try { await fetch(deleteUrl); } catch {}
+            if (docsMap.size === 0) {
+                console.log(`  ${market.name}: silinecek eski afiş yok`);
+                continue;
             }
-            await doc.ref.delete();
-            deleted++;
-        }
 
-        totalDeleted += deleted;
-        console.log(`  ${market.name}: ${deleted} eski afiş silindi`);
+            let deleted = 0;
+            for (const doc of docsMap.values()) {
+                const { deleteUrl } = doc.data();
+                // ImgBB'ye yüklenmişse oradan da sil
+                if (deleteUrl) {
+                    try { await fetch(deleteUrl); } catch {}
+                }
+                await doc.ref.delete();
+                deleted++;
+            }
+
+            totalDeleted += deleted;
+            console.log(`  ${market.name}: ${deleted} eski afiş silindi`);
+        } catch (cleanupErr) {
+            console.error(`  ⚠️ ${market.name} temizliği başarısız: ${cleanupErr.message} — diğer marketlerle devam ediliyor.`);
+        }
     }
 
     return totalDeleted;
@@ -277,12 +282,15 @@ async function main() {
     console.log(`\n🚀 Aktüel Afiş Otomasyonu başlatıldı: ${new Date().toLocaleString('tr-TR')}`);
 
     const db = initFirebase();
+    const runStartTime = Date.now();
     let totalAdded = 0;
     let totalSkipped = 0;
+    let totalFailedMarkets = 0;
+    let totalFailedImages = 0;
 
     for (const market of MARKETS) {
         console.log(`\n━━━ ${market.name} ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-
+        try {
         const listHtml = await fetchHtml(market.listUrl);
         if (!listHtml) {
             console.log(`  ❌ Liste sayfası yüklenemedi, atlanıyor.`);
@@ -327,14 +335,22 @@ async function main() {
             let skipped = 0;
 
             for (const imageUrl of pageImages) {
-                const exists = await imageExists(db, market.key, imageUrl);
-                if (exists) {
-                    skipped++;
-                    continue;
+                // Tek bir görselde Firestore/ağ kaynaklı geçici bir hata olursa
+                // (önceden buraya try/catch yoktu) TÜM script çöküp workflow'u
+                // "failure" olarak işaretliyordu — artık sadece o görsel atlanıyor.
+                try {
+                    const exists = await imageExists(db, market.key, imageUrl);
+                    if (exists) {
+                        skipped++;
+                        continue;
+                    }
+                    await saveBrochure(db, market.key, market.name, imageUrl, title, date);
+                    added++;
+                    totalAdded++;
+                } catch (imgErr) {
+                    console.log(`     ⚠️  Görsel işlenemedi (${imgErr.message}): ${imageUrl.substring(0, 60)}`);
+                    totalFailedImages++;
                 }
-                await saveBrochure(db, market.key, market.name, imageUrl, title, date);
-                added++;
-                totalAdded++;
             }
 
             totalSkipped += skipped;
@@ -347,6 +363,10 @@ async function main() {
 
             await new Promise(r => setTimeout(r, 800)); // sunucuya nazik ol
         }
+        } catch (marketErr) {
+            console.error(`  💥 ${market.name} işlenirken hata: ${marketErr.message} — diğer marketlerle devam ediliyor.`);
+            totalFailedMarkets++;
+        }
     }
 
     console.log(`\n✨ Tamamlandı! ${totalAdded} yeni afiş eklendi, ${totalSkipped} tekrar atlandı.`);
@@ -356,10 +376,28 @@ async function main() {
     if (totalDeleted > 0) {
         console.log(`🗑️  Toplam ${totalDeleted} eski afiş silindi.`);
     }
+
+    await logPipelineRun(db, {
+        script: 'auto-brochures',
+        fetched: totalAdded + totalSkipped + totalFailedImages,
+        approved: totalAdded,
+        rejected: 0,
+        skipped: totalSkipped,
+        failed: totalFailedImages,
+        durationMs: Date.now() - runStartTime,
+        note: totalFailedMarkets > 0 ? `${totalFailedMarkets} market işlenemedi` : undefined,
+    });
 }
 
-main().catch(err => {
+main().catch(async err => {
     console.error(`\n💥 KRİTİK HATA: ${err.message}`);
     console.error(err.stack);
+    try {
+        const db = initFirebase();
+        await logPipelineRun(db, {
+            script: 'auto-brochures', fetched: 0, approved: 0, rejected: 0, skipped: 0, failed: 1,
+            note: `Kritik hata: ${err.message}`,
+        });
+    } catch { /* ignore */ }
     process.exit(1);
 });

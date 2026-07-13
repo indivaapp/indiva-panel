@@ -101,7 +101,11 @@ ve üç index birbirinden FARKLI olmalı:
                 temperature: 0.7,
                 usage: { include: true },
             }),
-            signal: AbortSignal.timeout(45000),
+            // Fonksiyonun toplam süre sınırı (vercel.json: 60sn) içinde kalacak
+            // şekilde mümkün olduğunca fazla pay bırakıyoruz — deepseek-v4-flash
+            // 50 ürünlük bu görevde bazen 45sn'yi aşabiliyor, önceki 45sn sınırı
+            // aralıklı "Zaman aşımı" hatalarına yol açıyordu.
+            signal: AbortSignal.timeout(55000),
         });
 
         if (!response.ok) {
