@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     getSocialContentQueue, markSocialContentPosted, getDiscounts, addManualSocialContent,
     getRecentDiscountsForSocialAi, suggestSocialContent, addSocialContentFromAiSuggestion,
+    getLatestAiSocialSuggestion, markAiSocialSuggestionOpened,
     type SocialContentPick,
 } from '../services/firebase';
 import { uploadImageFromUrl } from '../services/dealFinder';
@@ -1210,9 +1211,12 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
 
     // AI ile sosyal medya içerik önerisi — 3 FARKLI ürün, her biri kendi
     // görseli/fiyatı/linkiyle birlikte gösterilir (tek ürünün 3 varyasyonu değil).
+    // AiPickProduct: hem canlı "AI ile Öner" akışının (tam Discount) hem de
+    // zamanlı öneri kaydının (kısaltılmış ürün özeti) ortak alt kümesi.
+    type AiPickProduct = Pick<Discount, 'id' | 'title' | 'imageUrl' | 'link' | 'category' | 'brand' | 'oldPrice' | 'newPrice'>;
     const [aiLoading, setAiLoading] = useState(false);
     const [aiError, setAiError] = useState<string | null>(null);
-    const [aiPicks, setAiPicks] = useState<Array<{ pick: SocialContentPick; product: Discount }>>([]);
+    const [aiPicks, setAiPicks] = useState<Array<{ pick: SocialContentPick; product: AiPickProduct }>>([]);
     const [showAiModal, setShowAiModal] = useState(false);
     const [usingPickId, setUsingPickId] = useState<string | null>(null);
 
@@ -1230,6 +1234,28 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     }, []);
 
     useEffect(() => { fetchItems(); }, [fetchItems]);
+
+    // Zamanlı öneriyi kontrol et (scripts/auto-social-ai-suggest.js günde 3 kez
+    // yazıyor + admin'e push bildirimi gönderiyor). Sayfa açıldığında (bildirime
+    // tıklanınca veya elle gezinilince) taze ve henüz görülmemiş bir öneri varsa
+    // otomatik göster — AI çağrısı TEKRAR yapılmaz, hazır sonuç kullanılır.
+    useEffect(() => {
+        (async () => {
+            try {
+                const suggestion = await getLatestAiSocialSuggestion();
+                if (!suggestion || suggestion.opened) return;
+                const ageMin = (Date.now() - suggestion.createdAtMs) / 60000;
+                if (ageMin > 20) return; // 20dk'dan eski — artık güncel sayılmaz
+                const matched = suggestion.picks.map(p => ({ pick: p, product: p.product }));
+                if (matched.length === 0) return;
+                setAiPicks(matched);
+                setShowAiModal(true);
+                markAiSocialSuggestionOpened().catch(() => {});
+            } catch {
+                // sessiz — zamanlı öneri opsiyonel bir kolaylık, hata akışı bozmasın
+            }
+        })();
+    }, []);
 
     const handlePosted = (id: string) => {
         setItems(prev => prev.filter(i => i.id !== id));
@@ -1288,7 +1314,7 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         }
     };
 
-    const handleUseAiPick = async (item: { pick: SocialContentPick; product: Discount }) => {
+    const handleUseAiPick = async (item: { pick: SocialContentPick; product: AiPickProduct }) => {
         setUsingPickId(item.pick.productId);
         try {
             await addSocialContentFromAiSuggestion(item.product, item.pick);

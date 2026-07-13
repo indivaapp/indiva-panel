@@ -1,0 +1,33 @@
+name: Auto Social AI Suggest
+
+on:
+  # 12:57 / 16:57 / 20:57 TR (UTC+3, DST yok) = 09:57 / 13:57 / 17:57 UTC —
+  # admin'e gönderilen 13:00/17:00/21:00 bildirimlerinden 3 dakika önce, öneri
+  # hazır olsun diye.
+  schedule:
+    - cron: '57 9,13,17 * * *'
+  workflow_dispatch:
+
+jobs:
+  suggest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Run Social AI Suggest
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node scripts/auto-social-ai-suggest.js

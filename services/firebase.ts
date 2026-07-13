@@ -649,9 +649,11 @@ export const suggestSocialContent = async (discounts: Discount[]): Promise<Socia
 };
 
 /** AI önerisinden seçilen ürün+içerik doğrudan kuyruğa eklenir — generate-caption.ts'i
- *  tekrar çağırmaz, zaten üretilmiş caption'ı kullanır. */
+ *  tekrar çağırmaz, zaten üretilmiş caption'ı kullanır. Hem canlı "AI ile Öner"
+ *  akışındaki (tam Discount) hem de zamanlı öneri kaydındaki (kısaltılmış
+ *  ürün özeti) veriyle çalışsın diye sadece gerekli alanları kabul eder. */
 export const addSocialContentFromAiSuggestion = async (
-    discount: Discount,
+    discount: Pick<Discount, 'id' | 'title' | 'imageUrl' | 'category' | 'brand' | 'newPrice' | 'oldPrice'>,
     pick: SocialContentPick
 ): Promise<void> => {
     await addDoc(collection(db, 'social_content_queue'), {
@@ -670,6 +672,37 @@ export const addSocialContentFromAiSuggestion = async (
     });
 };
 
+// --- Zamanlı Sosyal Medya AI Önerisi (scripts/auto-social-ai-suggest.js) ---
+// Günde 3 kez (13:00/17:00/21:00 TR'den 3dk önce) sunucu tarafında üretilip
+// 'social_content_ai_suggestions/latest' dokümanına yazılır + admin'e push
+// bildirimi gönderilir. Panel açıldığında bu doküman okunur — AI çağrısı
+// tekrar yapılmaz, hazır sonuç gösterilir.
+
+export interface StoredSocialContentPick extends SocialContentPick {
+    product: {
+        id: string; title: string; imageUrl: string; link: string;
+        category: string; brand: string; oldPrice: number; newPrice: number;
+    };
+}
+
+export const getLatestAiSocialSuggestion = async (): Promise<{
+    picks: StoredSocialContentPick[];
+    createdAtMs: number;
+    opened: boolean;
+} | null> => {
+    const snap = await getDoc(doc(db, 'social_content_ai_suggestions', 'latest'));
+    if (!snap.exists()) return null;
+    const data = snap.data() as any;
+    return {
+        picks: data.picks || [],
+        createdAtMs: data.createdAt?.toMillis ? data.createdAt.toMillis() : 0,
+        opened: !!data.opened,
+    };
+};
+
+export const markAiSocialSuggestionOpened = async (): Promise<void> => {
+    await updateDoc(doc(db, 'social_content_ai_suggestions', 'latest'), { opened: true });
+};
 
 // --- Notifications (Instant) ---
 

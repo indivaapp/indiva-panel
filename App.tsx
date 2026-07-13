@@ -50,6 +50,7 @@ const ShareUrlTarget = lazy(() => import('./components/ShareUrlTarget'));
 
 import { watchUser } from './services/auth';
 import { getPendingAffiliateCount, getPendingAdRequestCount, getPendingDiscountCount, getPendingSocialContentCount } from './services/firebase';
+import { initializePushNotifications } from './services/pushNotificationService';
 
 const ViewLoadingFallback: React.FC = () => (
     <div className="flex items-center justify-center py-24">
@@ -137,6 +138,21 @@ const App: React.FC = () => {
             setAuthChecked(true);
         });
         return () => unsub();
+    }, []);
+
+    // Admin'e özel push bildirimleri (zamanlı AI önerisi, kritik hata uyarıları vb.)
+    useEffect(() => {
+        if (IS_SHARE_MODE) return;
+        initializePushNotifications().catch(() => {});
+    }, []);
+
+    // Push bildirime tıklanınca (services/pushNotificationService.ts dispatch eder)
+    // sosyal medya içeriği sayfasına yönlendir — sayfa kendi useEffect'inde hazır
+    // öneriyi Firestore'dan okuyup modalı otomatik açar.
+    useEffect(() => {
+        const onOpenSocialAiSuggestion = () => setActiveView('socialContent');
+        window.addEventListener('openSocialAiSuggestion', onOpenSocialAiSuggestion);
+        return () => window.removeEventListener('openSocialAiSuggestion', onOpenSocialAiSuggestion);
     }, []);
 
     // ── Service Worker kaydı + Share Target mesaj dinleyicisi ─────────────────

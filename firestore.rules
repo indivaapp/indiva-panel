@@ -102,6 +102,15 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Zamanlı sosyal medya AI önerisi (scripts/auto-social-ai-suggest.js Admin
+    // SDK ile yazar, rules'u atlar). Panel sadece okur ve "opened" alanını
+    // işaretlemek için update eder (bkz. services/firebase.ts:markAiSocialSuggestionOpened).
+    match /social_content_ai_suggestions/{id} {
+      allow read: if isAdmin();
+      allow update: if isAdmin();
+      allow create, delete: if false;
+    }
+
     // TODO(review): Bu koleksiyona tüketici (mobil) uygulamasından nasıl
     // yazıldığını bu repo'da tam doğrulayamadım. Deploy etmeden önce gerçek
     // yazma akışını kontrol edip aşağıdaki kuralı daraltın.

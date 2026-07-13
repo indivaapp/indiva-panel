@@ -15,6 +15,7 @@ import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 
 import com.getcapacitor.BridgeActivity;
+import com.google.firebase.messaging.FirebaseMessaging;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -32,6 +33,22 @@ public class MainActivity extends BridgeActivity {
         super.onCreate(savedInstanceState);
         getBridge().getWebView().addJavascriptInterface(new AndroidShareHandler(), "AndroidShareHandler");
         handleShareIntent(getIntent());
+        subscribeToAdminAlertsTopic();
+    }
+
+    /**
+     * Admin'e özel push bildirimleri için 'panel_admin_alerts' topic'ine abone
+     * ol (scripts/alertService.js bu topic'e gönderiyor). @capacitor/push-
+     * notifications topic aboneliği desteklemediği için native SDK ile
+     * yapılıyor. google-services.json yoksa Firebase hiç başlamaz, bu da
+     * sessizce (try/catch ile) hiçbir şey yapmadan geçer.
+     */
+    private void subscribeToAdminAlertsTopic() {
+        try {
+            FirebaseMessaging.getInstance().subscribeToTopic("panel_admin_alerts");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     @Override
