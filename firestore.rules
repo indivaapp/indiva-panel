@@ -73,5 +73,22 @@ service cloud.firestore {
       allow update: if isAdmin();
       allow create, delete: if false;
     }
+
+    // AI Analist raporları (scripts/auto-ai-analyst.js Admin SDK ile yazar,
+    // rules'u atlar). Panel sadece okur ve "read" alanını işaretlemek için
+    // update eder (services/firebase.ts:markAiAnalystReportRead).
+    match /ai_analyst_reports/{id} {
+      allow read: if isAdmin();
+      allow update: if isAdmin();
+      allow create, delete: if false;
+    }
+
+    // Pipeline çalışma özetleri (scripts/pipelineRunLogger.js Admin SDK ile
+    // yazar) — AI Analist'in kaynak sağlığı/kalite kapısı metriklerini
+    // hesaplamak için okuduğu ham veri. Sadece admin okur, client hiç yazamaz.
+    match /pipeline_runs/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
   }
 }

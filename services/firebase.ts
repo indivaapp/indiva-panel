@@ -704,6 +704,64 @@ export const markAiSocialSuggestionOpened = async (): Promise<void> => {
     await updateDoc(doc(db, 'social_content_ai_suggestions', 'latest'), { opened: true });
 };
 
+// --- AI Analist Raporları (scripts/auto-ai-analyst.js) ---
+// Günde 2 kez (14:00/22:00 TR) ve haftada 1 kez sunucu tarafında üretilen
+// detaylı analiz + öncelikli öneri raporları. Panel sadece okur.
+
+export interface AiAnalystSection {
+    severity: 'ok' | 'warning' | 'critical';
+    findings: string[];
+}
+
+export interface AiAnalystRecommendation {
+    priority: number;
+    title: string;
+    detail: string;
+}
+
+export interface AiAnalystReport {
+    id: string;
+    mode: 'daily' | 'weekly';
+    periodStart: string;
+    summary: string;
+    sections: {
+        teknik_saglik?: AiAnalystSection;
+        operasyon?: AiAnalystSection;
+        buyume?: AiAnalystSection;
+    };
+    recommendations: AiAnalystRecommendation[];
+    createdAtMs: number;
+    read: boolean;
+}
+
+const toAiAnalystReport = (id: string, data: any): AiAnalystReport => ({
+    id,
+    mode: data.mode || 'daily',
+    periodStart: data.periodStart || '',
+    summary: data.summary || '',
+    sections: data.sections || {},
+    recommendations: data.recommendations || [],
+    createdAtMs: data.createdAt?.toMillis ? data.createdAt.toMillis() : 0,
+    read: !!data.read,
+});
+
+export const getAiAnalystReport = async (id: string): Promise<AiAnalystReport | null> => {
+    const snap = await getDoc(doc(db, 'ai_analyst_reports', id));
+    if (!snap.exists()) return null;
+    return toAiAnalystReport(snap.id, snap.data());
+};
+
+/** Son N raporu getirir (varsayılan 20) — geçmiş rapor listesi için. */
+export const getAiAnalystReports = async (limitCount: number = 20): Promise<AiAnalystReport[]> => {
+    const q = query(collection(db, 'ai_analyst_reports'), orderBy('createdAt', 'desc'), limit(limitCount));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => toAiAnalystReport(d.id, d.data()));
+};
+
+export const markAiAnalystReportRead = async (id: string): Promise<void> => {
+    await updateDoc(doc(db, 'ai_analyst_reports', id), { read: true });
+};
+
 // --- Notifications (Instant) ---
 
 // Updated to match Android App expectation: title, body, url, image

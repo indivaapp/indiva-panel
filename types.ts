@@ -20,7 +20,8 @@ export type ViewType =
     | 'shareCapture'      // Ekran görüntüsü paylaşım overlay'i
     | 'addDiscount'       // Yeni indirim ekleme formu
     | 'stories'           // Story yönetimi
-    | 'socialContent';    // Otomatik sosyal medya içeriği kuyruğu
+    | 'socialContent'     // Otomatik sosyal medya içeriği kuyruğu
+    | 'aiAnalyst';        // AI Analist raporları (günlük/haftalık)
 
 // Using the actual Firestore Timestamp type for better integration
 export type FirestoreTimestamp = Timestamp;

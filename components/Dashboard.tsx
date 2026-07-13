@@ -377,6 +377,32 @@ const Dashboard: React.FC<DashboardProps> = ({ setActiveView, pendingAffiliateCo
                 </div>
             </button>
 
+            {/* AI Analist Raporları */}
+            <button
+                onClick={() => setActiveView('aiAnalyst')}
+                className="w-full relative overflow-hidden rounded-2xl border border-purple-500/20 text-left transition-all active:scale-[0.99]"
+                style={{
+                    background: 'linear-gradient(135deg, rgba(147,51,234,0.14) 0%, rgba(79,70,229,0.06) 100%)',
+                    boxShadow: '0 0 0 1px rgba(147,51,234,0.1), 0 4px 24px rgba(0,0,0,0.25)',
+                }}
+            >
+                <div className="absolute -right-4 -top-4 w-20 h-20 rounded-full bg-purple-500/10 blur-xl pointer-events-none" />
+                <div className="absolute -right-2 top-1/2 -translate-y-1/2 text-5xl opacity-10 pointer-events-none select-none">🧠</div>
+
+                <div className="relative px-4 py-4 flex items-center gap-4">
+                    <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-xl shadow-lg shadow-purple-900/30 shrink-0">
+                        🧠
+                    </div>
+                    <div className="flex-1">
+                        <p className="text-white font-bold text-sm">AI Analist Raporları</p>
+                        <p className="text-purple-300/70 text-xs mt-0.5">Günlük (14:00/22:00) ve haftalık sorun tespiti + öneriler</p>
+                    </div>
+                    <svg className="w-5 h-5 text-gray-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                </div>
+            </button>
+
             {/* AI Kullanım/Maliyet Takibi */}
             <AiCostSection />
         </div>

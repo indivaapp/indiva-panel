@@ -16,6 +16,7 @@ import * as path from 'path';
 import { fetchWithFallback } from './scraperService.js';
 import { sendAdminAlert } from './alertService.js';
 import { trackGeminiUsage } from './aiUsageTracker.js';
+import { logPipelineRun } from './pipelineRunLogger.js';
 
 // ─── .env Yükle ─────────────────────────────────────────────────────────────
 const ROOT_DIR = process.cwd();
@@ -281,6 +282,7 @@ async function checkPrices() {
     }
 
     const db = initFirebase();
+    const runStartTime = Date.now();
 
     try {
         // --- AŞAMA 1: 12 SAAT KURALI İLE OTOMATİK TEMİZLİK ---
@@ -482,10 +484,11 @@ async function checkPrices() {
         // 24-saat kuralıyla DEĞİL, fiyat/stok kontrolüyle pasife alınmış ilanları
         // yeniden doğrula; güvenle "aktif" çıkanları geri canlandır. Böylece olası
         // yanlış-pozitifler 1 saatlik gri+sayaç penceresi içinde kendiliğinden düzelir.
+        let reactivatable = [];
         try {
             const hasKey = !!(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY);
             const pendingSnap = await db.collection('discounts').where('status', '==', 'İndirim Bitti').get();
-            const reactivatable = pendingSnap.docs.filter(d => {
+            reactivatable = pendingSnap.docs.filter(d => {
                 const x = d.data();
                 if (!x.link) return false;
                 if (/24 saat/i.test(x.errorReason || '')) return false; // yaş kuralı → kurtarma yok
@@ -548,8 +551,23 @@ async function checkPrices() {
 
         console.log(`\n✨ Tarama tamamlandı. 10 dakika sonra tekrar çalışacak.`);
 
+        await logPipelineRun(db, {
+            script: 'price-checker',
+            fetched: activeDocs.length,
+            approved: activeDocs.length - autoExpiredCount,
+            rejected: autoExpiredCount,
+            skipped: 0,
+            failed: 0,
+            durationMs: Date.now() - runStartTime,
+            note: `AI kontrole alınan: ${adsToInspect.length}, kurtarılan: ${reactivatable.length}, kalıcı silinen: ${toDeleteSnapshot.size}`,
+        });
+
     } catch (err) {
         console.error(`💥 Kritik Hata: ${err.message}`);
+        await logPipelineRun(db, {
+            script: 'price-checker', fetched: 0, approved: 0, rejected: 0, skipped: 0, failed: 1,
+            durationMs: Date.now() - runStartTime, note: `Kritik hata: ${err.message}`,
+        }).catch(() => {});
         await sendAdminAlert('Kritik Sistem Hatası', `price-checker.js durdu: ${err.message}`);
     }
 }

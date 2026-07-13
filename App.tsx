@@ -45,6 +45,7 @@ const TrendyolScraper = lazy(() => import('./components/TrendyolScraper'));
 const AddDiscountForm = lazy(() => import('./components/AddDiscountForm'));
 const StoryManager = lazy(() => import('./components/StoryManager'));
 const SocialContentManager = lazy(() => import('./components/SocialContentManager'));
+const AiAnalystReports = lazy(() => import('./components/AiAnalystReports'));
 const ShareTarget = lazy(() => import('./components/ShareTarget'));
 const ShareUrlTarget = lazy(() => import('./components/ShareUrlTarget'));
 
@@ -92,6 +93,7 @@ const App: React.FC = () => {
     const [currentQueueIndex, setCurrentQueueIndex] = useState(0);
     const [sharedLink, setSharedLink]           = useState<string | null>(null);
     const [sharedStoryData, setSharedStoryData] = useState<SharedStoryData | null>(null);
+    const [pendingAiAnalystReportId, setPendingAiAnalystReportId] = useState<string | null>(null);
 
     // ── PWA Share Target overlay ───────────────────────────────────────────────
     // ?share=1 parametresi Service Worker'dan yönlendirme sonucu gelir
@@ -153,6 +155,17 @@ const App: React.FC = () => {
         const onOpenSocialAiSuggestion = () => setActiveView('socialContent');
         window.addEventListener('openSocialAiSuggestion', onOpenSocialAiSuggestion);
         return () => window.removeEventListener('openSocialAiSuggestion', onOpenSocialAiSuggestion);
+    }, []);
+
+    // AI Analist raporu bildirimine tıklanınca ilgili rapora doğrudan git.
+    useEffect(() => {
+        const onOpenAiAnalystReport = (e: Event) => {
+            const reportId = (e as CustomEvent).detail?.reportId as string | undefined;
+            if (reportId) setPendingAiAnalystReportId(reportId);
+            setActiveView('aiAnalyst');
+        };
+        window.addEventListener('openAiAnalystReport', onOpenAiAnalystReport);
+        return () => window.removeEventListener('openAiAnalystReport', onOpenAiAnalystReport);
     }, []);
 
     // ── Service Worker kaydı + Share Target mesaj dinleyicisi ─────────────────
@@ -364,6 +377,13 @@ const App: React.FC = () => {
                 );
             case 'socialContent':
                 return <SocialContentManager isAdmin={isAdmin} />;
+            case 'aiAnalyst':
+                return (
+                    <AiAnalystReports
+                        initialReportId={pendingAiAnalystReportId}
+                        onInitialReportConsumed={() => setPendingAiAnalystReportId(null)}
+                    />
+                );
             default:
                 return <DiscountManager setActiveView={setActiveView} isAdmin={isAdmin} />;
         }

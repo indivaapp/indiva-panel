@@ -26,6 +26,7 @@ import * as path from 'path';
 import { sendAdminAlert } from './alertService.js';
 import { maybeNotifyHighScoreDeal } from './notifyGate.js';
 import { maybeQueueSocialContent } from './socialContentGate.js';
+import { logPipelineRun } from './pipelineRunLogger.js';
 
 // ─── .env Yükle (lokal geliştirme) ─────────────────────────────────────────
 const ROOT_DIR = process.cwd();
@@ -190,6 +191,10 @@ async function main() {
         rawProducts = await fetchIndirimRadarProducts();
     } catch (err) {
         console.error(`❌ IndirimRadar fetch hatası: ${err.message}`);
+        await logPipelineRun(db, {
+            script: 'auto-indirimradar', fetched: 0, approved: 0, rejected: 0, skipped: 0, failed: 0,
+            durationMs: Date.now() - mainStartTime, note: `Fetch hatası: ${err.message}`,
+        });
         await sendAdminAlert('IndirimRadar Pipeline Hatası', `Fetch başarısız: ${err.message}`);
         process.exit(1);
     }
@@ -217,6 +222,11 @@ async function main() {
 
     if (withDiscount.length === 0) {
         console.log('✅ Bu turda ürün yok. Pipeline tamamlandı.');
+        await logPipelineRun(db, {
+            script: 'auto-indirimradar', fetched: rawProducts.length, approved: 0, rejected: 0, skipped: 0, failed: 0,
+            durationMs: Date.now() - mainStartTime,
+            note: rawProducts.length === 0 ? 'Kaynaktan 0 ürün geldi — API kırılmış olabilir' : 'Filtre sonrası uygun ürün yok',
+        });
         await padToTargetWindow(mainStartTime);
         return;
     }
@@ -231,6 +241,10 @@ async function main() {
 
     if (finalList.length === 0) {
         console.log('✅ Yeni ürün yok. Pipeline tamamlandı.');
+        await logPipelineRun(db, {
+            script: 'auto-indirimradar', fetched: rawProducts.length, approved: 0, rejected: 0, skipped: 0, failed: 0,
+            durationMs: Date.now() - mainStartTime, note: 'Tüm ürünler zaten mevcuttu (normal)',
+        });
         await padToTargetWindow(mainStartTime);
         return;
     }
@@ -357,6 +371,16 @@ async function main() {
     console.log(`   ❌ Başarısız: ${failCount}`);
     console.log(`   ⏰ ${new Date().toLocaleString('tr-TR')}`);
     console.log('═══════════════════════════════════════════\n');
+
+    await logPipelineRun(db, {
+        script: 'auto-indirimradar',
+        fetched: rawProducts.length,
+        approved: successCount,
+        rejected: rejectedCount,
+        skipped: skippedNoImage,
+        failed: failCount,
+        durationMs: Date.now() - mainStartTime,
+    });
 }
 
 main().catch(async (err) => {

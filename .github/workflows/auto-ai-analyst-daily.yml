@@ -1,0 +1,32 @@
+name: AI Analyst - Daily
+
+on:
+  # 14:00 ve 22:00 TR (UTC+3, DST yok) = 11:00 ve 19:00 UTC
+  schedule:
+    - cron: '0 11,19 * * *'
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Run AI Analyst (daily)
+        env:
+          ANALYST_MODE: daily
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node scripts/auto-ai-analyst.js

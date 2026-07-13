@@ -13,8 +13,10 @@ import { PushNotifications } from '@capacitor/push-notifications';
  * şey yapmadan çıkar — build.gradle zaten google-services.json yoksa
  * google-services eklentisini uygulamıyor, yani native FCM hiç başlamaz.
  *
- * Bildirime tıklanınca 'openSocialAiSuggestion' custom event'i dispatch
- * edilir — App.tsx bunu dinleyip 'socialContent' sayfasına yönlendirir.
+ * Bildirime tıklanınca türüne göre custom event dispatch edilir — App.tsx
+ * bunları dinleyip ilgili sayfaya yönlendirir:
+ *  - type: 'SOCIAL_AI_READY'    → 'openSocialAiSuggestion'
+ *  - type: 'AI_ANALYST_REPORT'  → 'openAiAnalystReport' (detail: {reportId})
  */
 export const initializePushNotifications = async (): Promise<void> => {
     if (Capacitor.getPlatform() === 'web') {
@@ -54,6 +56,8 @@ export const initializePushNotifications = async (): Promise<void> => {
         const data = (action.notification?.data || {}) as Record<string, string>;
         if (data.type === 'SOCIAL_AI_READY') {
             window.dispatchEvent(new CustomEvent('openSocialAiSuggestion'));
+        } else if (data.type === 'AI_ANALYST_REPORT') {
+            window.dispatchEvent(new CustomEvent('openAiAnalystReport', { detail: { reportId: data.reportId } }));
         }
     });
 
