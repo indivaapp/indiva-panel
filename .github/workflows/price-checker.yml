@@ -1,13 +1,11 @@
 name: Auto Price Checker
 
+# TAMAMEN DURDURULDU (2026-07-13) — kullanıcı kararı: indirimradar kaynaklı
+# verilerin doğruluğu yeterli, ayrı bir fiyat doğrulama taramasına gerek
+# görülmedi. schedule kapalı — hiçbir otomatik run yok, Firestore okuma
+# tüketmiyor. İleride tekrar gerekirse cron satırını geri açın.
 on:
-  schedule:
-    # Türkiye 08:00–02:00 penceresi (UTC+3, DST yok) → UTC 05:00–22:59.
-    # Her 3 saatte bir (Gemini maliyeti icin dusuruldu — bkz. extractPriceContext
-    # ve ONE_HOUR_MS degisiklikleri, price-checker.js). 05,08,11,14,17,20 UTC'de
-    # calisir (gunde 6 kez).
-    # Kesin sınır (02:00'da durma) script içinde de korunur.
-    - cron: '0 5-22/3 * * *'
+  # - cron: '0 5-22/3 * * *'
   workflow_dispatch:
 
 jobs:
