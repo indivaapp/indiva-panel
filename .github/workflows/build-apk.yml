@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-12-3 (sosyal medya AI: timeout/JSON parse düzeltmesi)
+# manuel tetikleme: 2026-07-13 (google-services.json eklendi, push bildirimleri aktif)
 
 on:
   workflow_dispatch:
