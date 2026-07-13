@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-13-2 (firebase-messaging gradle bağımlılığı düzeltmesi)
+# manuel tetikleme: 2026-07-13-3 (AI Analist asistanı eklendi)
 
 on:
   workflow_dispatch:
