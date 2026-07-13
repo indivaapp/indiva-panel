@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-13-6 (AI maliyet kaynak kırılımı + bütçe tavanı)
+# manuel tetikleme: 2026-07-13-7 (Trendyol Scraper ekranı okuma optimizasyonu)
 
 on:
   workflow_dispatch:
