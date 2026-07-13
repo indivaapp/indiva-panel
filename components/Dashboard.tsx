@@ -157,6 +157,7 @@ const AiCostSection: React.FC = () => {
     const [month, setMonth] = useState<AiUsageStats | null>(null);
     const [rate, setRate] = useState<number>(FALLBACK_USD_TRY);
     const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     const load = async () => {
         setLoading(true);
@@ -164,7 +165,14 @@ const AiCostSection: React.FC = () => {
             const stats = await getAiUsageStats();
             setToday(stats.today);
             setMonth(stats.month);
-        } catch { /* sessiz */ } finally { setLoading(false); }
+            setError(null);
+        } catch (e: any) {
+            // permission-denied: Firestore kuralları 'aiUsage' koleksiyonuna henüz
+            // izin vermiyor olabilir — sessizce yutmak yerine görünür yap.
+            setError(e?.code === 'permission-denied'
+                ? 'Erişim reddedildi — firestore.rules\'a aiUsage kuralı eklenip deploy edilmeli.'
+                : (e?.message || 'Veriler yüklenemedi.'));
+        } finally { setLoading(false); }
     };
 
     useEffect(() => {
@@ -208,11 +216,15 @@ const AiCostSection: React.FC = () => {
                         <p className="text-gray-400 text-xs mt-1">bu ay · {month?.calls ?? 0} çağrı</p>
                     </div>
                 </div>
-                <p className="text-gray-500 text-[11px] leading-relaxed">
-                    price-checker, auto-onual/akakçe, kalite kapısı ve sosyal medya AI'ının toplamıdır.
-                    OpenRouter çağrıları gerçek maliyeti, doğrudan Gemini çağrıları token bazlı tahmini
-                    maliyeti kullanır. Kur: 1$ ≈ ₺{rate.toFixed(2)}.
-                </p>
+                {error ? (
+                    <p className="text-red-400 text-[11px] leading-relaxed">⚠️ {error}</p>
+                ) : (
+                    <p className="text-gray-500 text-[11px] leading-relaxed">
+                        price-checker, auto-onual/akakçe, kalite kapısı ve sosyal medya AI'ının toplamıdır.
+                        OpenRouter çağrıları gerçek maliyeti, doğrudan Gemini çağrıları token bazlı tahmini
+                        maliyeti kullanır. Kur: 1$ ≈ ₺{rate.toFixed(2)}.
+                    </p>
+                )}
             </div>
         </div>
     );
