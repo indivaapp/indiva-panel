@@ -1,5 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
+// redeploy: GITHUB_ACTIONS_TOKEN env değişkeni eklendi (2026-07-13)
+
 /**
  * AI Analist raporunu panelden elle tetikleme — GitHub'ın workflow_dispatch
  * API'sini çağırarak .github/workflows/auto-ai-analyst-daily.yml'yi anında
