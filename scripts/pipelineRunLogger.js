@@ -25,8 +25,16 @@ import { FieldValue } from 'firebase-admin/firestore';
  */
 export async function logPipelineRun(db, stats) {
     try {
+        // Firestore Admin SDK, "undefined" değerli alanları reddediyor (tüm yazmayı
+        // başarısız kılıyor) — çağıranlardan biri bir alanı şartlı olarak undefined
+        // bırakırsa (örn. `note: hataVar ? '...' : undefined`), TÜM kayıt sessizce
+        // kaybolur. Bunu tek bir yerde, kalıcı olarak eleyip her çağıranı korumak
+        // için undefined alanları burada filtreliyoruz.
+        const clean = Object.fromEntries(
+            Object.entries(stats).filter(([, v]) => v !== undefined)
+        );
         await db.collection('pipeline_runs').add({
-            ...stats,
+            ...clean,
             createdAt: FieldValue.serverTimestamp(),
         });
     } catch (e) {

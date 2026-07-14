@@ -385,7 +385,7 @@ async function main() {
         skipped: totalSkipped,
         failed: totalFailedImages,
         durationMs: Date.now() - runStartTime,
-        note: totalFailedMarkets > 0 ? `${totalFailedMarkets} market işlenemedi` : undefined,
+        note: totalFailedMarkets > 0 ? `${totalFailedMarkets} market işlenemedi` : '',
     });
 }
 
