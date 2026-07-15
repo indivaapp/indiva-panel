@@ -3,8 +3,8 @@ import type { StagingProduct } from '../types';
 import {
   getStagingProducts, publishStagingProducts, clearStagingProducts,
   getScraperStatus, getScraperConfig, toggleScraperSource, triggerScrape,
-  requestResolvePublish, getPublishStatus, getAutoPublishedProducts,
-  type ScraperStatusDoc, type ScraperConfigDoc, type AutoPublishedProduct,
+  requestResolvePublish, getPublishStatus, getAutoPublishedProducts, getAutoPublishQueue,
+  type ScraperStatusDoc, type ScraperConfigDoc, type AutoPublishedProduct, type AutoPublishQueueStatus,
 } from '../services/firebase';
 
 const TrendyolScraper: React.FC = () => {
@@ -19,6 +19,8 @@ const TrendyolScraper: React.FC = () => {
   const [stagingProducts, setStagingProducts] = useState<StagingProduct[]>([]);
   const [autoPublished, setAutoPublished] = useState<AutoPublishedProduct[]>([]);
   const [loadingAutoPublished, setLoadingAutoPublished] = useState(false);
+  const [queue, setQueue] = useState<AutoPublishQueueStatus | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [loadingStaging, setLoadingStaging] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -73,12 +75,52 @@ const TrendyolScraper: React.FC = () => {
     return () => clearInterval(t);
   }, [loadAutoPublished]);
 
-  // Tarama bitince staging'i otomatik yenile
+  // ── Yayın kuyruğu (AI'nın seçtiği, henüz yayınlanmamış ürünler) ──────────
+  // Yeni bir tarama kuyruğu güncellediğinde (scrape.js:enqueueAutoPublish) bu
+  // poll bir sonraki turda yeni ids/nextAt/intervalMs'i yakalar — ekran
+  // "otomatik sıfırlanmış" gibi görünür, ayrıca bir işlem gerekmez.
+  const loadQueue = useCallback(async () => {
+    try { setQueue(await getAutoPublishQueue()); } catch {}
+  }, []);
+
+  useEffect(() => {
+    loadQueue();
+    // Kuyrukta bekleyen varsa daha sık (sayaç anlamlı kalsın), boşken seyrek.
+    const t = setInterval(loadQueue, queue?.ids?.length ? 10000 : 30000);
+    return () => clearInterval(t);
+  }, [loadQueue, queue?.ids?.length]);
+
+  // Sayaçların her saniye ilerlemesi için — Firestore okuması YOK, sadece
+  // ekrandaki "kaç saniye kaldı" hesabını tazeler.
+  useEffect(() => {
+    if (!queue?.ids?.length) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [queue?.ids?.length]);
+
+  // Kuyruktaki ID'lere karşılık gelen ürün bilgisini (zaten yüklü olan)
+  // stagingProducts içinden bulur — ekstra Firestore okuması gerekmez.
+  const queuedProducts = (queue?.ids || [])
+    .map((id, index) => {
+      const product = stagingProducts.find(p => p.id === id);
+      if (!product) return null;
+      const publishAt = (queue!.nextAt || Date.now()) + index * (queue!.intervalMs || 0);
+      return { product, publishAt, index };
+    })
+    .filter((x): x is { product: StagingProduct; publishAt: number; index: number } => x !== null);
+
+  // Tarama bitince staging'i ve kuyruğu otomatik yenile (AI değerlendirmesi
+  // taramadan hemen sonra çalışıp kuyruğu güncellediği için birkaç saniye
+  // payla — hemen çekmek yerine kısa bir gecikmeyle tekrar dener).
   const prevRunning = useRef(false);
   useEffect(() => {
-    if (prevRunning.current && !status?.isRunning) loadStaging();
+    if (prevRunning.current && !status?.isRunning) {
+      loadStaging();
+      loadQueue();
+      setTimeout(loadQueue, 8000);
+    }
     prevRunning.current = status?.isRunning ?? false;
-  }, [status?.isRunning, loadStaging]);
+  }, [status?.isRunning, loadStaging, loadQueue]);
 
   // ── Tetikle (seçili site) ─────────────────────────────────────────────────
   const handleScrape = async () => {
@@ -340,6 +382,79 @@ const TrendyolScraper: React.FC = () => {
           : `🛒 ${siteLabel}'dan Veri Çek`}
       </button>
       {triggerMessage && <p className="text-center text-sm text-blue-400">{triggerMessage}</p>}
+
+      {/* ── Yayın Kuyruğunda (AI seçti, henüz yayınlanmadı — sayaçlı) ───────── */}
+      <div className="border-t border-gray-700 pt-6">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <div>
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <span>⏳</span> Sırada (Yayınlanacak)
+              {queuedProducts.length > 0 && (
+                <span className="bg-blue-600 text-white text-sm font-bold px-2 py-0.5 rounded-full">{queuedProducts.length}</span>
+              )}
+            </h2>
+            <p className="text-sm text-gray-400">AI'nın son taramada seçtiği, teker teker yayınlanmayı bekleyen ürünler</p>
+          </div>
+          <button onClick={loadQueue} className="text-xs px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">↻ Yenile</button>
+        </div>
+
+        {queuedProducts.length === 0 ? (
+          <div className="text-center py-10 text-gray-500">
+            <p className="text-4xl mb-3">📭</p>
+            <p>Sırada bekleyen ürün yok.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            {queuedProducts.map(({ product: p, publishAt }) => {
+              const discount = p.oldPrice > p.newPrice ? Math.round((1 - p.newPrice / p.oldPrice) * 100) : 0;
+              const remainingMs = Math.max(0, publishAt - now);
+              const remainingSec = Math.round(remainingMs / 1000);
+              const mm = Math.floor(remainingSec / 60);
+              const ss = remainingSec % 60;
+              const countdownLabel = remainingSec <= 0
+                ? 'şimdi'
+                : mm > 0 ? `${mm} dk ${ss} sn` : `${ss} sn`;
+              return (
+                <div key={p.id}
+                  className="relative bg-gray-800 rounded-xl overflow-hidden border-2 border-blue-600/30">
+
+                  {typeof p.qualityScore === 'number' && (
+                    <div className="absolute top-2 left-2 bg-green-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded z-10">
+                      ⭐ {p.qualityScore}/10
+                    </div>
+                  )}
+                  {discount > 0 && (
+                    <div className="absolute top-2 right-2 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded z-10">-%{discount}</div>
+                  )}
+
+                  <div className="bg-white aspect-square">
+                    <img src={p.imageUrl} alt={p.title} className="w-full h-full object-contain"
+                      onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                  </div>
+
+                  <div className="p-2">
+                    <p className="text-[11px] text-gray-400 truncate">{p.brand}</p>
+                    <p className="text-xs text-white line-clamp-2 leading-tight mt-0.5 min-h-[2rem]">{p.title}</p>
+                    <div className="mt-1.5">
+                      <span className="text-green-400 font-bold text-sm">{p.newPrice.toLocaleString('tr-TR')} TL</span>
+                      {p.oldPrice > p.newPrice && (
+                        <span className="text-gray-500 line-through text-[11px] ml-1.5">{p.oldPrice.toLocaleString('tr-TR')} TL</span>
+                      )}
+                    </div>
+                    <div className="mt-1.5 flex items-center gap-1 bg-blue-900/40 border border-blue-700/40 rounded-lg px-2 py-1">
+                      <span className="text-blue-300 text-[10px]">⏱</span>
+                      <span className="text-blue-200 text-[11px] font-semibold">{countdownLabel} sonra yayınlanacak</span>
+                    </div>
+                    {p.qualityReason && (
+                      <p className="text-[10px] text-gray-500 mt-1.5 line-clamp-2 italic">"{p.qualityReason}"</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* ── AI Tarafından Otomatik Yayınlananlar ────────────────────────────── */}
       <div className="border-t border-gray-700 pt-6">

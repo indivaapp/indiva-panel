@@ -982,6 +982,28 @@ export const getAutoPublishedProducts = async (limitCount = 30): Promise<AutoPub
         .slice(0, limitCount);
 };
 
+// Bilgisayardaki scraper'ın (scrape.js:enqueueAutoPublish) kalite kapısından
+// geçip henüz yayınlanmamış, sırada bekleyen ürünleri — her birinin tahmini
+// yayın zamanını hesaplamak için nextAt/intervalMs ile birlikte döner.
+export interface AutoPublishQueueStatus {
+    ids: string[];
+    nextAt: number;
+    intervalMs: number;
+    status: string;
+}
+
+export const getAutoPublishQueue = async (): Promise<AutoPublishQueueStatus | null> => {
+    const snap = await getDoc(doc(db, 'scraper_control', 'auto_publish_queue'));
+    if (!snap.exists()) return null;
+    const d = snap.data() as any;
+    return {
+        ids: Array.isArray(d.ids) ? d.ids : [],
+        nextAt: typeof d.nextAt === 'number' ? d.nextAt : 0,
+        intervalMs: typeof d.intervalMs === 'number' ? d.intervalMs : 0,
+        status: d.status || 'done',
+    };
+};
+
 export const clearStagingProducts = async (site?: string): Promise<void> => {
     const q = query(collection(db, 'trendyol_staging'), where('status', '==', 'pending'));
     const snap = await getDocs(q);

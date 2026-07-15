@@ -165,6 +165,12 @@ export interface StagingProduct {
     status: 'pending' | 'approved' | 'rejected';
     importedAt: FirestoreTimestamp;
     createdAt: FirestoreTimestamp;
+    // AI kalite kapısından geçtiyse dolar (scrape.js:autoPublishQualified) —
+    // yayın kuyruğunda beklerken bile staging dokümanına yazılır.
+    qualityScore?: number;
+    satisPotansiyeli?: number | null;
+    ilgiCekicilik?: number | null;
+    qualityReason?: string;
 }
 
 export interface ScraperSource {
