@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-15-2 (Sırada bölümü sadeleştirildi, onay bölümleri kaldırıldı)
+# manuel tetikleme: 2026-07-15-3 (güncel APK talebi)
 
 on:
   workflow_dispatch:
