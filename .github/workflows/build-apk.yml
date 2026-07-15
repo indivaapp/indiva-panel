@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-13-7 (Trendyol Scraper ekranı okuma optimizasyonu)
+# manuel tetikleme: 2026-07-15-1 (Sırada/Yayınlanacak sayaçlı bölüm)
 
 on:
   workflow_dispatch:
