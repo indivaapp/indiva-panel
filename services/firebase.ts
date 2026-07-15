@@ -910,78 +910,6 @@ export const getStagingProducts = async (): Promise<StagingProduct[]> => {
     return snap.docs.map(d => ({ id: d.id, ...d.data() } as StagingProduct));
 };
 
-export const publishStagingProducts = async (products: StagingProduct[]): Promise<number> => {
-    if (products.length === 0) return 0;
-    const CHUNK = 200; // her ürün 2 op: set + delete
-    let published = 0;
-
-    for (let i = 0; i < products.length; i += CHUNK) {
-        const batch = writeBatch(db);
-        const chunk = products.slice(i, i + CHUNK);
-        for (const p of chunk) {
-            const discountRef = doc(collection(db, 'discounts'));
-            batch.set(discountRef, {
-                title: p.title,
-                brand: p.brand,
-                category: p.category,
-                newPrice: p.newPrice,
-                oldPrice: p.oldPrice,
-                imageUrl: p.imageUrl,
-                link: p.link,
-                deleteUrl: '',
-                submittedBy: 'trendyol-scraper',
-                storeName: p.storeName,
-                originalSource: p.originalSource,
-                reviewCount: p.reviewCount || '',
-                affiliateLinkUpdated: false,
-                importedAt: p.importedAt,
-                createdAt: serverTimestamp(),
-                expiresAt: Timestamp.fromDate(new Date(Date.now() + 12 * 60 * 60 * 1000)),
-            });
-            batch.delete(doc(db, 'trendyol_staging', p.id));
-            published++;
-        }
-        await batch.commit();
-    }
-    return published;
-};
-
-// AI kalite kapısından geçip otomatik yayınlanan Trendyol/Cimri ürünleri.
-// Tek alan where + client-side sıralama (composite index gerektirmez).
-export interface AutoPublishedProduct {
-    id: string;
-    title: string;
-    brand?: string;
-    imageUrl: string;
-    link: string;
-    newPrice: number;
-    oldPrice: number;
-    site?: string;
-    storeName?: string;
-    qualityScore: number;
-    satisPotansiyeli?: number | null;
-    ilgiCekicilik?: number | null;
-    qualityReason?: string;
-    autoPublishedAt?: any;
-}
-
-export const getAutoPublishedProducts = async (limitCount = 30): Promise<AutoPublishedProduct[]> => {
-    const q = query(
-        collection(db, 'discounts'),
-        where('submittedBy', '==', 'trendyol-scraper')
-    );
-    const snap = await getDocs(q);
-    return snap.docs
-        .map(d => ({ id: d.id, ...d.data() } as AutoPublishedProduct))
-        .filter(p => typeof p.qualityScore === 'number')
-        .sort((a, b) => {
-            const am = a.autoPublishedAt?.toMillis?.() ?? 0;
-            const bm = b.autoPublishedAt?.toMillis?.() ?? 0;
-            return bm - am;
-        })
-        .slice(0, limitCount);
-};
-
 // Bilgisayardaki scraper'ın (scrape.js:enqueueAutoPublish) kalite kapısından
 // geçip henüz yayınlanmamış, sırada bekleyen ürünleri — her birinin tahmini
 // yayın zamanını hesaplamak için nextAt/intervalMs ile birlikte döner.
@@ -990,32 +918,28 @@ export interface AutoPublishQueueStatus {
     nextAt: number;
     intervalMs: number;
     status: string;
+    done: number;
+    failed: number;
+    total: number;
 }
 
 export const getAutoPublishQueue = async (): Promise<AutoPublishQueueStatus | null> => {
     const snap = await getDoc(doc(db, 'scraper_control', 'auto_publish_queue'));
     if (!snap.exists()) return null;
     const d = snap.data() as any;
+    const ids = Array.isArray(d.ids) ? d.ids : [];
+    const done = typeof d.done === 'number' ? d.done : 0;
+    const failed = typeof d.failed === 'number' ? d.failed : 0;
     return {
-        ids: Array.isArray(d.ids) ? d.ids : [],
+        ids,
         nextAt: typeof d.nextAt === 'number' ? d.nextAt : 0,
         intervalMs: typeof d.intervalMs === 'number' ? d.intervalMs : 0,
         status: d.status || 'done',
+        done,
+        failed,
+        // Eski (total alanı olmayan) kayıtlarla geriye dönük uyumluluk için hesaplanan yedek.
+        total: typeof d.total === 'number' ? d.total : done + failed + ids.length,
     };
-};
-
-export const clearStagingProducts = async (site?: string): Promise<void> => {
-    const q = query(collection(db, 'trendyol_staging'), where('status', '==', 'pending'));
-    const snap = await getDocs(q);
-    // site verilirse yalnızca o sitenin ürünleri silinir (client-side filtre → index gerekmez)
-    const docs = site ? snap.docs.filter(d => (d.data().site || 'trendyol') === site) : snap.docs;
-    if (!docs.length) return;
-    const CHUNK = 450;
-    for (let i = 0; i < docs.length; i += CHUNK) {
-        const batch = writeBatch(db);
-        docs.slice(i, i + CHUNK).forEach(d => batch.delete(d.ref));
-        await batch.commit();
-    }
 };
 
 // --- Scraper Kontrol (GitHub Actions) ---
@@ -1072,25 +996,3 @@ export const triggerScrape = async (site?: string): Promise<void> => {
     );
 };
 
-// Çöz & Yayınla: seçilen ürünleri PC'ye gönderir. Cimri ürünlerinde PC gerçek
-// mağaza linkini çözüp discounts'a yayınlar (panel doğrudan yapamaz).
-export interface PublishRequestDoc {
-    status?: string;
-    total?: number;
-    done?: number;
-    failed?: number;
-}
-
-// interval (dakika): 0 = hemen hepsi; >0 = her N dakikada bir ürün (PC kuyruğu işler)
-export const requestResolvePublish = async (ids: string[], interval = 0): Promise<void> => {
-    await setDoc(
-        doc(db, 'scraper_control', 'publish_request'),
-        { requestedAt: serverTimestamp(), ids, interval, status: 'processing', total: ids.length, done: 0, failed: 0, nextAt: 0 },
-        { merge: true }
-    );
-};
-
-export const getPublishStatus = async (): Promise<PublishRequestDoc | null> => {
-    const snap = await getDoc(doc(db, 'scraper_control', 'publish_request'));
-    return snap.exists() ? (snap.data() as PublishRequestDoc) : null;
-};
