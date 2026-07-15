@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Clipboard } from '@capacitor/clipboard';
 import { fetchDealDetails, uploadImageFromUrl, getSourceLabel, type ScrapedDeal } from '../services/dealFinder';
 import { addDiscount } from '../services/firebase';
 import { uploadToImgbb } from '../services/imgbb';
@@ -344,8 +345,13 @@ const EditDealPage: React.FC<EditDealPageProps> = ({ deal, setActiveView, isAdmi
                         <button
                             type="button"
                             onClick={async () => {
+                                // Önce Capacitor'ın native pano eklentisini dene (Android
+                                // WebView'da web API'sinden daha güvenilir), sonra web API'si.
                                 try {
-                                    // Önce clipboard API'yi dene
+                                    const { value } = await Clipboard.read();
+                                    if (value) { setFormData(prev => ({ ...prev, link: value })); return; }
+                                } catch {}
+                                try {
                                     if (navigator.clipboard && navigator.clipboard.readText) {
                                         const text = await navigator.clipboard.readText();
                                         if (text) {

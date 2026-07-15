@@ -1,9 +1,18 @@
 import React, { useState, useEffect } from 'react';
+import { Clipboard } from '@capacitor/clipboard';
 import type { ViewType } from '../types';
 import { addDiscount, getAiUsageStats, type AiUsageStats } from '../services/firebase';
 import { analyzeProductLink, isValidProductLink } from '../services/linkAnalyzer';
 
+// Native Android'de (Capacitor WebView) navigator.clipboard.readText() güvenilir
+// çalışmıyor (buton hiçbir şey yapmıyormuş gibi görünüyordu, hata da
+// fırlatmıyordu). AffiliateLinkManager.tsx'teki kanıtlanmış desenle aynı:
+// önce Capacitor'ın native pano eklentisi denenir, olmazsa web API'sine düşülür.
 async function pasteFromClipboard(): Promise<string> {
+    try {
+        const { value } = await Clipboard.read();
+        if (value) return value;
+    } catch {}
     try { return await navigator.clipboard.readText(); } catch {}
     return '';
 }
@@ -26,7 +35,12 @@ const AIAnalyzer: React.FC = () => {
 
     const handlePaste = async () => {
         const text = await pasteFromClipboard();
-        if (text) { setLink(text.trim()); setError(null); }
+        if (text) {
+            setLink(text.trim());
+            setError(null);
+        } else {
+            setError('Panoda metin bulunamadı veya pano izni verilmedi.');
+        }
     };
 
     const handleSubmit = async (e: React.FormEvent) => {

@@ -12,9 +12,22 @@
  */
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { Clipboard } from '@capacitor/clipboard';
 import { addDiscount } from '../services/firebase';
 import { uploadToImgbb } from '../services/imgbb';
 import { extractProductFromScreenshot, type VisualProductData } from '../services/geminiVisionService';
+
+// AffiliateLinkManager.tsx'teki kanıtlanmış desenle aynı: önce Capacitor'ın
+// native pano eklentisi denenir (Android WebView'da web API'den daha güvenilir),
+// olmazsa web API'sine düşülür.
+async function readClipboardText(): Promise<string> {
+    try {
+        const { value } = await Clipboard.read();
+        if (value) return value;
+    } catch {}
+    try { return await navigator.clipboard.readText(); } catch {}
+    return '';
+}
 
 // ─── Tipler ───────────────────────────────────────────────────────────────────
 
@@ -105,7 +118,7 @@ const ShareTarget: React.FC<ShareTargetProps> = ({ onClose }) => {
             let clipboardUrl = sharedUrl;
             if (!clipboardUrl) {
                 try {
-                    const clipText = await navigator.clipboard.readText();
+                    const clipText = await readClipboardText();
                     const trimmed  = clipText?.trim() ?? '';
                     const isLink   =
                         trimmed.includes('ty.gl') ||
