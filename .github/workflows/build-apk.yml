@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-15-5 (bildirim gönderme hata mesajı düzeltmesi)
+# manuel tetikleme: 2026-07-16-1 (GitHub Secrets eklendi — VITE_ anahtarları artık doğru gömülüyor)
 
 on:
   workflow_dispatch:
