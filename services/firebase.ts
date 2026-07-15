@@ -18,6 +18,7 @@ import {
     Timestamp,
     writeBatch,
     getCountFromServer,
+    documentId,
     QueryDocumentSnapshot,
     DocumentData
 } from 'firebase/firestore';
@@ -900,14 +901,21 @@ export const deleteInfluencerStory = async (id: string) => {
 
 // --- Trendyol Staging ---
 
-export const getStagingProducts = async (): Promise<StagingProduct[]> => {
-    const q = query(
-        collection(db, 'trendyol_staging'),
-        where('status', '==', 'pending'),
-        orderBy('importedAt', 'desc')
-    );
-    const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as StagingProduct));
+// Belirli ID'lere ait staging ürünlerini getirir (tüm koleksiyonu çekmek yerine
+// yalnızca istenenleri okur — "Sırada" listesi 6'lı sayfalar halinde açıldığında
+// gereksiz Firestore okumasını önlemek için kullanılır). Firestore 'in' filtresi
+// en fazla 10 ID kabul ettiği için 10'luk gruplara bölünür.
+export const getStagingProductsByIds = async (ids: string[]): Promise<StagingProduct[]> => {
+    if (!ids.length) return [];
+    const CHUNK = 10;
+    const results: StagingProduct[] = [];
+    for (let i = 0; i < ids.length; i += CHUNK) {
+        const chunk = ids.slice(i, i + CHUNK);
+        const q = query(collection(db, 'trendyol_staging'), where(documentId(), 'in', chunk));
+        const snap = await getDocs(q);
+        results.push(...snap.docs.map(d => ({ id: d.id, ...d.data() } as StagingProduct)));
+    }
+    return results;
 };
 
 // Bilgisayardaki scraper'ın (scrape.js:enqueueAutoPublish) kalite kapısından

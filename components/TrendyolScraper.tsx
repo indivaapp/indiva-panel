@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import type { StagingProduct } from '../types';
 import {
-  getStagingProducts,
+  getStagingProductsByIds,
   getScraperStatus, getScraperConfig, toggleScraperSource, triggerScrape,
   getAutoPublishQueue,
   type ScraperStatusDoc, type ScraperConfigDoc, type AutoPublishQueueStatus,
 } from '../services/firebase';
+
+const QUEUE_PAGE_SIZE = 6;
 
 const TrendyolScraper: React.FC = () => {
   const [status, setStatus] = useState<ScraperStatusDoc | null>(null);
@@ -20,6 +22,7 @@ const TrendyolScraper: React.FC = () => {
   const [now, setNow] = useState(() => Date.now());
   const [loadingStaging, setLoadingStaging] = useState(false);
   const [queueExpanded, setQueueExpanded] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(QUEUE_PAGE_SIZE);
 
   // ── Durum + config (Firestore) ────────────────────────────────────────────
   const fetchStatus = useCallback(async () => {
@@ -40,20 +43,33 @@ const TrendyolScraper: React.FC = () => {
     return () => clearInterval(t);
   }, [fetchStatus, status?.isRunning]);
 
-  // ── Staging ürünleri (yalnızca kuyruk detayı açıldığında çekilir — pahalı
-  // bir okuma olduğu için varsayılan olarak istenmiyor) ─────────────────────
-  const loadStaging = useCallback(async () => {
+  // ── Staging ürünleri (yalnızca kuyruk detayı açıldığında, ve o an görünen
+  // sayfa kadar çekilir — tüm kuyruğu birden çekmek yerine 6'lı sayfalar
+  // halinde okuyarak Firestore tüketimini düşük tutar) ─────────────────────
+  const loadStagingPage = useCallback(async (ids: string[]) => {
     setLoadingStaging(true);
     try {
-      const products = await getStagingProducts();
-      setStagingProducts(products);
+      const products = await getStagingProductsByIds(ids);
+      setStagingProducts(prev => {
+        const known = new Set(prev.map(p => p.id));
+        const fresh = products.filter(p => !known.has(p.id));
+        return fresh.length ? [...prev, ...fresh] : prev;
+      });
     } catch {}
     finally { setLoadingStaging(false); }
   }, []);
 
   useEffect(() => {
-    if (queueExpanded) loadStaging();
-  }, [queueExpanded, loadStaging]);
+    if (!queueExpanded || !queue?.ids?.length) return;
+    const pageIds = queue.ids.slice(0, visibleCount);
+    const missing = pageIds.filter(id => !stagingProducts.some(p => p.id === id));
+    if (missing.length) loadStagingPage(missing);
+  }, [queueExpanded, queue?.ids, visibleCount]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Kapatınca sayfalamayı sıfırla — tekrar açıldığında yeniden 6'lı başlar.
+  useEffect(() => {
+    if (!queueExpanded) setVisibleCount(QUEUE_PAGE_SIZE);
+  }, [queueExpanded]);
 
   // ── Yayın kuyruğu (AI'nın seçtiği, henüz yayınlanmamış ürünler) — tek
   // doküman, ucuz — sayaç için sürekli açık kalır. ─────────────────────────
@@ -75,9 +91,11 @@ const TrendyolScraper: React.FC = () => {
     return () => clearInterval(t);
   }, [queueExpanded, queue?.ids?.length]);
 
-  // Kuyruktaki ID'lere karşılık gelen ürün bilgisini (zaten yüklü olan)
-  // stagingProducts içinden bulur — ekstra Firestore okuması gerekmez.
+  // Kuyruktaki ID'lerin yalnızca o an görünen sayfası kadarını (visibleCount)
+  // zaten yüklü olan stagingProducts içinden eşler — ekstra Firestore okuması
+  // gerekmez, sayfalama sadece loadStagingPage'in ne çekeceğini belirler.
   const queuedProducts = (queue?.ids || [])
+    .slice(0, visibleCount)
     .map((id, index) => {
       const product = stagingProducts.find(p => p.id === id);
       if (!product) return null;
@@ -86,13 +104,14 @@ const TrendyolScraper: React.FC = () => {
     })
     .filter((x): x is { product: StagingProduct; publishAt: number; index: number } => x !== null);
 
+  const hasMoreQueued = (queue?.ids?.length || 0) > visibleCount;
+
   // Tarama bitince kuyruğu otomatik yenile (AI değerlendirmesi taramadan
   // hemen sonra çalışıp kuyruğu güncellediği için birkaç saniye payla).
   const [prevRunning, setPrevRunning] = useState(false);
   useEffect(() => {
     if (prevRunning && !status?.isRunning) {
       loadQueue();
-      if (queueExpanded) loadStaging();
       setTimeout(loadQueue, 8000);
     }
     setPrevRunning(status?.isRunning ?? false);
@@ -366,6 +385,18 @@ const TrendyolScraper: React.FC = () => {
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {hasMoreQueued && (
+              <div className="flex justify-center mt-4">
+                <button
+                  onClick={() => setVisibleCount(v => v + QUEUE_PAGE_SIZE)}
+                  disabled={loadingStaging}
+                  className="text-sm px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors disabled:opacity-50"
+                >
+                  {loadingStaging ? 'Yükleniyor...' : `Daha Fazla Göster (+${QUEUE_PAGE_SIZE})`}
+                </button>
               </div>
             )}
           </div>
