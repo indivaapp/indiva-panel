@@ -6,7 +6,7 @@ import {
     toggleScheduledNotification,
     deleteScheduledNotification,
     sendNotification,
-    getDiscounts,
+    getDiscountsForPicker,
     getInfluencerStories,
 } from '../services/firebase';
 import { sendDirectPushNotification } from '../services/fcmService';
@@ -49,8 +49,8 @@ const NotificationSender: React.FC<NotificationSenderProps> = ({ isAdmin }) => {
         setSelectedThumb('');
         try {
             if (type === 'discount') {
-                const discounts = await getDiscounts();
-                setPickerItems(discounts.slice(0, 60));
+                const discounts = await getDiscountsForPicker(60);
+                setPickerItems(discounts);
             } else {
                 const stories = await getInfluencerStories();
                 setPickerItems((stories as any[]).filter((s: any) => s.isActive));

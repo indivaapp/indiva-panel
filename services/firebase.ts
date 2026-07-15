@@ -47,8 +47,28 @@ export const addDiscount = async (discountData: Omit<Discount, 'id' | 'createdAt
     return await addDoc(collection(db, 'discounts'), dataWithTimestamp);
 };
 
-export const getDiscounts = async (): Promise<Discount[]> => {
-    const q = query(collection(db, 'discounts'), orderBy('createdAt', 'desc'));
+/**
+ * "İlanları Yönet" ekranı için — TÜM geçmişi (getDiscounts gibi sınırsız)
+ * çekmek yerine yalnızca son `days` gün içinde oluşturulanları okur. İlanlar
+ * zaten 24 saat içinde süresi doluyor ve temizlik script'i düzenli siliyor,
+ * bu yüzden birkaç günlük pencere yönetim ekranı için fazlasıyla yeterli —
+ * arama/filtre/sayaç davranışı birebir aynı kalır, sadece okunan veri
+ * koleksiyonun tüm geçmişi yerine son birkaç güne sınırlanır.
+ */
+export const getRecentDiscounts = async (days: number = 3): Promise<Discount[]> => {
+    const cutoff = Timestamp.fromDate(new Date(Date.now() - days * 24 * 60 * 60 * 1000));
+    const q = query(
+        collection(db, 'discounts'),
+        where('createdAt', '>=', cutoff),
+        orderBy('createdAt', 'desc')
+    );
+    const querySnapshot = await getDocs(q);
+    return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Discount));
+};
+
+/** Bildirim/sosyal içerik seçici pencereleri için — sadece ihtiyaç kadar okur. */
+export const getDiscountsForPicker = async (limitCount: number = 60): Promise<Discount[]> => {
+    const q = query(collection(db, 'discounts'), orderBy('createdAt', 'desc'), limit(limitCount));
     const querySnapshot = await getDocs(q);
     return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Discount));
 };

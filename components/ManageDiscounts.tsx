@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { getDiscounts, deleteDiscount, deleteExpiredDiscountsBatch } from '../services/firebase';
+import { getRecentDiscounts, deleteDiscount, deleteExpiredDiscountsBatch } from '../services/firebase';
 import type { Discount, ViewType } from '../types';
 import EditDiscountModal from './EditDiscountModal';
 import { useToast } from './ToastProvider';
@@ -204,7 +204,9 @@ const ManageDiscounts: React.FC<ManageDiscountsProps> = ({ setActiveView, isAdmi
     const fetchDiscounts = useCallback(async () => {
         setIsLoading(true);
         try {
-            const discountsData = await getDiscounts();
+            // Son 3 gün yeterli — ilanlar 24 saatte süresi doluyor ve düzenli
+            // temizleniyor, bu yüzden tüm geçmişi çekmeye gerek yok (bkz. services/firebase.ts).
+            const discountsData = await getRecentDiscounts(3);
             setDiscounts(discountsData as Discount[]);
         } catch (err) {
             setError('İndirimler yüklenemedi.');

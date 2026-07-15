@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-    getSocialContentQueue, markSocialContentPosted, getDiscounts, addManualSocialContent,
+    getSocialContentQueue, markSocialContentPosted, getDiscountsForPicker, addManualSocialContent,
     getRecentDiscountsForSocialAi, suggestSocialContent, addSocialContentFromAiSuggestion,
     getLatestAiSocialSuggestion, markAiSocialSuggestionOpened,
     type SocialContentPick,
@@ -1267,7 +1267,7 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         if (next && allDiscounts.length === 0) {
             setDiscountsLoading(true);
             try {
-                const data = await getDiscounts();
+                const data = await getDiscountsForPicker(300);
                 setAllDiscounts(data.filter(d => !d.isAd));
             } catch {
                 // sessizce yok say — arama kutusu boş kalır, kullanıcı tekrar açabilir
