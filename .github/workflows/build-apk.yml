@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-15-4 (Yapıştır butonu düzeltmeleri)
+# manuel tetikleme: 2026-07-15-5 (bildirim gönderme hata mesajı düzeltmesi)
 
 on:
   workflow_dispatch:
