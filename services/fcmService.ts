@@ -116,6 +116,13 @@ export const sendDirectPushNotification = async (
     if (!title || !body) {
         throw new Error('Başlık ve mesaj zorunludur.');
     }
+    // Eksik/boş servis hesabı bilgisi eskiden importPrivateKey içinde anlaşılmaz
+    // bir "Cannot read properties of undefined (reading 'replace')" hatasıyla
+    // çöküyordu — bu genellikle .env'de VITE_FIREBASE_PRIVATE_KEY'in build
+    // sırasında boş/eksik kalmasından kaynaklanır. Erken, anlaşılır bir hata.
+    if (!SERVICE_ACCOUNT.project_id || !SERVICE_ACCOUNT.private_key || !SERVICE_ACCOUNT.client_email) {
+        throw new Error('Bildirim gönderilemedi: servis hesabı bilgileri eksik (VITE_FIREBASE_PRIVATE_KEY/CLIENT_EMAIL/PROJECT_ID). Uygulamanın .env dosyasını kontrol edip yeniden derleyin.');
+    }
 
     try {
         const accessToken = await getAccessToken();
