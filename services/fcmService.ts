@@ -1,178 +1,46 @@
 /**
- * FCM v1 API Service
- * Sends push notifications using Firebase Cloud Messaging v1 API with Service Account authentication.
- * This method works without Cloud Functions and is free to use.
+ * Push bildirim gönderme — Cloud Function üzerinden.
+ *
+ * GÜVENLİK: Bu dosya eskiden Firebase servis hesabının ÖZEL ANAHTARINI
+ * (VITE_FIREBASE_PRIVATE_KEY) doğrudan tarayıcı/APK paketine gömüp FCM v1
+ * API'yi istemci tarafından imzalıyordu — APK'yı inceleyen biri bu anahtarı
+ * çıkarıp tüm kullanıcılara istediği bildirimi gönderebilirdi. Artık gönderme
+ * işlemi sunucu tarafında, Cloud Function içinde yapılıyor (indiva app
+ * reposu, functions/src/index.ts → sendPushNotification). Bu dosya sadece o
+ * fonksiyonu çağırır; hiçbir kimlik bilgisi istemciye inmez.
  */
 
-// Service Account credentials — .env dosyasından okunuyor
-const SERVICE_ACCOUNT = {
-    project_id: import.meta.env.VITE_FIREBASE_PROJECT_ID as string,
-    private_key: (import.meta.env.VITE_FIREBASE_PRIVATE_KEY as string)?.replace(/\\n/g, '\n'),
-    client_email: import.meta.env.VITE_FIREBASE_CLIENT_EMAIL as string,
-};
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../firebaseConfig';
 
-const FCM_ENDPOINT = `https://fcm.googleapis.com/v1/projects/${SERVICE_ACCOUNT.project_id}/messages:send`;
-const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
-const SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
-
-// Cache for access token
-let cachedToken: { token: string; expiry: number } | null = null;
-
-/**
- * Converts PEM private key to CryptoKey for signing
- */
-async function importPrivateKey(pem: string): Promise<CryptoKey> {
-    const pemContents = pem
-        .replace(/-----BEGIN PRIVATE KEY-----/g, '')
-        .replace(/-----END PRIVATE KEY-----/g, '')
-        .replace(/\r/g, '')
-        .replace(/\n/g, '')
-        .replace(/\s/g, '');
-
-    const binaryDer = Uint8Array.from(atob(pemContents), c => c.charCodeAt(0));
-
-    return await crypto.subtle.importKey(
-        'pkcs8',
-        binaryDer,
-        { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-        false,
-        ['sign']
-    );
+interface SendPushResult {
+    success: boolean;
+    messageId?: string;
 }
 
-/**
- * Creates a signed JWT for Google OAuth2
- */
-async function createSignedJWT(): Promise<string> {
-    const now = Math.floor(Date.now() / 1000);
-    const expiry = now + 3600;
-
-    const header = { alg: 'RS256', typ: 'JWT' };
-    const payload = {
-        iss: SERVICE_ACCOUNT.client_email,
-        sub: SERVICE_ACCOUNT.client_email,
-        aud: TOKEN_ENDPOINT,
-        iat: now,
-        exp: expiry,
-        scope: SCOPE
-    };
-
-    const encoder = new TextEncoder();
-    const headerB64 = btoa(JSON.stringify(header)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-    const payloadB64 = btoa(JSON.stringify(payload)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-
-    const signatureInput = `${headerB64}.${payloadB64}`;
-    const key = await importPrivateKey(SERVICE_ACCOUNT.private_key);
-    const signature = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, encoder.encode(signatureInput));
-
-    const signatureB64 = btoa(String.fromCharCode(...new Uint8Array(signature)))
-        .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-
-    return `${signatureInput}.${signatureB64}`;
-}
+const sendPushNotificationFn = httpsCallable<
+    { title: string; body: string; imageUrl?: string; discountId?: string; storyId?: string },
+    SendPushResult
+>(functions, 'sendPushNotification');
 
 /**
- * Gets an access token using the service account
- */
-async function getAccessToken(): Promise<string> {
-    if (cachedToken && cachedToken.expiry > Date.now() + 60000) {
-        return cachedToken.token;
-    }
-
-    const jwt = await createSignedJWT();
-
-    const response = await fetch(TOKEN_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
-    });
-
-    if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`Token alma hatası: ${error}`);
-    }
-
-    const data = await response.json();
-
-    cachedToken = {
-        token: data.access_token,
-        expiry: Date.now() + (data.expires_in * 1000)
-    };
-
-    return data.access_token;
-}
-
-/**
- * Sends a push notification to all İNDİVA users via FCM v1 API.
+ * Sends a push notification to all İNDİVA users via the sendPushNotification Cloud Function.
  */
 export const sendDirectPushNotification = async (
     title: string,
     body: string,
     imageUrl?: string,
-    url?: string,
+    _url?: string,
     discountId?: string,
     storyId?: string,
 ): Promise<{ success: boolean; messageId?: string; error?: string }> => {
     if (!title || !body) {
         throw new Error('Başlık ve mesaj zorunludur.');
     }
-    // Eksik/boş servis hesabı bilgisi eskiden importPrivateKey içinde anlaşılmaz
-    // bir "Cannot read properties of undefined (reading 'replace')" hatasıyla
-    // çöküyordu — bu genellikle .env'de VITE_FIREBASE_PRIVATE_KEY'in build
-    // sırasında boş/eksik kalmasından kaynaklanır. Erken, anlaşılır bir hata.
-    if (!SERVICE_ACCOUNT.project_id || !SERVICE_ACCOUNT.private_key || !SERVICE_ACCOUNT.client_email) {
-        throw new Error('Bildirim gönderilemedi: servis hesabı bilgileri eksik (VITE_FIREBASE_PRIVATE_KEY/CLIENT_EMAIL/PROJECT_ID). Uygulamanın .env dosyasını kontrol edip yeniden derleyin.');
-    }
 
     try {
-        const accessToken = await getAccessToken();
-
-        const message = {
-            message: {
-                topic: 'all_users',
-                notification: {
-                    title,
-                    body,
-                    ...(imageUrl && { image: imageUrl })
-                },
-                data: {
-                    url: url || '',
-                    click_action: 'OPEN_APP',
-                    ...(discountId && { discountId }),
-                    ...(storyId && { storyId }),
-                },
-                android: {
-                    priority: 'high' as const,
-                    notification: {
-                        channel_id: 'indiva_default_channel',
-                        sound: 'default',
-                        default_sound: true,
-                        // Android BigPicture — raw FCM v1 REST'te alan adı 'image'
-                        ...(imageUrl && { image: imageUrl }),
-                    }
-                }
-            }
-        };
-
-        const response = await fetch(FCM_ENDPOINT, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${accessToken}`
-            },
-            body: JSON.stringify(message)
-        });
-
-        const result = await response.json();
-
-        if (response.ok && result.name) {
-            return { success: true, messageId: result.name };
-        } else {
-            return {
-                success: false,
-                error: result.error?.message || result.error?.status || 'Bildirim gönderilemedi.'
-            };
-        }
+        const result = await sendPushNotificationFn({ title, body, imageUrl, discountId, storyId });
+        return { success: true, messageId: result.data.messageId };
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'Bildirim gönderilirken hata oluştu.';
         return { success: false, error: message };

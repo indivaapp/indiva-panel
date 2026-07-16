@@ -7,6 +7,7 @@
 import { FirebaseApp, getApps, initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from "firebase/firestore";
+import { getFunctions } from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: "AIzaSyB4sjujBvM9WwvrsIllRAsP3EhPDkjmMCs",
@@ -33,6 +34,11 @@ try {
   firestoreDb = getFirestore(app);
 }
 export const db = firestoreDb;
+// Bildirim gönderme gibi yönetici yetkisi gerektiren işlemler artık Cloud
+// Function üzerinden (indiva app reposu, functions/src/index.ts) yapılıyor —
+// bkz. services/fcmService.ts. Region, fonksiyonun deploy edildiği bölgeyle
+// (europe-west1) eşleşmeli.
+export const functions = getFunctions(app, "europe-west1");
 
 // Geliştirici uyarıları (yer tutucu/boş kontrolü)
 const hasPlaceholder = Object.values(firebaseConfig).some(v => typeof v === "string" && v.includes("<<<"));
