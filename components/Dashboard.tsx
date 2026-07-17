@@ -1,21 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Clipboard } from '@capacitor/clipboard';
 import type { ViewType } from '../types';
-import { addDiscount, getAiUsageStats, type AiUsageStats } from '../services/firebase';
-import { analyzeProductLink, isValidProductLink } from '../services/linkAnalyzer';
-
-// Native Android'de (Capacitor WebView) navigator.clipboard.readText() güvenilir
-// çalışmıyor (buton hiçbir şey yapmıyormuş gibi görünüyordu, hata da
-// fırlatmıyordu). AffiliateLinkManager.tsx'teki kanıtlanmış desenle aynı:
-// önce Capacitor'ın native pano eklentisi denenir, olmazsa web API'sine düşülür.
-async function pasteFromClipboard(): Promise<string> {
-    try {
-        const { value } = await Clipboard.read();
-        if (value) return value;
-    } catch {}
-    try { return await navigator.clipboard.readText(); } catch {}
-    return '';
-}
+import { getAiUsageStats, type AiUsageStats } from '../services/firebase';
 
 interface DashboardProps {
     setActiveView: (view: ViewType) => void;
@@ -23,140 +8,6 @@ interface DashboardProps {
     pendingAffiliateCount?: number;
     pendingSocialContentCount?: number;
 }
-
-// ─── AI Link Analyzer ─────────────────────────────────────────────────────────
-
-const AIAnalyzer: React.FC = () => {
-    const [link, setLink] = useState('');
-    const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    const [success, setSuccess] = useState<string | null>(null);
-    const [step, setStep] = useState<'idle' | 'reading' | 'analyzing' | 'publishing'>('idle');
-
-    const handlePaste = async () => {
-        const text = await pasteFromClipboard();
-        if (text) {
-            setLink(text.trim());
-            setError(null);
-        } else {
-            setError('Panoda metin bulunamadı veya pano izni verilmedi.');
-        }
-    };
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!isValidProductLink(link)) { setError('Geçerli bir URL girin (http ile başlamalı)'); return; }
-        setIsAnalyzing(true);
-        setError(null);
-        setSuccess(null);
-        try {
-            setStep('reading');
-            const result = await analyzeProductLink(link);
-            setStep('publishing');
-            await addDiscount({
-                title: result.title,
-                brand: result.brand,
-                category: result.category,
-                link: result.link,
-                oldPrice: result.oldPrice,
-                newPrice: result.newPrice,
-                imageUrl: result.imageUrl || '',
-                deleteUrl: '',
-                submittedBy: 'AI',
-                affiliateLinkUpdated: true,
-            });
-            setSuccess(result.title);
-            setLink('');
-            setStep('idle');
-            setTimeout(() => setSuccess(null), 6000);
-        } catch (err: any) {
-            const raw: string = err?.message || '';
-            if (raw.includes('yoğun') || raw.includes('UNAVAILABLE') || raw.includes('503')) {
-                setError('AI şu anda yoğun. Birkaç saniye bekleyip tekrar deneyin.');
-            } else if (raw.includes('Sistem kapalı')) {
-                setError('Sistem kapalı. Toggle ile açın.');
-            } else if (raw.includes('okunamadı') || raw.includes('Jina')) {
-                setError('Sayfa okunamadı. Doğrudan ürün sayfasının linkini deneyin.');
-            } else {
-                setError(raw || 'Analiz başarısız.');
-            }
-            setStep('idle');
-        } finally {
-            setIsAnalyzing(false);
-        }
-    };
-
-    const stepLabels: Record<string, string> = {
-        reading: 'Ürün sayfası okunuyor...',
-        analyzing: 'AI analiz ediyor...',
-        publishing: 'Yayınlanıyor...',
-    };
-
-    return (
-        <div className="rounded-2xl overflow-hidden border border-blue-500/20 bg-gray-800/80"
-             style={{ boxShadow: '0 0 0 1px rgba(59,130,246,0.08), 0 4px 24px rgba(0,0,0,0.3)' }}>
-
-            {/* Başlık */}
-            <div className="px-4 py-3 flex items-center gap-2 bg-gradient-to-r from-blue-500/10 to-transparent border-b border-blue-500/15">
-                <div className="w-6 h-6 rounded-lg bg-blue-600/80 flex items-center justify-center text-xs shadow">🤖</div>
-                <span className="text-xs font-bold text-blue-300 uppercase tracking-widest">AI Link Analizi</span>
-            </div>
-
-            <div className="p-4 space-y-3">
-                <form onSubmit={handleSubmit} className="space-y-2.5">
-                    <div className="flex gap-2">
-                        <input
-                            type="url"
-                            value={link}
-                            onChange={e => { setLink(e.target.value); setError(null); }}
-                            placeholder="Trendyol, Hepsiburada, Amazon linki..."
-                            className="flex-1 bg-gray-900 border border-gray-700 focus:border-blue-500 rounded-xl px-3 py-2.5 text-sm text-white outline-none placeholder:text-gray-600 transition-colors"
-                            disabled={isAnalyzing}
-                        />
-                        <button type="button" onClick={handlePaste} disabled={isAnalyzing}
-                            className="shrink-0 px-3 py-2.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white text-xs font-semibold rounded-xl transition-colors">
-                            📋
-                        </button>
-                    </div>
-
-                    <button type="submit" disabled={isAnalyzing || !link.trim()}
-                        className="w-full py-3 rounded-xl text-sm font-bold transition-all disabled:opacity-40 relative overflow-hidden"
-                        style={{
-                            background: isAnalyzing
-                                ? 'linear-gradient(135deg, #1d4ed8, #7c3aed)'
-                                : 'linear-gradient(135deg, #2563eb, #3b82f6)',
-                            boxShadow: isAnalyzing ? 'none' : '0 4px 16px rgba(37,99,235,0.35)',
-                        }}>
-                        <span className="relative z-10 flex items-center justify-center gap-2 text-white">
-                            {isAnalyzing ? (
-                                <>
-                                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                    {stepLabels[step] || 'İşleniyor...'}
-                                </>
-                            ) : (
-                                '⚡ Analiz Et & Yayınla'
-                            )}
-                        </span>
-                    </button>
-                </form>
-
-                {/* Durum mesajları */}
-                {error && (
-                    <div className="flex items-start gap-2 bg-red-950/50 border border-red-500/20 rounded-xl px-3 py-2.5">
-                        <span className="text-red-400 text-sm shrink-0">⚠️</span>
-                        <p className="text-red-300 text-xs leading-relaxed">{error}</p>
-                    </div>
-                )}
-                {success && (
-                    <div className="flex items-start gap-2 bg-green-950/50 border border-green-500/20 rounded-xl px-3 py-2.5">
-                        <span className="text-green-400 text-sm shrink-0">✅</span>
-                        <p className="text-green-300 text-xs leading-relaxed line-clamp-2">Yayınlandı: <span className="font-medium">{success}</span></p>
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-};
 
 // ─── AI Kullanım/Maliyet Kutusu ────────────────────────────────────────────────
 // Tüm AI pipeline'ları (price-checker, auto-onual, auto-akakce, kalite kapısı,
@@ -399,9 +250,6 @@ const Dashboard: React.FC<DashboardProps> = ({ setActiveView, pendingAffiliateCo
                     </svg>
                 </div>
             </button>
-
-            {/* AI Analyzer */}
-            <AIAnalyzer />
 
             {/* Trendyol Veri Çekici */}
             <button
