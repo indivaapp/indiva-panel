@@ -866,31 +866,19 @@ async function recordDealVideo(
     buffer.width = CANVAS_W;
     buffer.height = CANVAS_H;
 
-    // ── Manuel kare besleme (captureStream(0) + track.requestFrame()) ────────
-    // KÖK NEDEN (derin analiz sonrası): captureStream(fps) modu, kareyi
-    // canvas her "kirlendiğinde" (drawImage çağrıldığında) otomatik yakalıyor.
-    // Ama bizim çizimimiz her karede DEĞİŞKEN sürede tamamlanıyor (ağır
-    // gradyan/gölge/metin işi) — bu da videoya gömülen kare ZAMAN DAMGALARININ
-    // düzensiz (jitter'lı) olmasına yol açıyor. Kayıt/oynatıcı tarafında bu
-    // düzensiz zamanlama, kareler bozulmasa bile TAKILMA/SEĞİRME olarak
-    // algılanıyor — önceki düzeltme (üst üste binen çizimi engelleme + 30fps)
-    // bozuk kareleri önledi ama bu zamanlama sorununu çözmedi.
-    // ÇÖZÜM: captureStream(0) ile OTOMATİK yakalamayı tamamen kapatıp, çıktıyı
-    // SABİT aralıklı bir setInterval ("tüketici") üzerinden manuel olarak
-    // track.requestFrame() ile besliyoruz. Asıl (pahalı) çizim ayrı, bağımsız
-    // bir döngüde ("üretici") arka planda en hızlı şekilde arabelleğe
-    // yazılmaya devam ediyor — tüketici her tik'te arabellekte NE VARSA onu
-    // (üretici geride kalsa bile) sabit, öngörülebilir aralıklarla kaydediyor.
-    // Böylece kayıttaki kare zamanlaması üretimin hızından tamamen bağımsız
-    // ve kusursuz düzenli oluyor; üretici yetişemezse tek etkisi ara sıra aynı
-    // karenin bir tık daha kaydedilmesi (görünmez), asla düzensiz zamanlama
-    // veya yırtık kare değil.
-    const supportsManualCapture = typeof (canvas as any).captureStream === 'function';
-    const stream: MediaStream = supportsManualCapture
-        ? (canvas as any).captureStream(0)
-        : (canvas as any).captureStream(VIDEO_FPS);
-    const captureTrack = stream.getVideoTracks()[0] as (MediaStreamTrack & { requestFrame?: () => void });
-    const manualMode = typeof captureTrack?.requestFrame === 'function';
+    // ── captureStream(0) + track.requestFrame() DENENDİ, GERİ ALINDI ─────────
+    // Android WebView'de bu kombinasyon güvenilmez çıktı — canlı testte video
+    // sadece 2. sahneyi (promo) içeriyordu, 1. sahne (ürün) hiç kaydedilmedi
+    // ve ilerleme çubuğu doğrudan ~%75'ten başlıyordu; yani manuel requestFrame()
+    // çağrıları büyük ölçüde yok sayılıp kayıt gerçekte geç başlamış gibi
+    // davrandı. Bu yüzden OTOMATİK captureStream(fps) moduna dönüldü (kanıtlanmış,
+    // çalışan yol) — ama üretici/tüketici ayrımı (aşağıda) korunuyor: pahalı
+    // çizim hâlâ arka planda bağımsız çalışıyor, görünen canvas'a aktarım
+    // (blit) hâlâ SABİT aralıklı bir zamanlayıcıyla yapılıyor — bu da eski
+    // "sadece yavaş render bitince blit et" düzensizliğini ortadan kaldırıp
+    // otomatik yakalamanın daha DÜZENLİ kareler görmesini sağlıyor, riskli
+    // manuel-frame API'sine ihtiyaç duymadan.
+    const stream: MediaStream = (canvas as any).captureStream(VIDEO_FPS);
     const mimeType = pickSupportedMimeType();
     const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 12_000_000 });
     const chunks: Blob[] = [];
@@ -999,13 +987,10 @@ async function recordDealVideo(
         const outputTimer = setInterval(() => {
             const elapsed = performance.now() - startTime;
             onProgress?.(Math.min(1, elapsed / videoDurationMs));
-            // Her iki modda da arabelleği görünen canvas'a basıyoruz — manuel
-            // modda bu, hemen ardından requestFrame() ile açıkça bir kare
-            // gönderir; eski tarayıcı (otomatik) modunda ise sadece canvas'ı
-            // "kirletip" mevcut captureStream(VIDEO_FPS) mekanizmasının
-            // yakalamasını sağlar.
+            // Arabelleği SABİT aralıklarla görünen canvas'a basıyoruz — canvas'ı
+            // "kirletip" otomatik captureStream(VIDEO_FPS) mekanizmasının
+            // düzenli aralıklarla yakalamasını sağlıyoruz.
             visibleCtx.drawImage(buffer, 0, 0);
-            if (manualMode) captureTrack.requestFrame!();
             if (elapsed >= videoDurationMs) stopAndResolve();
         }, frameIntervalMs);
 
@@ -1034,6 +1019,12 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
     const [videoExt, setVideoExt] = useState<'mp4' | 'webm'>('mp4');
     const videoBlobRef = useRef<Blob | null>(null);
     const [shareError, setShareError] = useState<'image' | 'video' | null>(null);
+    // İndirme butonlarına tıklayınca (özellikle video — base64 kodlama +
+    // galeriye yazma birkaç saniye sürebiliyor) hiçbir geri bildirim
+    // olmaması "buton çalışmıyor" izlenimi veriyordu — artık "İndiriliyor…"
+    // / "İndirildi ✓" durumları gösteriliyor.
+    const [imageDownloadState, setImageDownloadState] = useState<'idle' | 'saving' | 'done'>('idle');
+    const [videoDownloadState, setVideoDownloadState] = useState<'idle' | 'saving' | 'done'>('idle');
     // Video iki sahneden oluşuyor: ilk sahne ürünü, ikinci sahne uygulamayı
     // tanıtıyor. Her video için ayrı ayarlanabilsin diye kart bazında state —
     // saniye cinsinden, kayıt sırasında ms'ye çevrilip recordDealVideo'ya verilir.
@@ -1089,9 +1080,13 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
         if (!canvas) return;
         const blob = await canvasToBlob(canvas);
         if (!blob) return;
+        setImageDownloadState('saving');
         try {
             await saveFileToDevice(blob, `indiva-${item.discountId}.png`, item.title);
+            setImageDownloadState('done');
+            setTimeout(() => setImageDownloadState('idle'), 2000);
         } catch {
+            setImageDownloadState('idle');
             setShareError('image');
             setTimeout(() => setShareError(null), 2500);
         }
@@ -1131,9 +1126,13 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
 
     const handleDownloadVideo = async () => {
         if (!videoBlobRef.current) return;
+        setVideoDownloadState('saving');
         try {
             await saveFileToDevice(videoBlobRef.current, `indiva-${item.discountId}.${videoExt}`, item.title);
+            setVideoDownloadState('done');
+            setTimeout(() => setVideoDownloadState('idle'), 2000);
         } catch {
+            setVideoDownloadState('idle');
             setShareError('video');
             setTimeout(() => setShareError(null), 2500);
         }
@@ -1239,10 +1238,14 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
                     </button>
                     <button
                         onClick={handleDownload}
-                        disabled={renderState !== 'ready' || videoState === 'recording'}
+                        disabled={renderState !== 'ready' || videoState === 'recording' || imageDownloadState === 'saving'}
                         className="flex-1 min-w-[140px] py-2.5 bg-gradient-to-r from-orange-600 to-red-600 disabled:opacity-40 text-white text-sm font-bold rounded-xl transition-all active:scale-95 shadow-lg shadow-orange-900/30"
                     >
-                        ⬇ Görseli İndir
+                        {imageDownloadState === 'saving'
+                            ? <><span className="inline-block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin align-[-2px] mr-1.5" />İndiriliyor…</>
+                            : imageDownloadState === 'done'
+                            ? '✓ İndirildi'
+                            : '⬇ Görseli İndir'}
                     </button>
                     <button
                         onClick={handleShareImage}
@@ -1296,9 +1299,14 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
                     {videoState === 'ready' && (
                         <button
                             onClick={handleDownloadVideo}
-                            className="flex-1 min-w-[140px] py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white text-sm font-bold rounded-xl transition-all active:scale-95 shadow-lg shadow-purple-900/30"
+                            disabled={videoDownloadState === 'saving'}
+                            className="flex-1 min-w-[140px] py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 disabled:opacity-60 text-white text-sm font-bold rounded-xl transition-all active:scale-95 shadow-lg shadow-purple-900/30"
                         >
-                            ⬇ Videoyu İndir (.{videoExt})
+                            {videoDownloadState === 'saving'
+                                ? <><span className="inline-block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin align-[-2px] mr-1.5" />İndiriliyor…</>
+                                : videoDownloadState === 'done'
+                                ? '✓ İndirildi'
+                                : `⬇ Videoyu İndir (.${videoExt})`}
                         </button>
                     )}
                     {videoState === 'ready' && (
