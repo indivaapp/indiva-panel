@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-17-4 (AI aday listesine "İndirime Git" butonu eklendi)
+# manuel tetikleme: 2026-07-17-5 (video seslendirme metni / ElevenLabs özelliği eklendi)
 
 on:
   workflow_dispatch:
