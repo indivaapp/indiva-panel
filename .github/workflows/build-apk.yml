@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-17-1 (AI ürün paylaşımı, geri tuşu/scroll düzeltmesi, sosyal medya AI yeniden tasarımı)
+# manuel tetikleme: 2026-07-17-2 (sosyal medya AI adayları birleşik uca güncellendi)
 
 on:
   workflow_dispatch:
