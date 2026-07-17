@@ -949,6 +949,7 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
     const cachedImgRef = useRef<HTMLImageElement | null>(null);
     const [renderState, setRenderState] = useState<'loading' | 'ready' | 'error'>('loading');
     const [copied, setCopied] = useState(false);
+    const [voiceoverCopied, setVoiceoverCopied] = useState(false);
     const [marking, setMarking] = useState(false);
     const [videoState, setVideoState] = useState<'idle' | 'recording' | 'ready' | 'error'>('idle');
     const [videoProgress, setVideoProgress] = useState(0);
@@ -1074,6 +1075,17 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
         }
     };
 
+    const handleCopyVoiceover = async () => {
+        if (!item.voiceover) return;
+        try {
+            await Clipboard.write({ string: item.voiceover });
+            setVoiceoverCopied(true);
+            setTimeout(() => setVoiceoverCopied(false), 2000);
+        } catch {
+            // Clipboard API kullanılamıyorsa sessizce yok say
+        }
+    };
+
     const handleMarkPosted = async () => {
         setMarking(true);
         try {
@@ -1116,6 +1128,23 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
                     value={item.caption}
                     className="flex-1 min-h-[140px] bg-gray-900 border border-gray-700 rounded-xl p-3 text-sm text-gray-300 resize-none focus:outline-none"
                 />
+
+                {item.voiceover && (
+                    <div className="bg-gray-900 border border-indigo-600/30 rounded-xl p-3">
+                        <div className="flex items-center justify-between gap-2 mb-1.5">
+                            <p className="text-indigo-300 text-xs font-bold flex items-center gap-1">
+                                🎙️ Seslendirme Metni (ElevenLabs için)
+                            </p>
+                            <button
+                                onClick={handleCopyVoiceover}
+                                className="shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-white transition-colors"
+                            >
+                                {voiceoverCopied ? '✓ Kopyalandı' : '📋 Kopyala'}
+                            </button>
+                        </div>
+                        <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-line">{item.voiceover}</p>
+                    </div>
+                )}
 
                 <div className="flex flex-wrap gap-2">
                     <button
@@ -1224,7 +1253,8 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     const [showAiModal, setShowAiModal] = useState(false);
     // Adım 1: aday listesi (selectedCandidate null). Adım 2: seçilen ürün için içerik üretimi/gösterimi.
     const [selectedCandidate, setSelectedCandidate] = useState<{ candidate: SocialContentCandidate; product: AiPickProduct } | null>(null);
-    const [generatedContent, setGeneratedContent] = useState<{ title: string; caption: string } | null>(null);
+    const [generatedContent, setGeneratedContent] = useState<{ title: string; caption: string; voiceover: string } | null>(null);
+    const [voiceoverCopied, setVoiceoverCopied] = useState(false);
     const [generatingContent, setGeneratingContent] = useState(false);
     const [contentError, setContentError] = useState<string | null>(null);
     const [usingPickId, setUsingPickId] = useState<string | null>(null);
@@ -1328,6 +1358,7 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         setSelectedCandidate(item);
         setGeneratedContent(null);
         setContentError(null);
+        setVoiceoverCopied(false);
         setGeneratingContent(true);
         try {
             const content = await generateSocialContentForProduct(item.product);
@@ -1343,6 +1374,7 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     const handleRegenerateContent = async () => {
         if (!selectedCandidate) return;
         setContentError(null);
+        setVoiceoverCopied(false);
         setGeneratingContent(true);
         try {
             const content = await generateSocialContentForProduct(selectedCandidate.product);
@@ -1358,6 +1390,7 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         setSelectedCandidate(null);
         setGeneratedContent(null);
         setContentError(null);
+        setVoiceoverCopied(false);
     };
 
     const closeAiModal = () => {
@@ -1365,6 +1398,18 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         setSelectedCandidate(null);
         setGeneratedContent(null);
         setContentError(null);
+        setVoiceoverCopied(false);
+    };
+
+    const handleCopyVoiceover = async () => {
+        if (!generatedContent?.voiceover) return;
+        try {
+            await Clipboard.write({ string: generatedContent.voiceover });
+            setVoiceoverCopied(true);
+            setTimeout(() => setVoiceoverCopied(false), 2000);
+        } catch {
+            // Clipboard API kullanılamıyorsa sessizce yok say
+        }
     };
 
     const handleUseAiPick = async () => {
@@ -1621,6 +1666,23 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                     <div className="bg-gray-900/60 border border-gray-700 rounded-xl p-3 mb-3">
                                         <p className="text-white text-sm font-bold mb-1">{generatedContent.title}</p>
                                         <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-line">{generatedContent.caption}</p>
+                                    </div>
+                                )}
+
+                                {!generatingContent && generatedContent?.voiceover && (
+                                    <div className="bg-gray-900/60 border border-indigo-600/30 rounded-xl p-3 mb-3">
+                                        <div className="flex items-center justify-between gap-2 mb-1.5">
+                                            <p className="text-indigo-300 text-xs font-bold flex items-center gap-1">
+                                                🎙️ Seslendirme Metni (ElevenLabs için)
+                                            </p>
+                                            <button
+                                                onClick={handleCopyVoiceover}
+                                                className="shrink-0 text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-white transition-colors"
+                                            >
+                                                {voiceoverCopied ? '✓ Kopyalandı' : '📋 Kopyala'}
+                                            </button>
+                                        </div>
+                                        <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-line">{generatedContent.voiceover}</p>
                                     </div>
                                 )}
 

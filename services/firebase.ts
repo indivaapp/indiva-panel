@@ -716,11 +716,13 @@ export const suggestSocialCandidates = async (discounts: Discount[]): Promise<So
     return data.candidates as SocialContentCandidate[];
 };
 
-/** Seçilen TEK ürün için başlık+caption üretir. "Yeniden Üret" butonu da aynı
- *  fonksiyonu tekrar çağırır — her seferinde farklı bir sonuç döner. */
+/** Seçilen TEK ürün için başlık+caption+seslendirme metni üretir. "Yeniden Üret"
+ *  butonu da aynı fonksiyonu tekrar çağırır — her seferinde farklı bir sonuç döner.
+ *  "voiceover": ElevenLabs gibi bir metinden-sese aracına doğrudan yapıştırılacak,
+ *  ürünü/fiyatı/indirimi anlatıp İNDİVA'yı indirmeye teşvik eden konuşma script'i. */
 export const generateSocialContentForProduct = async (
     discount: Pick<Discount, 'id' | 'title' | 'brand' | 'category' | 'oldPrice' | 'newPrice' | 'reviewCount'>
-): Promise<{ title: string; caption: string }> => {
+): Promise<{ title: string; caption: string; voiceover: string }> => {
     const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -749,13 +751,13 @@ export const generateSocialContentForProduct = async (
         throw new Error(res.ok ? 'AI sunucudan geçersiz yanıt geldi' : `Sunucu hatası (${res.status}) — tekrar deneyin`);
     }
     if (!data.success) throw new Error(data.error || 'İçerik üretilemedi');
-    return { title: data.title, caption: data.caption };
+    return { title: data.title, caption: data.caption, voiceover: data.voiceover || '' };
 };
 
 /** Seçilen ürün + üretilen içerik doğrudan kuyruğa eklenir. */
 export const addSocialContentFromAiSuggestion = async (
     discount: Pick<Discount, 'id' | 'title' | 'imageUrl' | 'category' | 'brand' | 'newPrice' | 'oldPrice'>,
-    content: { title: string; caption: string }
+    content: { title: string; caption: string; voiceover?: string }
 ): Promise<void> => {
     await addDoc(collection(db, 'social_content_queue'), {
         discountId: discount.id,
@@ -767,6 +769,7 @@ export const addSocialContentFromAiSuggestion = async (
         oldPrice: discount.oldPrice,
         score: 10,
         caption: content.caption,
+        voiceover: content.voiceover || '',
         source: 'manual',
         status: 'pending',
         createdAt: serverTimestamp(),

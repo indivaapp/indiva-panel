@@ -169,9 +169,19 @@ ${JSON.stringify({
   Örnek doğru başlık: "Samsung Galaxy Buds Yarı Fiyatına!"
 - "caption": Instagram story/post metni (2-4 cümle + hashtag'ler), emoji kullanılabilir, sonunda
   İNDİVA'yı indirmeye teşvik eden bir cümle olsun
+- "voiceover": Bu ürünü tanıtan bir VİDEO SESLENDİRME METNİ (script). Bu metin doğrudan bir
+  metinden-sese (ElevenLabs) aracına yapıştırılıp seslendirilecek — SADECE konuşulacak metni
+  yaz, sahne yönergesi/parantez/emoji/hashtag YAZMA, doğal konuşma diliyle Türkçe yaz.
+  Yapı şöyle olmalı (akıcı, tek parça, 4-6 cümle, ~15-25 saniyelik konuşma uzunluğunda):
+  1) Ürünü ve ne işe yaradığını çekici bir cümleyle tanıt.
+  2) Eski fiyatı ve yeni (indirimli) fiyatı, indirim yüzdesini net söyle (örn. "739 liralık bu
+     ürün şimdi sadece 199 liraya, yani yüzde 73 indirimle sizlerle").
+  3) Ürünün öne çıkan 1-2 özelliğinden bahset (varsa reviewCount/kategori ipucu kullanılabilir).
+  4) Kapanışta dinleyiciyi İNDİVA uygulamasını indirmeye ve bu tür fırsatları kaçırmamaya
+     teşvik eden, enerjik bir çağrı cümlesiyle bitir.
 
 SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma:
-{"title": "...", "caption": "..."}`;
+{"title": "...", "caption": "...", "voiceover": "..."}`;
 
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
@@ -208,11 +218,12 @@ SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma:
     const parsed = JSON.parse(jsonMatch[0]);
     const title = String(parsed.title || '').slice(0, 100);
     const caption = String(parsed.caption || '');
+    const voiceover = String(parsed.voiceover || '');
     if (!title || !caption) {
         return res.status(502).json({ success: false, error: 'AI eksik içerik döndürdü' });
     }
 
-    return res.status(200).json({ success: true, title, caption });
+    return res.status(200).json({ success: true, title, caption, voiceover });
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

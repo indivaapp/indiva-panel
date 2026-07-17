@@ -130,6 +130,8 @@ export interface SocialContentItem {
     oldPrice: number;
     score: number;
     caption: string;
+    /** ElevenLabs gibi bir metinden-sese aracına yapıştırılacak video seslendirme metni. */
+    voiceover?: string;
     source?: 'auto' | 'manual';
     status: 'pending' | 'posted';
     createdAt: FirestoreTimestamp;
