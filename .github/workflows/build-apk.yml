@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-17-11 (video takılma — önbellekleme + bitrate/kalite optimizasyonu)
+# manuel tetikleme: 2026-07-17-12 (video yırtılmasının gerçek kök nedeni — gizli font await'i düzeltildi)
 
 on:
   workflow_dispatch:
