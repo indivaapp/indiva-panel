@@ -657,15 +657,18 @@ export const addManualSocialContent = async (discount: Discount): Promise<void> 
 };
 
 // --- AI Sosyal Medya İçerik Önerisi ---
-// Admin tetikler: son 100 ilanı okuyup (tek Firestore sorgusu), OpenRouter proxy'sine
+// Admin tetikler: son 60 ilanı okuyup (tek Firestore sorgusu), OpenRouter proxy'sine
 // gönderir. AI satış potansiyeli + indirim oranı + ilgi çekicilik kriterlerine
 // göre EN İYİ 10 ürünü PUANLAR (henüz içerik üretmez). Admin bu 10 adaydan
 // birini seçtiğinde generateSocialContentForProduct SADECE o ürün için
 // başlık+caption üretir — beğenilmezse aynı fonksiyon "Yeniden Üret" ile
 // tekrar çağrılır.
+// NOT: 100 ürünle canlı testte gerçek (uzun) başlıklarla bazen Vercel Hobby
+// planının 60sn sunucusuz fonksiyon sınırını aşıp zaman aşımına yol açtı —
+// 60'a düşürüldü, hâlâ eski 3'lü sistemin (50) üzerinde.
 
-/** Sosyal medya AI önerisi için son N ilanı getirir (reklamlar hariç, varsayılan 100). */
-export const getRecentDiscountsForSocialAi = async (limitCount: number = 100): Promise<Discount[]> => {
+/** Sosyal medya AI önerisi için son N ilanı getirir (reklamlar hariç, varsayılan 60). */
+export const getRecentDiscountsForSocialAi = async (limitCount: number = 60): Promise<Discount[]> => {
     const q = query(collection(db, 'discounts'), orderBy('createdAt', 'desc'), limit(limitCount));
     const querySnapshot = await getDocs(q);
     return querySnapshot.docs

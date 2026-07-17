@@ -7,7 +7,7 @@ import { trackOpenRouterUsage } from './_aiUsageTracker';
  * fonksiyon sayısı aşıldığında "No more than 12 Serverless Functions" hatası
  * canlı testte gözlemlendi, bu yüzden birleştirildi):
  *
- * 1) ADAY PUANLAMA — POST { discounts: [...] } (son ~100 ilan)
+ * 1) ADAY PUANLAMA — POST { discounts: [...] } (son ~60 ilan)
  *    → { success, candidates: [{ productId, score, reasoning }, ...] } (en fazla 10)
  *    Henüz başlık/caption ÜRETİLMEZ, sadece puanlanır.
  *
@@ -33,7 +33,10 @@ async function handleCandidates(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ success: false, error: 'discounts listesi boş olamaz' });
     }
 
-    const compact = discounts.slice(0, 100).map((d: any, i: number) => ({
+    // NOT: 100 ürünle canlı testte gerçek (uzun) başlıklarla bazen Vercel
+    // Hobby planının 60sn sunucusuz fonksiyon sınırını aşıp zaman aşımına
+    // yol açtı — 60'a düşürüldü, hâlâ eski 3'lü sistemin (50) üzerinde.
+    const compact = discounts.slice(0, 60).map((d: any, i: number) => ({
         index: i + 1,
         id: d.id,
         title: d.title,
@@ -86,7 +89,10 @@ en fazla 10 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
             temperature: 0.4,
             usage: { include: true },
         }),
-        signal: AbortSignal.timeout(55000),
+        // Vercel Hobby planının 60sn sunucusuz fonksiyon sınırına karşı pay
+        // bırakmak için 50sn'de kes — bu sayede fonksiyon zorla kesilmeden
+        // önce kontrollü bir "Zaman aşımı" hatası dönebiliyoruz.
+        signal: AbortSignal.timeout(50000),
     });
 
     if (!response.ok) {

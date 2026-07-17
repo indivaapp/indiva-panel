@@ -1,7 +1,7 @@
 /**
  * auto-social-ai-suggest.js — Zamanlı sosyal medya AI önerisi
  *
- * Günde 3 kez (13:00/17:00/21:00 TR'den 3dk önce) son 100 ilanı tarar, AI ile
+ * Günde 3 kez (13:00/17:00/21:00 TR'den 3dk önce) son 60 ilanı tarar, AI ile
  * (OpenRouter, deepseek/deepseek-v4-flash) kalite/satış potansiyeli/ilgi
  * çekicilik kriterlerine göre EN İYİ 10 ürünü PUANLAR ve Firestore'a yazar,
  * admin'e ('panel_admin_alerts' topic) push bildirimi gönderir. Bu aşamada
@@ -66,7 +66,11 @@ function initFirebase() {
 }
 
 async function fetchRecentDiscounts(db) {
-    const snap = await db.collection('discounts').orderBy('createdAt', 'desc').limit(100).get();
+    // NOT: 100 ürünle canlı testte gerçek (uzun) başlıklarla bazen Vercel
+    // Hobby planının 60sn sunucusuz fonksiyon sınırını aşıp zaman aşımına
+    // yol açtı (vercel-proxy/api/social-content.ts) — tutarlı olsun diye
+    // burası da 60'a düşürüldü.
+    const snap = await db.collection('discounts').orderBy('createdAt', 'desc').limit(60).get();
     return snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(d => !d.isAd);
