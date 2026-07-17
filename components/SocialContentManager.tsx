@@ -1528,10 +1528,12 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                             ? Math.round(((item.product.oldPrice - item.product.newPrice) / item.product.oldPrice) * 100)
                                             : 0;
                                         return (
-                                            <button
+                                            <div
                                                 key={item.candidate.productId}
                                                 onClick={() => handleSelectCandidate(item)}
-                                                className="w-full text-left bg-gray-900/60 border border-gray-700 hover:border-purple-500/50 rounded-xl p-3 transition-colors"
+                                                role="button"
+                                                tabIndex={0}
+                                                className="w-full text-left bg-gray-900/60 border border-gray-700 hover:border-purple-500/50 rounded-xl p-3 transition-colors cursor-pointer"
                                             >
                                                 <div className="flex items-center gap-3">
                                                     {item.product.imageUrl && (
@@ -1555,8 +1557,20 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                                             <p className="text-gray-500 text-[11px] mt-1 italic line-clamp-1">"{item.candidate.reasoning}"</p>
                                                         )}
                                                     </div>
+                                                    {item.product.link && (
+                                                        <a
+                                                            href={item.product.link}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            onClick={e => e.stopPropagation()}
+                                                            className="shrink-0 flex flex-col items-center gap-0.5 px-2.5 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-[10px] font-semibold transition-colors"
+                                                        >
+                                                            <span className="text-sm leading-none">🔗</span>
+                                                            İndirime Git
+                                                        </a>
+                                                    )}
                                                 </div>
-                                            </button>
+                                            </div>
                                         );
                                     })}
                                 </div>
