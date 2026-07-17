@@ -390,13 +390,20 @@ async function renderDealImage(
     safeImageUrl: string | null,
     progress: number = 1,
     cachedImg?: HTMLImageElement | null,
+    // Video kaydı sırasında bu fonksiyon SANİYEDE ONLARCA kez çağrılıyor —
+    // 'high' yumuşatma (özellikle görsel/gradyan kompozisyonunda) fark
+    // edilir derecede daha pahalı. Tek seferlik statik görsel/paylaşım
+    // render'ında kalite için 'high' kalıyor (varsayılan), video kaydı
+    // çağrılarından 'medium' geçiriliyor — sıkıştırılmış sosyal medya
+    // videosunda fark neredeyse görünmez, CPU tasarrufu ise belirgin.
+    smoothingQuality: ImageSmoothingQuality = 'high',
 ): Promise<HTMLImageElement | null> {
     if (canvas.width !== CANVAS_W) canvas.width = CANVAS_W;
     if (canvas.height !== CANVAS_H) canvas.height = CANVAS_H;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
     ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
+    ctx.imageSmoothingQuality = smoothingQuality;
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
     const discountPct = item.oldPrice > 0 && item.newPrice > 0
@@ -880,7 +887,11 @@ async function recordDealVideo(
     // manuel-frame API'sine ihtiyaç duymadan.
     const stream: MediaStream = (canvas as any).captureStream(VIDEO_FPS);
     const mimeType = pickSupportedMimeType();
-    const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 12_000_000 });
+    // 12Mbps -> 8Mbps: sosyal medya zaten agresif sıkıştırıyor, fark
+    // neredeyse görünmez ama kodlayıcı (encoder) yükü belirgin azalıyor —
+    // JS çizim işiyle aynı anda CPU'yu paylaşan encoder da takılmanın bir
+    // parçasıydı.
+    const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 8_000_000 });
     const chunks: Blob[] = [];
 
     let appIconImg: HTMLImageElement | null = null;
@@ -911,12 +922,22 @@ async function recordDealVideo(
                 const c = document.createElement('canvas');
                 c.width = CANVAS_W;
                 c.height = CANVAS_H;
-                await renderDealImage(c, item, null, 1, cachedImg);
+                await renderDealImage(c, item, null, 1, cachedImg, 'medium');
                 return c;
             })();
         }
         return dealSnapshotPromise;
     };
+    // Tüm giriş animasyonlarının segProgress aralıkları en geç 0.470'te
+    // biter (bkz. ctaP) — yani progress >= SETTLE_PROGRESS için
+    // renderDealImage'ın çizdiği HER ŞEY (gradyan/kart/başlık/fiyat/CTA)
+    // progress=1 ile MATEMATİKSEL OLARAK BİREBİR AYNIDIR (idleWave'in çok
+    // hafif "nefes alma" salınımı hariç — bu ihmal edilebilir bir görsel
+    // fark karşılığında devasa bir performans kazancı). Bu yüzden fırsat
+    // sahnesinin ~ikinci yarısı boyunca ağır (10+ gölge bulanıklığı içeren)
+    // tam render yerine ÖNCEDEN hazırlanmış aynı kareyi tekrar tekrar
+    // kullanabiliyoruz — takılmanın en büyük kaynağı buydu.
+    const SETTLE_PROGRESS = 0.5;
 
     return new Promise((resolve, reject) => {
         recorder.ondataavailable = (e: BlobEvent) => { if (e.data.size > 0) chunks.push(e.data); };
@@ -928,9 +949,12 @@ async function recordDealVideo(
 
         const bufferCtx = buffer.getContext('2d')!;
         bufferCtx.imageSmoothingEnabled = true;
-        bufferCtx.imageSmoothingQuality = 'high';
-        const DEAL_SNAPSHOT_PREWARM_MS = 300;
+        bufferCtx.imageSmoothingQuality = 'medium';
         const startTime = performance.now();
+        // Önbelleğe alınacak "durgun" kareyi ARKA PLANDA hemen hesaplamaya
+        // başla — SETTLE_PROGRESS'e ulaşıldığında (ilk ~%50'nin sonunda)
+        // zaten hazır olsun, tekrar beklemeye gerek kalmasın.
+        getDealSnapshot().catch(() => {});
 
         // ── Üretici: en hızlı şekilde arka arkaya arabelleğe çizer ────────────
         // Sabit bir hıza bağlı DEĞİL — bir kareyi bitirir bitirmez hemen
@@ -947,9 +971,16 @@ async function recordDealVideo(
                 if (elapsed >= videoDurationMs) break;
 
                 if (elapsed < dealDurationMs) {
-                    await renderDealImage(buffer, item, null, elapsed / dealDurationMs, cachedImg);
-                    if (elapsed > dealDurationMs - DEAL_SNAPSHOT_PREWARM_MS) {
-                        getDealSnapshot().catch(() => {});
+                    const p = elapsed / dealDurationMs;
+                    if (p >= SETTLE_PROGRESS) {
+                        // Sahne artık "durgun" — ağır tam render yerine
+                        // önbellekteki hazır kareyi kopyala (ucuz).
+                        const settled = await getDealSnapshot();
+                        bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
+                        bufferCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+                        bufferCtx.drawImage(settled, 0, 0);
+                    } else {
+                        await renderDealImage(buffer, item, null, p, cachedImg, 'medium');
                     }
                 } else if (elapsed < dealDurationMs + SLIDE_DURATION_MS) {
                     const flipT = (elapsed - dealDurationMs) / SLIDE_DURATION_MS;
