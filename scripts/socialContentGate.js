@@ -76,7 +76,12 @@ export async function maybeQueueSocialContent(db, apiKey, deal, source = 'social
     if (!(score >= QUEUE_THRESHOLD)) return { queued: false, reason: 'eşik altı' };
 
     try {
-        const caption = await generateCaption(apiKey, { title, newPrice, oldPrice, category, storeName }, db, source);
+        const rawCaption = await generateCaption(apiKey, { title, newPrice, oldPrice, category, storeName }, db, source);
+        // Şeffaflık/uyum için: henüz bir marka ile ücretli reklam anlaşmamız yok,
+        // ama affiliate linkler zaten kullanılıyor — ticari ilişkiyi belirtmek için
+        // her paylaşıma sabit bir #işbirliği etiketi ekleniyor (AI'nın ürettiği
+        // metne dokunmadan, sona eklenir).
+        const caption = `${rawCaption}\n\n#işbirliği`;
         await db.collection('social_content_queue').add({
             discountId, title, imageUrl, category: category || '', storeName: storeName || '',
             newPrice, oldPrice, score, caption,

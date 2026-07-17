@@ -751,7 +751,11 @@ export const generateSocialContentForProduct = async (
         throw new Error(res.ok ? 'AI sunucudan geçersiz yanıt geldi' : `Sunucu hatası (${res.status}) — tekrar deneyin`);
     }
     if (!data.success) throw new Error(data.error || 'İçerik üretilemedi');
-    return { title: data.title, caption: data.caption, voiceover: data.voiceover || '' };
+    // Şeffaflık/uyum için: henüz bir marka ile ücretli reklam anlaşmamız yok, ama
+    // affiliate linkler zaten kullanılıyor — ticari ilişkiyi belirtmek için her
+    // paylaşıma sabit bir #işbirliği etiketi ekleniyor (AI'nın ürettiği metne
+    // dokunmadan, sona eklenir). Önizlemede de aynı hâliyle görünsün diye burada.
+    return { title: data.title, caption: `${data.caption}\n\n#işbirliği`, voiceover: data.voiceover || '' };
 };
 
 /** Seçilen ürün + üretilen içerik doğrudan kuyruğa eklenir. */

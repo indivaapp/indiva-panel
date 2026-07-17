@@ -684,6 +684,19 @@ async function renderDealImage(
         ctx.textBaseline = 'alphabetic';
     });
 
+    // ── Alt footer: uygulamayı çok kısa tanıtan satır ────────────────────────
+    // Görseli/videoyu tek başına gören biri (context'siz) İNDİVA'nın ne
+    // olduğunu anlayabilsin diye — CTA butonunun hemen altında, küçük ve sade.
+    withPop(ctx, CANVAS_W / 2, ctaY + ctaH + 55, ctaP, ctaP, () => {
+        ctx.textAlign = 'center';
+        ctx.font = '600 28px Arial';
+        ctx.fillStyle = 'rgba(255,255,255,0.75)';
+        const footerLines = wrapText(ctx, 'İNDİVA — Online Alışverişte İndirim & Fırsat Uygulaması', CANVAS_W - 140, 2);
+        let fy = ctaY + ctaH + 50;
+        footerLines.forEach(line => { ctx.fillText(line, CANVAS_W / 2, fy); fy += 36; });
+        ctx.textAlign = 'left';
+    });
+
     return loadedImg;
 }
 
