@@ -962,14 +962,21 @@ async function recordDealVideo(
                 } else {
                     bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
                     bufferCtx.drawImage(promoSnapshot, 0, 0);
-                    // Sahne artık tamamen statik — döngüyü CPU'yu boşa
-                    // yakmadan bir sonraki gerçek tik'e kadar rahatlat.
-                    await new Promise(r => setTimeout(r, 1000 / VIDEO_FPS));
                 }
-                // Mikro görev sınırına (await) her turda bir kez uğruyoruz —
-                // tüketici setInterval'i (makro görev) ancak bu noktalarda
-                // araya girebilir, bu yüzden hiçbir zaman yarım çizilmiş bir
-                // arabellek okumaz.
+                // KÖK NEDEN (canlı testte 1. sahnenin tamamen kaybolmasının asıl
+                // sebebi): renderDealImage cachedImg verildiğinde tamamen senkron
+                // çalıştığı için await'i sadece bir MİKRO görev turu bekletiyordu.
+                // Bu döngü peş peşe mikro görevlerle kendini zincirleyince,
+                // tarayıcının olay döngüsü tüm mikro görevleri bitirmeden hiçbir
+                // MAKRO göreve (setInterval/setTimeout — yani aşağıdaki tüketici!)
+                // geçmiyor. Sonuç: üretici, fırsat sahnesini gerçekten çiziyordu
+                // ama tüketici (kayıt/blit) tamamen AÇLIKTAN kilitleniyordu — ta ki
+                // döngü zaten setTimeout kullanan (gerçek makro-görev sınırı olan)
+                // bir noktaya erişene kadar. Bu yüzden video sadece son ~%25'i
+                // (promo sahnesi) içeriyor, ilerleme de oradan başlıyormuş gibi
+                // görünüyordu. Çözüm: HER turda gerçek bir makro-görev sınırına
+                // (setTimeout) uğramak — tüketicinin araya girmesini garantiler.
+                await new Promise(r => setTimeout(r, 0));
             }
         };
         const producerPromise = runProducer();
