@@ -973,14 +973,22 @@ async function recordDealVideo(
         // zaten hazır olsun, tekrar beklemeye gerek kalmasın.
         getDealSnapshot().catch(() => {});
 
-        // ── Üretici: en hızlı şekilde arka arkaya arabelleğe çizer ────────────
-        // Sabit bir hıza bağlı DEĞİL — bir kareyi bitirir bitirmez hemen
-        // güncel elapsed değeriyle bir sonrakine geçer. Yavaş kalırsa sadece
-        // ATLANAN ara zaman kaybolur (bazı ilerleme adımları hiç çizilmez),
-        // asla üst üste binen/yarım kalan bir çizim olmaz — renderDealImage
-        // (cachedImg verildiğinde) tamamen senkron çalıştığı için tüketicinin
-        // (aşağıdaki setInterval) arabellekten okuduğu an her zaman TAM
-        // tamamlanmış bir kare olur, asla yırtık değil.
+        // ── Üretici: TÜKETİCİYLE AYNI HIZDA (VIDEO_FPS) çizer ─────────────────
+        // KANIT (canlı videoyu ffprobe ile kare kare analiz ettikten sonra
+        // bulundu): önceki sürüm üretici döngüsünü "setTimeout(r, 0)" ile
+        // olabildiğince hızlı çalıştırıyordu — tüketicinin ihtiyacından
+        // (saniyede ${VIDEO_FPS} kare) 2-3 KAT daha fazla kare üretip
+        // arabelleğe yazıyordu, ama bunların çoğu tüketici tarafından hiç
+        // okunmadan bir sonraki render tarafından ÜZERİNE YAZILIYORDU — saf
+        // israf. Bu aşırı üretim, gradyan/gölge çizimlerinin yarattığı çöpü
+        // (garbage) gereksiz yere 2-3 katına çıkarıp tarayıcının çöp
+        // toplayıcısını (GC) tetikliyordu — ffprobe analizinde tam olarak
+        // animasyonlu bölümde (ilk ~6.5sn) periyodik 150-330ms'lik donmalar
+        // olarak görüldü. Artık üretici de frameIntervalMs kadar bekliyor —
+        // gereksiz kare üretimi (ve GC baskısı) ortadan kalkıyor, hâlâ
+        // gerçek bir makro-görev sınırı (setTimeout) olduğu için önceki
+        // "1. sahne kaybı" hatası da geri gelmiyor.
+        const frameIntervalMs = 1000 / VIDEO_FPS;
         let stopProducing = false;
         const runProducer = async () => {
             while (!stopProducing) {
@@ -1011,26 +1019,17 @@ async function recordDealVideo(
                     bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
                     bufferCtx.drawImage(promoSnapshot, 0, 0);
                 }
-                // KÖK NEDEN (canlı testte 1. sahnenin tamamen kaybolmasının asıl
-                // sebebi): renderDealImage cachedImg verildiğinde tamamen senkron
-                // çalıştığı için await'i sadece bir MİKRO görev turu bekletiyordu.
-                // Bu döngü peş peşe mikro görevlerle kendini zincirleyince,
-                // tarayıcının olay döngüsü tüm mikro görevleri bitirmeden hiçbir
-                // MAKRO göreve (setInterval/setTimeout — yani aşağıdaki tüketici!)
-                // geçmiyor. Sonuç: üretici, fırsat sahnesini gerçekten çiziyordu
-                // ama tüketici (kayıt/blit) tamamen AÇLIKTAN kilitleniyordu — ta ki
-                // döngü zaten setTimeout kullanan (gerçek makro-görev sınırı olan)
-                // bir noktaya erişene kadar. Bu yüzden video sadece son ~%25'i
-                // (promo sahnesi) içeriyor, ilerleme de oradan başlıyormuş gibi
-                // görünüyordu. Çözüm: HER turda gerçek bir makro-görev sınırına
-                // (setTimeout) uğramak — tüketicinin araya girmesini garantiler.
-                await new Promise(r => setTimeout(r, 0));
+                // Gerçek bir makro-görev sınırına (setTimeout) uğruyoruz — hem
+                // tüketicinin (setInterval) düzenli aralıklarla araya girmesini
+                // garantiliyor (bkz. "1. sahne kaybı" geçmişi) HEM DE üretimi
+                // tüketicinin gerçek ihtiyacıyla (VIDEO_FPS) sınırlayarak
+                // gereksiz kare/çöp üretimini (GC donmalarının kaynağı) önlüyor.
+                await new Promise(r => setTimeout(r, frameIntervalMs));
             }
         };
         const producerPromise = runProducer();
 
         // ── Tüketici: SABİT aralıkla (üretim hızından bağımsız) kaydeder ─────
-        const frameIntervalMs = 1000 / VIDEO_FPS;
         let stopped = false;
         const stopAndResolve = () => {
             if (stopped) return;
