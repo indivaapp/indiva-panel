@@ -681,7 +681,11 @@ export interface SocialContentCandidate {
 
 /** Son ~100 ilan içinden en iyi 10 adayı puanlatır — henüz başlık/caption üretilmez. */
 export const suggestSocialCandidates = async (discounts: Discount[]): Promise<SocialContentCandidate[]> => {
-    const res = await fetch('https://indiva-proxy.vercel.app/api/social-candidates', {
+    // NOT: social-content.ts ile aynı uç (ayrı bir dosya Vercel Hobby planının
+    // 12 fonksiyon sınırını aşıyordu) — body'de "discounts" (dizi) gönderilirse
+    // aday puanlama moduna, "discount" (tekil) gönderilirse tek ürün içerik
+    // üretme moduna girer.
+    const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
