@@ -183,6 +183,7 @@ METRİKLERİ YORUMLARKEN ŞUNLARA DİKKAT ET:
 - aiCost'ta ani bir sıçrama varsa (örn. bugünkü, dünkünün 3+ katı) bunu vurgula
 - discountStats.bySource'taki dağılımsızlık (tek kaynağa aşırı bağımlılık) bir büyüme riski olabilir
 - Veri yoksa/az ise ("henüz veri toplanmaya yeni başladı" gibi) abartılı sonuç çıkarma, dürüstçe "yetersiz veri" de
+- ÖNEMLİ İSTİSNA — auto-brochures kaynağında "approved: 0" ve tüm ürünlerin "skipped" olması TEK BAŞINA bir sorun DEĞİLDİR: bu script mükerrer görselleri Firestore'da zaten var diye atlıyor (dedup), yani o dönemde BİM/A101/ŞOK'tan yeni bir katalog sayfası yayınlanmamış demektir — market aktüelleri genelde haftalık güncellenir, 6-12 saatlik pencerede yeni sayfa çıkmaması normaldir. Bunu SADECE "fetched" sürekli 0 ise veya "failed" > 0 ise gerçek bir sorun olarak işaretle; "approved: 0, skipped: fetched ile aynı sayı" durumunu asla critical/warning olarak raporlama.
 
 GÖREV: Aşağıdaki 3 kategoride analiz yap, HER kategoride bulduğun somut noktaları listele (veri yoksa "gözlemlenen bir sorun yok" yaz, uydurma):
 1. teknik_saglik: kaynak/pipeline sağlığı, hatalar, API kırılmaları

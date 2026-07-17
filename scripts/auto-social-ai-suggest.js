@@ -1,14 +1,18 @@
 /**
  * auto-social-ai-suggest.js — Zamanlı sosyal medya AI önerisi
  *
- * Günde 3 kez (13:00/17:00/21:00 TR'den 3dk önce) son 50 ilanı tarar, AI ile
- * (OpenRouter, deepseek/deepseek-v4-flash) 3 FARKLI ürün + içerik önerisi
- * üretir, Firestore'a yazar ve admin'e ('panel_admin_alerts' topic) push
- * bildirimi gönderir. Panel açıldığında SocialContentManager.tsx bu hazır
- * öneriyi okuyup otomatik gösterir — admin AI çağrısını beklemez.
+ * Günde 3 kez (13:00/17:00/21:00 TR'den 3dk önce) son 100 ilanı tarar, AI ile
+ * (OpenRouter, deepseek/deepseek-v4-flash) kalite/satış potansiyeli/ilgi
+ * çekicilik kriterlerine göre EN İYİ 10 ürünü PUANLAR ve Firestore'a yazar,
+ * admin'e ('panel_admin_alerts' topic) push bildirimi gönderir. Bu aşamada
+ * HİÇBİR ürün için başlık/caption ÜRETİLMEZ — admin panelde bu 10 adaydan
+ * birini seçtiğinde SADECE o ürün için içerik üretilir (10'unun tamamı için
+ * gereksiz AI çağrısı yapılmaz, admin beğenmezse "Yeniden Üret" ile tekrar
+ * dener). Panel açıldığında SocialContentManager.tsx bu hazır aday listesini
+ * okuyup otomatik gösterir.
  *
- * NOT: Seçim/başlık mantığı vercel-proxy/api/social-content.ts ile aynıdır
- * (admin panelindeki "AI ile Öner" butonuyla üretilen içerikle tutarlı olsun
+ * NOT: Puanlama mantığı vercel-proxy/api/social-candidates.ts ile aynıdır
+ * (admin panelindeki "AI ile Öner" butonuyla üretilen listeyle tutarlı olsun
  * diye). Orada değişiklik yaparsanız burada da güncelleyin.
  *
  * Çalıştırma: node scripts/auto-social-ai-suggest.js
@@ -62,13 +66,13 @@ function initFirebase() {
 }
 
 async function fetchRecentDiscounts(db) {
-    const snap = await db.collection('discounts').orderBy('createdAt', 'desc').limit(50).get();
+    const snap = await db.collection('discounts').orderBy('createdAt', 'desc').limit(100).get();
     return snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(d => !d.isAd);
 }
 
-async function suggestThreeProducts(discounts, db) {
+async function suggestTenCandidates(discounts, db) {
     const compact = discounts.map((d, i) => ({
         index: i + 1,
         id: d.id,
@@ -82,34 +86,29 @@ async function suggestThreeProducts(discounts, db) {
         reviewCount: d.reviewCount || '',
     }));
 
-    const prompt = `Sen İNDİVA uygulamasının sosyal medya içerik editörüsün. Aşağıda son 50 indirim ilanı JSON olarak veriliyor.
+    const prompt = `Sen İNDİVA uygulamasının sosyal medya içerik editörüsün. Aşağıda son ${compact.length} indirim ilanı JSON olarak veriliyor.
 
-GÖREV — 3 FARKLI EN İYİ ÜRÜNÜ SEÇ:
-Sosyal medyada (Instagram story/post) paylaşılmaya değer, BİRBİRİNDEN FARKLI 3 ürün seç
-(aynı ürünü iki kez seçme, mümkünse farklı kategorilerden çeşitlilik olsun). Her biri için şu 3
-kriteri birlikte değerlendir:
-- Satış/popülerlik potansiyeli yüksek olmalı (reviewCount, marka tanınırlığı, kategori popülerliği ipucu olarak kullanılabilir)
-- İndirim oranı (discountPercent) yüksek olmalı
-- Geniş kitleye hitap etmeli (çok nadir/niş bir ürün değil, mainstream bir kategori/marka)
+GÖREV — EN İYİ 10 ADAYI PUANLA VE SIRALA:
+Her ürünü sosyal medyada (Instagram story/post) paylaşılmaya UYGUNLUK açısından 1-10 arası puanla.
+Puanlarken şu kriterleri birlikte değerlendir:
+- Satış/popülerlik potansiyeli (reviewCount, marka tanınırlığı, kategori popülerliği ipucu olarak kullanılabilir)
+- İndirim oranı (discountPercent) — yüksek indirim daha çekici
+- İlgi çekicilik — geniş kitleye hitap eden, mainstream bir ürün/kategori/marka (çok nadir/niş bir ürün düşük puan almalı)
 
-Seçtiğin HER ürün için AYRI bir sosyal medya içeriği yaz:
-- "title": max 60 karakter, ÜRÜNÜ TANIMLAYAN dikkat çekici bir başlık (marka/ürün adını içersin).
-  SADECE indirim yüzdesini tekrar eden bir başlık YAZMA (örn. "%37 İndirim!" YANLIŞ) — indirim
-  yüzdesi zaten görselde ayrı bir rozette gösteriliyor, başlık ürünün ne olduğunu anlatmalı.
-- "caption": Instagram story/post metni (2-4 cümle + hashtag'ler), emoji kullanılabilir, sonunda
-  İNDİVA'yı indirmeye teşvik eden bir cümle olsun
+En yüksek puanlı 10 FARKLI ürünü seç (mümkünse farklı kategorilerden çeşitlilik olsun, aynı ürünü iki kez seçme).
+Bu aşamada başlık veya sosyal medya metni YAZMA — sadece puanla ve kısa bir gerekçe ver.
 
 İLANLAR (her ilanın başındaki "index" numarasıyla referans ver, "id" alanını YAZMA/KOPYALAMA):
 ${JSON.stringify(compact)}
 
 SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma. Her "index" MUTLAKA
 yukarıdaki listeden seçtiğin ilanın "index" alanındaki TAM SAYI olmalı (1 ile ${compact.length} arası),
-ve üç index birbirinden FARKLI olmalı:
+"score" 1-10 arası tam sayı olmalı, "candidates" en yüksek puandan en düşüğe sıralı olmalı ve
+en fazla 10 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
 {
-  "picks": [
-    {"index": 1, "reasoning": "neden bu ürünü seçtiğin, kısa Türkçe (max 100 karakter)", "title": "...", "caption": "..."},
-    {"index": 2, "reasoning": "...", "title": "...", "caption": "..."},
-    {"index": 3, "reasoning": "...", "title": "...", "caption": "..."}
+  "candidates": [
+    {"index": 1, "score": 9, "reasoning": "neden bu puanı verdiğin, kısa Türkçe (max 100 karakter)"},
+    {"index": 2, "score": 8, "reasoning": "..."}
   ]
 }`;
 
@@ -119,12 +118,12 @@ ve üç index birbirinden FARKLI olmalı:
             'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
             'Content-Type': 'application/json',
             'HTTP-Referer': 'https://indiva-proxy.vercel.app',
-            'X-Title': 'INDIVA Panel Social Content (Scheduled)',
+            'X-Title': 'INDIVA Panel Social Candidates (Scheduled)',
         },
         body: JSON.stringify({
             model: MODEL,
             messages: [{ role: 'user', content: prompt }],
-            temperature: 0.7,
+            temperature: 0.4,
             usage: { include: true },
         }),
         signal: AbortSignal.timeout(50000),
@@ -142,14 +141,14 @@ ve üç index birbirinden FARKLI olmalı:
     if (!jsonMatch) throw new Error('AI JSON döndürmedi');
 
     const result = JSON.parse(jsonMatch[0]);
-    if (!Array.isArray(result.picks) || result.picks.length === 0) {
+    if (!Array.isArray(result.candidates) || result.candidates.length === 0) {
         throw new Error('AI eksik veri döndürdü');
     }
 
     const seen = new Set();
-    const picks = result.picks
-        .map(p => {
-            const idx = Number(p.index);
+    const candidates = result.candidates
+        .map(c => {
+            const idx = Number(c.index);
             if (!Number.isInteger(idx) || seen.has(idx)) return null;
             const chosen = compact[idx - 1];
             if (!chosen) return null;
@@ -157,9 +156,8 @@ ve üç index birbirinden FARKLI olmalı:
             const fullProduct = discounts[idx - 1];
             return {
                 productId: chosen.id,
-                reasoning: String(p.reasoning || '').slice(0, 200),
-                title: String(p.title || '').slice(0, 100),
-                caption: String(p.caption || ''),
+                score: Math.min(10, Math.max(1, Math.round(Number(c.score)) || 5)),
+                reasoning: String(c.reasoning || '').slice(0, 200),
                 product: {
                     id: fullProduct.id,
                     title: fullProduct.title || '',
@@ -173,10 +171,11 @@ ve üç index birbirinden FARKLI olmalı:
             };
         })
         .filter(Boolean)
-        .slice(0, 3);
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 10);
 
-    if (picks.length === 0) throw new Error('AI geçerli ürün seçemedi');
-    return picks;
+    if (candidates.length === 0) throw new Error('AI geçerli aday seçemedi');
+    return candidates;
 }
 
 async function main() {
@@ -195,19 +194,19 @@ async function main() {
             return;
         }
 
-        const picks = await suggestThreeProducts(discounts, db);
-        console.log(`✅ ${picks.length} ürün önerisi üretildi:`);
-        picks.forEach(p => console.log(`   - ${p.title}`));
+        const candidates = await suggestTenCandidates(discounts, db);
+        console.log(`✅ ${candidates.length} aday puanlandı:`);
+        candidates.forEach(c => console.log(`   - [${c.score}/10] ${c.product.title}`));
 
         await db.collection('social_content_ai_suggestions').doc('latest').set({
-            picks,
+            candidates,
             createdAt: FieldValue.serverTimestamp(),
             opened: false,
         });
 
         await sendAdminNotification(
-            '🤖 3 yeni sosyal medya önerisi hazır!',
-            picks.map(p => p.title).join(' • '),
+            '🤖 10 yeni sosyal medya önerisi hazır!',
+            'Beğendiğiniz ürünü seçin, içeriği o an üretilsin.',
             { type: 'SOCIAL_AI_READY' }
         );
 

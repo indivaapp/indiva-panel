@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     getSocialContentQueue, markSocialContentPosted, getDiscountsForPicker, addManualSocialContent,
-    getRecentDiscountsForSocialAi, suggestSocialContent, addSocialContentFromAiSuggestion,
+    getRecentDiscountsForSocialAi, suggestSocialCandidates, generateSocialContentForProduct, addSocialContentFromAiSuggestion,
     getLatestAiSocialSuggestion, markAiSocialSuggestionOpened,
-    type SocialContentPick,
+    type SocialContentCandidate,
 } from '../services/firebase';
 import { uploadImageFromUrl } from '../services/dealFinder';
 import { Clipboard } from '@capacitor/clipboard';
@@ -1209,15 +1209,24 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     const [pickerQuery, setPickerQuery] = useState('');
     const [creatingId, setCreatingId] = useState<string | null>(null);
 
-    // AI ile sosyal medya içerik önerisi — 3 FARKLI ürün, her biri kendi
-    // görseli/fiyatı/linkiyle birlikte gösterilir (tek ürünün 3 varyasyonu değil).
+    // AI ile sosyal medya içerik önerisi — İKİ AŞAMALI:
+    // 1) suggestSocialCandidates: son 100 ilandan en iyi 10'u PUANLAR (içerik yok).
+    // 2) Admin bunlardan birini seçince generateSocialContentForProduct SADECE
+    //    o ürün için başlık+caption üretir — "Yeniden Üret" aynı fonksiyonu
+    //    tekrar çağırır. Önceden 3 ürünün TAMAMI için içerik üretiliyordu; artık
+    //    sadece admin'in seçtiği TEK ürün için üretiliyor (gereksiz AI çağrısı yok).
     // AiPickProduct: hem canlı "AI ile Öner" akışının (tam Discount) hem de
     // zamanlı öneri kaydının (kısaltılmış ürün özeti) ortak alt kümesi.
-    type AiPickProduct = Pick<Discount, 'id' | 'title' | 'imageUrl' | 'link' | 'category' | 'brand' | 'oldPrice' | 'newPrice'>;
+    type AiPickProduct = Pick<Discount, 'id' | 'title' | 'imageUrl' | 'link' | 'category' | 'brand' | 'oldPrice' | 'newPrice' | 'reviewCount'>;
     const [aiLoading, setAiLoading] = useState(false);
     const [aiError, setAiError] = useState<string | null>(null);
-    const [aiPicks, setAiPicks] = useState<Array<{ pick: SocialContentPick; product: AiPickProduct }>>([]);
+    const [aiCandidates, setAiCandidates] = useState<Array<{ candidate: SocialContentCandidate; product: AiPickProduct }>>([]);
     const [showAiModal, setShowAiModal] = useState(false);
+    // Adım 1: aday listesi (selectedCandidate null). Adım 2: seçilen ürün için içerik üretimi/gösterimi.
+    const [selectedCandidate, setSelectedCandidate] = useState<{ candidate: SocialContentCandidate; product: AiPickProduct } | null>(null);
+    const [generatedContent, setGeneratedContent] = useState<{ title: string; caption: string } | null>(null);
+    const [generatingContent, setGeneratingContent] = useState(false);
+    const [contentError, setContentError] = useState<string | null>(null);
     const [usingPickId, setUsingPickId] = useState<string | null>(null);
 
     const fetchItems = useCallback(async () => {
@@ -1246,9 +1255,9 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                 if (!suggestion || suggestion.opened) return;
                 const ageMin = (Date.now() - suggestion.createdAtMs) / 60000;
                 if (ageMin > 20) return; // 20dk'dan eski — artık güncel sayılmaz
-                const matched = suggestion.picks.map(p => ({ pick: p, product: p.product }));
+                const matched = suggestion.candidates.map(c => ({ candidate: c, product: c.product }));
                 if (matched.length === 0) return;
-                setAiPicks(matched);
+                setAiCandidates(matched);
                 setShowAiModal(true);
                 markAiSocialSuggestionOpened().catch(() => {});
             } catch {
@@ -1282,8 +1291,8 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         : allDiscounts
     ).slice(0, 30);
 
-    // Son 50 ilanı tarayıp AI'a 3 FARKLI ürün + her biri için içerik öneren akış.
-    // Sadece bu buton tıklandığında çalışır — otomatik/periyodik değil.
+    // Son 100 ilanı tarayıp AI'a en iyi 10 adayı puanlatan akış (henüz içerik
+    // üretmez). Sadece bu buton tıklandığında çalışır — otomatik/periyodik değil.
     const handleAiSuggest = async () => {
         setAiLoading(true);
         setAiError(null);
@@ -1293,19 +1302,19 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                 setAiError('Henüz analiz edilecek yeterli ilan yok.');
                 return;
             }
-            const picks = await suggestSocialContent(discounts);
-            const matched = picks
-                .map(pick => {
-                    const product = discounts.find(d => d.id === pick.productId);
-                    return product ? { pick, product } : null;
+            const candidates = await suggestSocialCandidates(discounts);
+            const matched = candidates
+                .map(candidate => {
+                    const product = discounts.find(d => d.id === candidate.productId);
+                    return product ? { candidate, product } : null;
                 })
-                .filter((x): x is { pick: SocialContentPick; product: Discount } => x !== null);
+                .filter((x): x is { candidate: SocialContentCandidate; product: Discount } => x !== null);
 
             if (matched.length === 0) {
                 setAiError('AI geçerli ürün seçemedi, tekrar deneyin.');
                 return;
             }
-            setAiPicks(matched);
+            setAiCandidates(matched);
             setShowAiModal(true);
         } catch (e: any) {
             setAiError(e?.message || 'AI önerisi alınamadı.');
@@ -1314,14 +1323,59 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         }
     };
 
-    const handleUseAiPick = async (item: { pick: SocialContentPick; product: AiPickProduct }) => {
-        setUsingPickId(item.pick.productId);
+    // Adaylardan biri seçildiğinde SADECE o ürün için içerik üretir.
+    const handleSelectCandidate = async (item: { candidate: SocialContentCandidate; product: AiPickProduct }) => {
+        setSelectedCandidate(item);
+        setGeneratedContent(null);
+        setContentError(null);
+        setGeneratingContent(true);
         try {
-            await addSocialContentFromAiSuggestion(item.product, item.pick);
+            const content = await generateSocialContentForProduct(item.product);
+            setGeneratedContent(content);
+        } catch (e: any) {
+            setContentError(e?.message || 'İçerik üretilemedi.');
+        } finally {
+            setGeneratingContent(false);
+        }
+    };
+
+    // Beğenilmeyen içerik için aynı ürüne yeniden içerik ürettirir.
+    const handleRegenerateContent = async () => {
+        if (!selectedCandidate) return;
+        setContentError(null);
+        setGeneratingContent(true);
+        try {
+            const content = await generateSocialContentForProduct(selectedCandidate.product);
+            setGeneratedContent(content);
+        } catch (e: any) {
+            setContentError(e?.message || 'İçerik üretilemedi.');
+        } finally {
+            setGeneratingContent(false);
+        }
+    };
+
+    const handleBackToCandidates = () => {
+        setSelectedCandidate(null);
+        setGeneratedContent(null);
+        setContentError(null);
+    };
+
+    const closeAiModal = () => {
+        setShowAiModal(false);
+        setSelectedCandidate(null);
+        setGeneratedContent(null);
+        setContentError(null);
+    };
+
+    const handleUseAiPick = async () => {
+        if (!selectedCandidate || !generatedContent) return;
+        setUsingPickId(selectedCandidate.candidate.productId);
+        try {
+            await addSocialContentFromAiSuggestion(selectedCandidate.product, generatedContent);
             await fetchItems();
-            setShowAiModal(false);
+            closeAiModal();
         } catch {
-            setAiError('İçerik kuyruğa eklenemedi, tekrar deneyin.');
+            setContentError('İçerik kuyruğa eklenemedi, tekrar deneyin.');
         } finally {
             setUsingPickId(null);
         }
@@ -1453,70 +1507,128 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                 ))}
             </div>
 
-            {/* AI Sosyal Medya İçerik Önerisi Modalı */}
-            {showAiModal && aiPicks.length > 0 && (
-                <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={() => setShowAiModal(false)}>
+            {/* AI Sosyal Medya İçerik Önerisi Modalı — Adım 1: 10 aday, Adım 2: seçilenin içeriği */}
+            {showAiModal && aiCandidates.length > 0 && (
+                <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={closeAiModal}>
                     <div
                         className="bg-gray-800 border border-purple-600/40 rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto p-5"
                         onClick={e => e.stopPropagation()}
                     >
-                        <div className="flex items-center justify-between mb-1">
-                            <h3 className="text-white font-bold text-base flex items-center gap-2">🤖 AI'nın Önerdiği 3 Ürün</h3>
-                            <button onClick={() => setShowAiModal(false)} className="text-gray-400 hover:text-white text-xl leading-none">×</button>
-                        </div>
-                        <p className="text-gray-500 text-xs mb-4">Her kart farklı bir ürün — istediğinizi seçin, önce linkten kontrol edebilirsiniz.</p>
+                        {!selectedCandidate ? (
+                            <>
+                                <div className="flex items-center justify-between mb-1">
+                                    <h3 className="text-white font-bold text-base flex items-center gap-2">🤖 AI'nın Önerdiği {aiCandidates.length} Ürün</h3>
+                                    <button onClick={closeAiModal} className="text-gray-400 hover:text-white text-xl leading-none">×</button>
+                                </div>
+                                <p className="text-gray-500 text-xs mb-4">Beğendiğiniz ürünü seçin — içerik SADECE o ürün için üretilecek.</p>
 
-                        <div className="space-y-3">
-                            {aiPicks.map((item) => {
-                                const discountPct = item.product.oldPrice > item.product.newPrice && item.product.oldPrice > 0
-                                    ? Math.round(((item.product.oldPrice - item.product.newPrice) / item.product.oldPrice) * 100)
-                                    : 0;
-                                return (
-                                    <div key={item.pick.productId} className="bg-gray-900/60 border border-gray-700 hover:border-purple-500/50 rounded-xl p-3 transition-colors">
-                                        <div className="flex items-center gap-3 mb-2.5">
-                                            {item.product.imageUrl && (
-                                                <img src={item.product.imageUrl} alt="" className="w-14 h-14 object-contain bg-white rounded-lg shrink-0" />
-                                            )}
-                                            <div className="min-w-0 flex-1">
-                                                <p className="text-white text-sm font-semibold line-clamp-1">{item.product.title}</p>
-                                                <p className="text-purple-300 text-xs mt-0.5">
-                                                    {Math.floor(item.product.newPrice)} TL
-                                                    {item.product.oldPrice > item.product.newPrice && (
-                                                        <span className="text-gray-500 line-through ml-1.5">{Math.floor(item.product.oldPrice)} TL</span>
+                                <div className="space-y-2.5">
+                                    {aiCandidates.map((item) => {
+                                        const discountPct = item.product.oldPrice > item.product.newPrice && item.product.oldPrice > 0
+                                            ? Math.round(((item.product.oldPrice - item.product.newPrice) / item.product.oldPrice) * 100)
+                                            : 0;
+                                        return (
+                                            <button
+                                                key={item.candidate.productId}
+                                                onClick={() => handleSelectCandidate(item)}
+                                                className="w-full text-left bg-gray-900/60 border border-gray-700 hover:border-purple-500/50 rounded-xl p-3 transition-colors"
+                                            >
+                                                <div className="flex items-center gap-3">
+                                                    {item.product.imageUrl && (
+                                                        <img src={item.product.imageUrl} alt="" className="w-14 h-14 object-contain bg-white rounded-lg shrink-0" />
                                                     )}
-                                                    {discountPct > 0 && <span className="text-green-400 ml-1.5">%{discountPct}</span>}
-                                                </p>
-                                                {item.product.link && (
-                                                    <a
-                                                        href={item.product.link}
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
-                                                        className="text-blue-400 text-[11px] hover:underline"
-                                                        onClick={e => e.stopPropagation()}
-                                                    >
-                                                        🔗 İndirimi linkten kontrol et
-                                                    </a>
-                                                )}
-                                            </div>
-                                        </div>
+                                                    <div className="min-w-0 flex-1">
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-600/30 text-purple-300">
+                                                                ⭐ {item.candidate.score}/10
+                                                            </span>
+                                                            <p className="text-white text-sm font-semibold line-clamp-1">{item.product.title}</p>
+                                                        </div>
+                                                        <p className="text-purple-300 text-xs mt-0.5">
+                                                            {Math.floor(item.product.newPrice)} TL
+                                                            {item.product.oldPrice > item.product.newPrice && (
+                                                                <span className="text-gray-500 line-through ml-1.5">{Math.floor(item.product.oldPrice)} TL</span>
+                                                            )}
+                                                            {discountPct > 0 && <span className="text-green-400 ml-1.5">%{discountPct}</span>}
+                                                        </p>
+                                                        {item.candidate.reasoning && (
+                                                            <p className="text-gray-500 text-[11px] mt-1 italic line-clamp-1">"{item.candidate.reasoning}"</p>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </>
+                        ) : (
+                            <>
+                                <div className="flex items-center justify-between mb-1">
+                                    <button onClick={handleBackToCandidates} className="text-gray-400 hover:text-white text-xs flex items-center gap-1">
+                                        ← Listeye dön
+                                    </button>
+                                    <button onClick={closeAiModal} className="text-gray-400 hover:text-white text-xl leading-none">×</button>
+                                </div>
 
-                                        {item.pick.reasoning && (
-                                            <p className="text-gray-500 text-[11px] mb-2 italic">"{item.pick.reasoning}"</p>
+                                <div className="flex items-center gap-3 my-3 bg-gray-900/60 border border-gray-700 rounded-xl p-3">
+                                    {selectedCandidate.product.imageUrl && (
+                                        <img src={selectedCandidate.product.imageUrl} alt="" className="w-14 h-14 object-contain bg-white rounded-lg shrink-0" />
+                                    )}
+                                    <div className="min-w-0 flex-1">
+                                        <p className="text-white text-sm font-semibold line-clamp-1">{selectedCandidate.product.title}</p>
+                                        <p className="text-purple-300 text-xs mt-0.5">{Math.floor(selectedCandidate.product.newPrice)} TL</p>
+                                        {selectedCandidate.product.link && (
+                                            <a
+                                                href={selectedCandidate.product.link}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="text-blue-400 text-[11px] hover:underline"
+                                            >
+                                                🔗 İndirimi linkten kontrol et
+                                            </a>
                                         )}
+                                    </div>
+                                </div>
 
-                                        <p className="text-white text-sm font-bold mb-1">{item.pick.title}</p>
-                                        <p className="text-gray-300 text-xs mb-2.5 leading-relaxed whitespace-pre-line">{item.pick.caption}</p>
+                                {generatingContent && (
+                                    <div className="flex items-center justify-center gap-2 py-8 text-gray-400 text-sm">
+                                        <span className="w-4 h-4 border-2 border-gray-500 border-t-purple-400 rounded-full animate-spin" />
+                                        İçerik üretiliyor...
+                                    </div>
+                                )}
+
+                                {!generatingContent && contentError && (
+                                    <div className="bg-red-950/50 border border-red-500/20 rounded-xl px-3 py-2.5 mb-3">
+                                        <p className="text-red-300 text-xs">{contentError}</p>
+                                    </div>
+                                )}
+
+                                {!generatingContent && generatedContent && (
+                                    <div className="bg-gray-900/60 border border-gray-700 rounded-xl p-3 mb-3">
+                                        <p className="text-white text-sm font-bold mb-1">{generatedContent.title}</p>
+                                        <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-line">{generatedContent.caption}</p>
+                                    </div>
+                                )}
+
+                                {!generatingContent && (
+                                    <div className="flex gap-2">
                                         <button
-                                            onClick={() => handleUseAiPick(item)}
-                                            disabled={usingPickId !== null}
-                                            className="w-full py-1.5 text-xs font-semibold bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white rounded-lg transition-colors"
+                                            onClick={handleRegenerateContent}
+                                            className="flex-1 py-2 text-xs font-semibold bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg transition-colors"
                                         >
-                                            {usingPickId === item.pick.productId ? 'Ekleniyor…' : 'Bunu Kullan'}
+                                            🔄 Yeniden Üret
+                                        </button>
+                                        <button
+                                            onClick={handleUseAiPick}
+                                            disabled={!generatedContent || usingPickId !== null}
+                                            className="flex-1 py-2 text-xs font-semibold bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white rounded-lg transition-colors"
+                                        >
+                                            {usingPickId ? 'Ekleniyor…' : 'Kuyruğa Ekle'}
                                         </button>
                                     </div>
-                                );
-                            })}
-                        </div>
+                                )}
+                            </>
+                        )}
                     </div>
                 </div>
             )}

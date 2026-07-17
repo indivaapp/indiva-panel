@@ -657,28 +657,31 @@ export const addManualSocialContent = async (discount: Discount): Promise<void> 
 };
 
 // --- AI Sosyal Medya İçerik Önerisi ---
-// Admin tetikler: son 50 ilanı okuyup (tek Firestore sorgusu), OpenRouter proxy'sine
-// gönderir. AI satış potansiyeli + indirim oranı + geniş kitleye hitap etme
-// kriterlerine göre 3 FARKLI ürün seçer, her biri için ayrı başlık+caption üretir.
+// Admin tetikler: son 100 ilanı okuyup (tek Firestore sorgusu), OpenRouter proxy'sine
+// gönderir. AI satış potansiyeli + indirim oranı + ilgi çekicilik kriterlerine
+// göre EN İYİ 10 ürünü PUANLAR (henüz içerik üretmez). Admin bu 10 adaydan
+// birini seçtiğinde generateSocialContentForProduct SADECE o ürün için
+// başlık+caption üretir — beğenilmezse aynı fonksiyon "Yeniden Üret" ile
+// tekrar çağrılır.
 
-/** Sosyal medya AI önerisi için son 50 ilanı getirir (reklamlar hariç). */
-export const getRecentDiscountsForSocialAi = async (): Promise<Discount[]> => {
-    const q = query(collection(db, 'discounts'), orderBy('createdAt', 'desc'), limit(50));
+/** Sosyal medya AI önerisi için son N ilanı getirir (reklamlar hariç, varsayılan 100). */
+export const getRecentDiscountsForSocialAi = async (limitCount: number = 100): Promise<Discount[]> => {
+    const q = query(collection(db, 'discounts'), orderBy('createdAt', 'desc'), limit(limitCount));
     const querySnapshot = await getDocs(q);
     return querySnapshot.docs
         .map(doc => ({ id: doc.id, ...doc.data() } as Discount))
         .filter(d => !d.isAd);
 };
 
-export interface SocialContentPick {
+export interface SocialContentCandidate {
     productId: string;
+    score: number;
     reasoning: string;
-    title: string;
-    caption: string;
 }
 
-export const suggestSocialContent = async (discounts: Discount[]): Promise<SocialContentPick[]> => {
-    const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
+/** Son ~100 ilan içinden en iyi 10 adayı puanlatır — henüz başlık/caption üretilmez. */
+export const suggestSocialCandidates = async (discounts: Discount[]): Promise<SocialContentCandidate[]> => {
+    const res = await fetch('https://indiva-proxy.vercel.app/api/social-candidates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -695,6 +698,39 @@ export const suggestSocialContent = async (discounts: Discount[]): Promise<Socia
         signal: AbortSignal.timeout(65000),
     });
 
+    const raw = await res.text();
+    let data: any;
+    try {
+        data = JSON.parse(raw);
+    } catch {
+        throw new Error(res.ok ? 'AI sunucudan geçersiz yanıt geldi' : `Sunucu hatası (${res.status}) — tekrar deneyin`);
+    }
+    if (!data.success) throw new Error(data.error || 'AI önerisi alınamadı');
+    return data.candidates as SocialContentCandidate[];
+};
+
+/** Seçilen TEK ürün için başlık+caption üretir. "Yeniden Üret" butonu da aynı
+ *  fonksiyonu tekrar çağırır — her seferinde farklı bir sonuç döner. */
+export const generateSocialContentForProduct = async (
+    discount: Pick<Discount, 'id' | 'title' | 'brand' | 'category' | 'oldPrice' | 'newPrice' | 'reviewCount'>
+): Promise<{ title: string; caption: string }> => {
+    const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            discount: {
+                id: discount.id,
+                title: discount.title,
+                brand: discount.brand,
+                category: discount.category,
+                oldPrice: discount.oldPrice,
+                newPrice: discount.newPrice,
+                reviewCount: discount.reviewCount,
+            },
+        }),
+        signal: AbortSignal.timeout(35000),
+    });
+
     // Fonksiyon zaman aşımına uğrarsa Vercel JSON olmayan bir hata sayfası
     // döndürebilir — res.json() burada anlaşılmaz bir "Unexpected token" hatası
     // fırlatmasın diye önce metin olarak okuyup kendimiz parse ediyoruz.
@@ -705,28 +741,25 @@ export const suggestSocialContent = async (discounts: Discount[]): Promise<Socia
     } catch {
         throw new Error(res.ok ? 'AI sunucudan geçersiz yanıt geldi' : `Sunucu hatası (${res.status}) — tekrar deneyin`);
     }
-    if (!data.success) throw new Error(data.error || 'AI önerisi alınamadı');
-    return data.picks as SocialContentPick[];
+    if (!data.success) throw new Error(data.error || 'İçerik üretilemedi');
+    return { title: data.title, caption: data.caption };
 };
 
-/** AI önerisinden seçilen ürün+içerik doğrudan kuyruğa eklenir — generate-caption.ts'i
- *  tekrar çağırmaz, zaten üretilmiş caption'ı kullanır. Hem canlı "AI ile Öner"
- *  akışındaki (tam Discount) hem de zamanlı öneri kaydındaki (kısaltılmış
- *  ürün özeti) veriyle çalışsın diye sadece gerekli alanları kabul eder. */
+/** Seçilen ürün + üretilen içerik doğrudan kuyruğa eklenir. */
 export const addSocialContentFromAiSuggestion = async (
     discount: Pick<Discount, 'id' | 'title' | 'imageUrl' | 'category' | 'brand' | 'newPrice' | 'oldPrice'>,
-    pick: SocialContentPick
+    content: { title: string; caption: string }
 ): Promise<void> => {
     await addDoc(collection(db, 'social_content_queue'), {
         discountId: discount.id,
-        title: pick.title || discount.title,
+        title: content.title || discount.title,
         imageUrl: discount.imageUrl,
         category: discount.category || '',
         storeName: discount.brand || '',
         newPrice: discount.newPrice,
         oldPrice: discount.oldPrice,
         score: 10,
-        caption: pick.caption,
+        caption: content.caption,
         source: 'manual',
         status: 'pending',
         createdAt: serverTimestamp(),
@@ -737,9 +770,9 @@ export const addSocialContentFromAiSuggestion = async (
 // Günde 3 kez (13:00/17:00/21:00 TR'den 3dk önce) sunucu tarafında üretilip
 // 'social_content_ai_suggestions/latest' dokümanına yazılır + admin'e push
 // bildirimi gönderilir. Panel açıldığında bu doküman okunur — AI çağrısı
-// tekrar yapılmaz, hazır sonuç gösterilir.
+// tekrar yapılmaz, hazır aday listesi gösterilir (henüz içerik üretilmemiştir).
 
-export interface StoredSocialContentPick extends SocialContentPick {
+export interface StoredSocialContentCandidate extends SocialContentCandidate {
     product: {
         id: string; title: string; imageUrl: string; link: string;
         category: string; brand: string; oldPrice: number; newPrice: number;
@@ -747,7 +780,7 @@ export interface StoredSocialContentPick extends SocialContentPick {
 }
 
 export const getLatestAiSocialSuggestion = async (): Promise<{
-    picks: StoredSocialContentPick[];
+    candidates: StoredSocialContentCandidate[];
     createdAtMs: number;
     opened: boolean;
 } | null> => {
@@ -755,7 +788,7 @@ export const getLatestAiSocialSuggestion = async (): Promise<{
     if (!snap.exists()) return null;
     const data = snap.data() as any;
     return {
-        picks: data.picks || [],
+        candidates: data.candidates || [],
         createdAtMs: data.createdAt?.toMillis ? data.createdAt.toMillis() : 0,
         opened: !!data.opened,
     };

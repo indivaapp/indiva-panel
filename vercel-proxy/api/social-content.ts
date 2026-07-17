@@ -2,15 +2,15 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { trackOpenRouterUsage } from './_aiUsageTracker';
 
 /**
- * Social Content — Son 50 ilan içinden sosyal medya için en iyi 3 FARKLI ürünü
- * seçer, her biri için ayrı bir başlık/caption üretir. Admin bu 3 öneriden
- * istediğini seçip kuyruğa ekler.
- * OpenRouter (deepseek/deepseek-v4-flash) kullanır — generate-caption.ts ile
- * aynı sağlayıcı/model: ucuz, Türkçe satış diline yatkın, paylaşılan Gemini
- * kotasını yormaz (bkz. generate-caption.ts başındaki not).
+ * Social Content — Admin'in social-candidates.ts'ten SEÇTİĞİ TEK bir ürün için
+ * sosyal medya başlığı + caption üretir. Önceden bu uç 3 ürünü BİRLİKTE seçip
+ * her biri için içerik üretiyordu — artık seçim ayrı bir adım (social-candidates.ts),
+ * bu uç sadece zaten seçilmiş TEK ürünü içerikleştiriyor. "Yeniden Üret"
+ * butonu da aynı ucu tekrar çağırır (temperature yüksek olduğu için her
+ * seferinde farklı bir sonuç gelir).
  *
- * POST { discounts: Array<{ id, title, brand, category, oldPrice, newPrice, reviewCount, link, imageUrl }> }
- * → { success, picks: [{ productId, reasoning, title, caption }, ...] } (3 farklı ürün)
+ * POST { discount: { id, title, brand, category, oldPrice, newPrice, reviewCount } }
+ * → { success, title, caption }
  */
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
@@ -31,40 +31,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(500).json({ success: false, error: 'OPENROUTER_API_KEY tanımlı değil' });
     }
 
-    const { discounts } = req.body || {};
-    if (!Array.isArray(discounts) || discounts.length === 0) {
-        return res.status(400).json({ success: false, error: 'discounts listesi boş olamaz' });
+    const { discount } = req.body || {};
+    if (!discount || !discount.title) {
+        return res.status(400).json({ success: false, error: 'discount alanı (title dahil) zorunlu' });
     }
 
-    // NOT: AI'a Firestore doküman ID'sini (uzun/rastgele string) birebir geri
-    // ürettirmiyoruz — LLM'ler bunu güvenilir kopyalayamıyor (deepseek-v4-flash'ta
-    // sıkça hatalı/uydurma ID döndürüyordu). Bunun yerine listedeki sıra numarasını
-    // ("index") seçtiriyoruz; gerçek ID'yi (ve link/imageUrl'i) burada biz bu
-    // index'ten buluyoruz — AI'nın uydurmasına hiç gerek kalmıyor.
-    const compact = discounts.slice(0, 50).map((d: any, i: number) => ({
-        index: i + 1,
-        id: d.id,
-        title: d.title,
-        brand: d.brand,
-        category: d.category,
-        oldPrice: d.oldPrice || 0,
-        newPrice: d.newPrice || 0,
-        discountPercent: d.oldPrice > d.newPrice && d.oldPrice > 0
-            ? Math.round(((d.oldPrice - d.newPrice) / d.oldPrice) * 100) : 0,
-        reviewCount: d.reviewCount || '',
-    }));
+    const discountPercent = discount.oldPrice > discount.newPrice && discount.oldPrice > 0
+        ? Math.round(((discount.oldPrice - discount.newPrice) / discount.oldPrice) * 100)
+        : 0;
 
-    const prompt = `Sen İNDİVA uygulamasının sosyal medya içerik editörüsün. Aşağıda son 50 indirim ilanı JSON olarak veriliyor.
+    const prompt = `Sen İNDİVA uygulamasının sosyal medya içerik editörüsün. Aşağıdaki TEK ürün için
+Instagram story/post içeriği yaz.
 
-GÖREV — 3 FARKLI EN İYİ ÜRÜNÜ SEÇ:
-Sosyal medyada (Instagram story/post) paylaşılmaya değer, BİRBİRİNDEN FARKLI 3 ürün seç
-(aynı ürünü iki kez seçme, mümkünse farklı kategorilerden çeşitlilik olsun). Her biri için şu 3
-kriteri birlikte değerlendir:
-- Satış/popülerlik potansiyeli yüksek olmalı (reviewCount, marka tanınırlığı, kategori popülerliği ipucu olarak kullanılabilir)
-- İndirim oranı (discountPercent) yüksek olmalı
-- Geniş kitleye hitap etmeli (çok nadir/niş bir ürün değil, mainstream bir kategori/marka)
+ÜRÜN:
+${JSON.stringify({
+        title: discount.title,
+        brand: discount.brand || '',
+        category: discount.category || '',
+        oldPrice: discount.oldPrice || 0,
+        newPrice: discount.newPrice || 0,
+        discountPercent,
+        reviewCount: discount.reviewCount || '',
+    })}
 
-Seçtiğin HER ürün için AYRI bir sosyal medya içeriği yaz:
+ÜRETMEN GEREKENLER:
 - "title": max 60 karakter, ÜRÜNÜ TANIMLAYAN dikkat çekici bir başlık (marka/ürün adını içersin).
   SADECE indirim yüzdesini tekrar eden bir başlık YAZMA (örn. "%37 İndirim!" YANLIŞ) — indirim
   yüzdesi zaten görselde ayrı bir rozette gösteriliyor, başlık ürünün ne olduğunu anlatmalı.
@@ -72,19 +62,8 @@ Seçtiğin HER ürün için AYRI bir sosyal medya içeriği yaz:
 - "caption": Instagram story/post metni (2-4 cümle + hashtag'ler), emoji kullanılabilir, sonunda
   İNDİVA'yı indirmeye teşvik eden bir cümle olsun
 
-İLANLAR (her ilanın başındaki "index" numarasıyla referans ver, "id" alanını YAZMA/KOPYALAMA):
-${JSON.stringify(compact)}
-
-SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma. Her "index" MUTLAKA
-yukarıdaki listeden seçtiğin ilanın "index" alanındaki TAM SAYI olmalı (1 ile ${compact.length} arası),
-ve üç index birbirinden FARKLI olmalı:
-{
-  "picks": [
-    {"index": 1, "reasoning": "neden bu ürünü seçtiğin, kısa Türkçe (max 100 karakter)", "title": "...", "caption": "..."},
-    {"index": 2, "reasoning": "...", "title": "...", "caption": "..."},
-    {"index": 3, "reasoning": "...", "title": "...", "caption": "..."}
-  ]
-}`;
+SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma:
+{"title": "...", "caption": "..."}`;
 
     try {
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -98,14 +77,12 @@ ve üç index birbirinden FARKLI olmalı:
             body: JSON.stringify({
                 model: MODEL,
                 messages: [{ role: 'user', content: prompt }],
-                temperature: 0.7,
+                // "Yeniden Üret" her seferinde farklı bir sonuç versin diye
+                // önceki 3'lü-seçim ucundan (0.7) biraz daha yüksek sıcaklık.
+                temperature: 0.85,
                 usage: { include: true },
             }),
-            // Fonksiyonun toplam süre sınırı (vercel.json: 60sn) içinde kalacak
-            // şekilde mümkün olduğunca fazla pay bırakıyoruz — deepseek-v4-flash
-            // 50 ürünlük bu görevde bazen 45sn'yi aşabiliyor, önceki 45sn sınırı
-            // aralıklı "Zaman aşımı" hatalarına yol açıyordu.
-            signal: AbortSignal.timeout(55000),
+            signal: AbortSignal.timeout(30000),
         });
 
         if (!response.ok) {
@@ -121,36 +98,14 @@ ve üç index birbirinden FARKLI olmalı:
             return res.status(502).json({ success: false, error: 'AI JSON döndürmedi' });
         }
 
-        const result = JSON.parse(jsonMatch[0]);
-        if (!Array.isArray(result.picks) || result.picks.length === 0) {
-            return res.status(502).json({ success: false, error: 'AI eksik veri döndürdü' });
+        const parsed = JSON.parse(jsonMatch[0]);
+        const title = String(parsed.title || '').slice(0, 100);
+        const caption = String(parsed.caption || '');
+        if (!title || !caption) {
+            return res.status(502).json({ success: false, error: 'AI eksik içerik döndürdü' });
         }
 
-        // Her pick'i doğrula + gerçek ürün verisiyle (id/link/imageUrl) eşleştir.
-        // Geçersiz index'ler sessizce elenir; en az 1 geçerli pick kalmalı.
-        const seenIndices = new Set<number>();
-        const picks = result.picks
-            .map((p: any) => {
-                const idx = Number(p.index);
-                if (!Number.isInteger(idx) || seenIndices.has(idx)) return null;
-                const chosen = compact[idx - 1];
-                if (!chosen) return null;
-                seenIndices.add(idx);
-                return {
-                    productId: chosen.id,
-                    reasoning: String(p.reasoning || '').slice(0, 200),
-                    title: String(p.title || '').slice(0, 100),
-                    caption: String(p.caption || ''),
-                };
-            })
-            .filter(Boolean)
-            .slice(0, 3);
-
-        if (picks.length === 0) {
-            return res.status(502).json({ success: false, error: 'AI geçerli ürün seçemedi' });
-        }
-
-        return res.status(200).json({ success: true, picks });
+        return res.status(200).json({ success: true, title, caption });
     } catch (err: any) {
         if (err?.name === 'AbortError' || err?.name === 'TimeoutError') {
             return res.status(504).json({ success: false, error: 'Zaman aşımı' });

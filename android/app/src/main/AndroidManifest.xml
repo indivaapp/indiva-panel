@@ -31,14 +31,31 @@
 
         </activity>
 
-        <!-- ShareActivity: görsel paylaşımı için şeffaf overlay penceresi -->
+        <!-- ShareActivity: görsel paylaşımı için şeffaf overlay penceresi (Story) -->
         <activity
             android:name=".ShareActivity"
             android:theme="@style/AppTheme.ShareOverlay"
             android:exported="true"
             android:noHistory="true"
             android:excludeFromRecents="true"
-            android:label="İNDİVA Panel">
+            android:label="İNDİVA - Story Ekle">
+
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+
+        </activity>
+
+        <!-- ProductShareActivity: görsel paylaşımı için şeffaf overlay penceresi (AI ile Ürün) -->
+        <activity
+            android:name=".ProductShareActivity"
+            android:theme="@style/AppTheme.ShareOverlay"
+            android:exported="true"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:label="İNDİVA - Ürün Ekle">
 
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

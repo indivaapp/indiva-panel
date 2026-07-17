@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Suspense, lazy } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
 
 import type { ViewType } from './types';
@@ -14,6 +14,7 @@ declare global {
             finishActivity:  () => void;
         };
         INDIVAShareMode?: { isShareMode: () => boolean };
+        INDIVAProductShareMode?: { isShareMode: () => boolean };
     }
 }
 
@@ -30,6 +31,7 @@ import BottomNav from './components/BottomNav';
 import Dashboard from './components/Dashboard';
 import Login from './components/Login';
 import QuickShareOverlay from './components/QuickShareOverlay';
+import QuickProductShareOverlay from './components/QuickProductShareOverlay';
 
 const DiscountManager = lazy(() => import('./components/DiscountManager'));
 const BrochureManager = lazy(() => import('./components/BrochureManager'));
@@ -64,9 +66,24 @@ const SYSTEM_KEY = 'indiva_system_active';
 // ShareActivity tarafından yüklendiyse: sadece QuickShareOverlay göster
 // INDIVAShareMode interface'i ShareActivity.java tarafından inject edilir
 const IS_SHARE_MODE = typeof (window as any).INDIVAShareMode !== 'undefined';
+// ProductShareActivity tarafından yüklendiyse: sadece QuickProductShareOverlay göster
+// INDIVAProductShareMode interface'i ProductShareActivity.java tarafından inject edilir
+const IS_PRODUCT_SHARE_MODE = typeof (window as any).INDIVAProductShareMode !== 'undefined';
 
 const App: React.FC = () => {
-    const [activeView, setActiveView] = useState<ViewType>('dashboard');
+    // ── Navigasyon geçmişi (Android donanım geri tuşu için) ────────────────────
+    // Ham useState setter'ı dışarı vermiyoruz — setActiveView, her gerçek görünüm
+    // değişiminde eski görünümü viewHistory yığınına ekleyen bir sarmalayıcı.
+    // Böylece geri tuşuna basıldığında yığından bir önceki görünüme dönebiliyoruz
+    // (önceden hiç dinlenmiyordu, geri tuşu uygulamadan çıkıyordu/hiçbir şey yapmıyordu).
+    const [activeView, setActiveViewState] = useState<ViewType>('dashboard');
+    const [viewHistory, setViewHistory] = useState<ViewType[]>([]);
+    const setActiveView = useCallback((view: ViewType) => {
+        setActiveViewState(prev => {
+            if (prev !== view) setViewHistory(h => [...h, prev]);
+            return view;
+        });
+    }, []);
     const [user, setUser] = useState<import('firebase/auth').User | null>(null);
     const [authChecked, setAuthChecked] = useState(false);
     const authReady = !!user;
@@ -94,6 +111,14 @@ const App: React.FC = () => {
     const [sharedLink, setSharedLink]           = useState<string | null>(null);
     const [sharedStoryData, setSharedStoryData] = useState<SharedStoryData | null>(null);
     const [pendingAiAnalystReportId, setPendingAiAnalystReportId] = useState<string | null>(null);
+
+    // Sayfa geçişlerinde kaydırma konumunu sıfırlar — önceden aynı <main>
+    // elementi yeniden kullanıldığı için yeni sayfa, önceki sayfadan kalan
+    // kaydırma konumuyla (sayfanın ortasından) açılıyordu.
+    const mainRef = useRef<HTMLElement>(null);
+    useEffect(() => {
+        mainRef.current?.scrollTo(0, 0);
+    }, [activeView]);
 
     // ── PWA Share Target overlay ───────────────────────────────────────────────
     // ?share=1 parametresi Service Worker'dan yönlendirme sonucu gelir
@@ -131,9 +156,9 @@ const App: React.FC = () => {
         setActiveView('dealFinder');
     }, []);
 
-    // ShareActivity modunda tüm auth/subscriptions atlanır
+    // ShareActivity/ProductShareActivity modunda tüm auth/subscriptions atlanır
     useEffect(() => {
-        if (IS_SHARE_MODE) return;
+        if (IS_SHARE_MODE || IS_PRODUCT_SHARE_MODE) return;
         // Yönetici oturumunu dinle. Oturum kalıcı; bir kez giriş yetince hatırlanır.
         const unsub = watchUser((u) => {
             setUser(u);
@@ -144,8 +169,29 @@ const App: React.FC = () => {
 
     // Admin'e özel push bildirimleri (zamanlı AI önerisi, kritik hata uyarıları vb.)
     useEffect(() => {
-        if (IS_SHARE_MODE) return;
+        if (IS_SHARE_MODE || IS_PRODUCT_SHARE_MODE) return;
         initializePushNotifications().catch(() => {});
+    }, []);
+
+    // ── Android donanım geri tuşu ────────────────────────────────────────────
+    // Önceden hiç dinlenmiyordu — geri tuşu ya hiçbir şey yapmıyordu ya da
+    // uygulamayı kapatıyordu. Artık viewHistory yığınına göre bir önceki
+    // görünüme dönüyor; yığın boşsa (kök ekran, Dashboard) uygulamadan çıkar.
+    useEffect(() => {
+        if (IS_SHARE_MODE || IS_PRODUCT_SHARE_MODE) return;
+        const listenerPromise = CapacitorApp.addListener('backButton', () => {
+            setViewHistory(h => {
+                if (h.length === 0) {
+                    CapacitorApp.exitApp();
+                    return h;
+                }
+                const next = [...h];
+                const prevView = next.pop()!;
+                setActiveViewState(prevView);
+                return next;
+            });
+        });
+        return () => { listenerPromise.then(l => l.remove()); };
     }, []);
 
     // Push bildirime tıklanınca (services/pushNotificationService.ts dispatch eder)
@@ -310,6 +356,11 @@ const App: React.FC = () => {
         };
     }, [authReady]);
 
+    // ProductShareActivity: sadece QuickProductShareOverlay göster, tüm app'i atla
+    if (IS_PRODUCT_SHARE_MODE) {
+        return <QuickProductShareOverlay />;
+    }
+
     // ShareActivity: sadece QuickShareOverlay göster, tüm app'i atla
     if (IS_SHARE_MODE) {
         return <QuickShareOverlay />;
@@ -429,7 +480,7 @@ const App: React.FC = () => {
                     )}
 
                     {/* Kaydırılabilir içerik alanı */}
-                    <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-32 md:pb-8">
+                    <main ref={mainRef} className="flex-1 overflow-y-auto p-4 md:p-8 pb-32 md:pb-8">
                         <Suspense fallback={<ViewLoadingFallback />}>
                             {renderContent()}
                         </Suspense>
