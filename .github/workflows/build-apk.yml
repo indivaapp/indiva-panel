@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-17-7 (video takılma düzeltmesi + sahne süreleri manuel ayarlanabilir)
+# manuel tetikleme: 2026-07-17-8 (video takılma sorunu kökten çözüldü — manuel kare besleme)
 
 on:
   workflow_dispatch:
