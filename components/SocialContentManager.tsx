@@ -810,12 +810,18 @@ function easeInOutCubic(t: number): number {
 // canvas.captureStream + MediaRecorder ile kaydeder. Sırasıyla: fırsat sahnesi
 // (mevcut animasyon) → sayfa çevirme geçişi → "daha fazla fırsat" promo sayfası.
 // MP4 (H.264) destekleniyorsa onu, yoksa WebM'e düşer.
-// Toplam 20sn: ilk sayfa 14sn, geçiş 0.6sn, ikinci sayfa ~5.4sn (~6sn).
-const DEAL_DURATION_MS = 14000;
+// Varsayılan: ilk sayfa 14sn, geçiş 0.6sn, ikinci sayfa 5.4sn (~20sn toplam).
+// Admin bu iki süreyi (ilk/ikinci sayfa) her video için ayrı ayarlayabilir —
+// bkz. SocialContentCard'daki dealSec/promoSec state'i.
+const DEAL_DURATION_MS_DEFAULT = 14000;
 const SLIDE_DURATION_MS = 600;
-const PROMO_DURATION_MS = 5400;
-const VIDEO_DURATION_MS = DEAL_DURATION_MS + SLIDE_DURATION_MS + PROMO_DURATION_MS;
-const VIDEO_FPS = 60;
+const PROMO_DURATION_MS_DEFAULT = 5400;
+// NOT: 60fps'te bu kadar ağır bir çizimi (gradyan/gölge/metin/1080x1920) her
+// karede yetiştirmek WebView'de (telefonda) genelde mümkün olmuyordu —
+// captureStream(60) yetişemeyen kareleri bir öncekiyle dolduruyor, bu da
+// oynatımda "takılma" olarak görünüyordu. 30fps, bu çizim karmaşıklığı için
+// gerçekçi bir hedef; kare başına bütçe iki katına çıkıyor (16.6ms → 33ms).
+const VIDEO_FPS = 30;
 
 function pickSupportedMimeType(): string {
     const candidates = [
@@ -836,7 +842,10 @@ async function recordDealVideo(
     item: SocialContentItem,
     cachedImg: HTMLImageElement | null,
     onProgress?: (fraction: number) => void,
+    dealDurationMs: number = DEAL_DURATION_MS_DEFAULT,
+    promoDurationMs: number = PROMO_DURATION_MS_DEFAULT,
 ): Promise<Blob> {
+    const videoDurationMs = dealDurationMs + SLIDE_DURATION_MS + promoDurationMs;
     if (typeof (canvas as any).captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
         throw new Error('Bu tarayıcı video kaydını desteklemiyor.');
     }
@@ -911,34 +920,43 @@ async function recordDealVideo(
         bufferCtx.imageSmoothingQuality = 'high';
         const DEAL_SNAPSHOT_PREWARM_MS = 300;
 
+        // Bir önceki karenin render+blit'i bitmeden yenisini BAŞLATMIYORUZ —
+        // aksi halde aynı arabellek canvas'ına iki async çizim üst üste binip
+        // yarım çizilmiş/yırtık kareler kaydedilebiliyordu (takılma/titremenin
+        // asıl nedeni). Cihaz bir kareyi yetiştiremezse o an sadece atlanır,
+        // bir sonraki rAF tick'inde GÜNCEL elapsed değeriyle devam edilir.
+        let rendering = false;
         const startTime = performance.now();
         const tick = () => {
             const elapsed = performance.now() - startTime;
-            onProgress?.(Math.min(1, elapsed / VIDEO_DURATION_MS));
+            onProgress?.(Math.min(1, elapsed / videoDurationMs));
 
-            let renderPromise: Promise<unknown>;
-            if (elapsed < DEAL_DURATION_MS) {
-                renderPromise = renderDealImage(buffer, item, null, elapsed / DEAL_DURATION_MS, cachedImg);
-                if (elapsed > DEAL_DURATION_MS - DEAL_SNAPSHOT_PREWARM_MS) {
-                    getDealSnapshot().catch(() => {});
-                }
-            } else if (elapsed < DEAL_DURATION_MS + SLIDE_DURATION_MS) {
-                const flipT = (elapsed - DEAL_DURATION_MS) / SLIDE_DURATION_MS;
-                renderPromise = getDealSnapshot().then((deal) => {
-                    const offset = easeInOutCubic(flipT) * CANVAS_W;
+            if (!rendering) {
+                rendering = true;
+                let renderPromise: Promise<unknown>;
+                if (elapsed < dealDurationMs) {
+                    renderPromise = renderDealImage(buffer, item, null, elapsed / dealDurationMs, cachedImg);
+                    if (elapsed > dealDurationMs - DEAL_SNAPSHOT_PREWARM_MS) {
+                        getDealSnapshot().catch(() => {});
+                    }
+                } else if (elapsed < dealDurationMs + SLIDE_DURATION_MS) {
+                    const flipT = (elapsed - dealDurationMs) / SLIDE_DURATION_MS;
+                    renderPromise = getDealSnapshot().then((deal) => {
+                        const offset = easeInOutCubic(flipT) * CANVAS_W;
+                        bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
+                        bufferCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+                        bufferCtx.drawImage(deal, -offset, 0);
+                        bufferCtx.drawImage(promoSnapshot, CANVAS_W - offset, 0);
+                    });
+                } else {
                     bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
-                    bufferCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-                    bufferCtx.drawImage(deal, -offset, 0);
-                    bufferCtx.drawImage(promoSnapshot, CANVAS_W - offset, 0);
-                });
-            } else {
-                bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
-                bufferCtx.drawImage(promoSnapshot, 0, 0);
-                renderPromise = Promise.resolve();
+                    bufferCtx.drawImage(promoSnapshot, 0, 0);
+                    renderPromise = Promise.resolve();
+                }
+                renderPromise.then(blit).catch(() => {}).finally(() => { rendering = false; });
             }
-            renderPromise.then(blit).catch(() => {});
 
-            if (elapsed < VIDEO_DURATION_MS) {
+            if (elapsed < videoDurationMs) {
                 requestAnimationFrame(tick);
             } else {
                 // Son karenin de kaydedilmesi için kısa bir bekleme sonrası durdur
@@ -970,6 +988,11 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
     const [videoExt, setVideoExt] = useState<'mp4' | 'webm'>('mp4');
     const videoBlobRef = useRef<Blob | null>(null);
     const [shareError, setShareError] = useState<'image' | 'video' | null>(null);
+    // Video iki sahneden oluşuyor: ilk sahne ürünü, ikinci sahne uygulamayı
+    // tanıtıyor. Her video için ayrı ayarlanabilsin diye kart bazında state —
+    // saniye cinsinden, kayıt sırasında ms'ye çevrilip recordDealVideo'ya verilir.
+    const [dealSec, setDealSec] = useState(Math.round(DEAL_DURATION_MS_DEFAULT / 1000));
+    const [promoSec, setPromoSec] = useState(Math.round(PROMO_DURATION_MS_DEFAULT / 1000));
 
     useEffect(() => {
         let cancelled = false;
@@ -1047,7 +1070,9 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
         setVideoState('recording');
         setVideoProgress(0);
         try {
-            const blob = await recordDealVideo(canvas, item, cachedImgRef.current, setVideoProgress);
+            const dealMs = Math.max(3, Math.min(60, dealSec)) * 1000;
+            const promoMs = Math.max(3, Math.min(60, promoSec)) * 1000;
+            const blob = await recordDealVideo(canvas, item, cachedImgRef.current, setVideoProgress, dealMs, promoMs);
             videoBlobRef.current = blob;
             const url = URL.createObjectURL(blob);
             setVideoUrl(url);
@@ -1181,6 +1206,34 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
                         📤 Görseli Paylaş
                     </button>
 
+                    {videoState !== 'ready' && (
+                        <div className="w-full flex items-center gap-3 bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2">
+                            <label className="flex items-center gap-1.5 text-[11px] text-gray-400 flex-1">
+                                1. Ekran (sn)
+                                <input
+                                    type="number"
+                                    min={3}
+                                    max={60}
+                                    value={dealSec}
+                                    disabled={videoState === 'recording'}
+                                    onChange={e => setDealSec(Number(e.target.value) || 0)}
+                                    className="w-14 bg-gray-800 border border-gray-600 rounded-lg px-1.5 py-1 text-white text-xs text-center disabled:opacity-50"
+                                />
+                            </label>
+                            <label className="flex items-center gap-1.5 text-[11px] text-gray-400 flex-1">
+                                2. Ekran (sn)
+                                <input
+                                    type="number"
+                                    min={3}
+                                    max={60}
+                                    value={promoSec}
+                                    disabled={videoState === 'recording'}
+                                    onChange={e => setPromoSec(Number(e.target.value) || 0)}
+                                    className="w-14 bg-gray-800 border border-gray-600 rounded-lg px-1.5 py-1 text-white text-xs text-center disabled:opacity-50"
+                                />
+                            </label>
+                        </div>
+                    )}
                     {videoState !== 'ready' && (
                         <button
                             onClick={handleCreateVideo}
