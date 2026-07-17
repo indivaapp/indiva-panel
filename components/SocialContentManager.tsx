@@ -866,7 +866,31 @@ async function recordDealVideo(
     buffer.width = CANVAS_W;
     buffer.height = CANVAS_H;
 
-    const stream: MediaStream = (canvas as any).captureStream(VIDEO_FPS);
+    // ── Manuel kare besleme (captureStream(0) + track.requestFrame()) ────────
+    // KÖK NEDEN (derin analiz sonrası): captureStream(fps) modu, kareyi
+    // canvas her "kirlendiğinde" (drawImage çağrıldığında) otomatik yakalıyor.
+    // Ama bizim çizimimiz her karede DEĞİŞKEN sürede tamamlanıyor (ağır
+    // gradyan/gölge/metin işi) — bu da videoya gömülen kare ZAMAN DAMGALARININ
+    // düzensiz (jitter'lı) olmasına yol açıyor. Kayıt/oynatıcı tarafında bu
+    // düzensiz zamanlama, kareler bozulmasa bile TAKILMA/SEĞİRME olarak
+    // algılanıyor — önceki düzeltme (üst üste binen çizimi engelleme + 30fps)
+    // bozuk kareleri önledi ama bu zamanlama sorununu çözmedi.
+    // ÇÖZÜM: captureStream(0) ile OTOMATİK yakalamayı tamamen kapatıp, çıktıyı
+    // SABİT aralıklı bir setInterval ("tüketici") üzerinden manuel olarak
+    // track.requestFrame() ile besliyoruz. Asıl (pahalı) çizim ayrı, bağımsız
+    // bir döngüde ("üretici") arka planda en hızlı şekilde arabelleğe
+    // yazılmaya devam ediyor — tüketici her tik'te arabellekte NE VARSA onu
+    // (üretici geride kalsa bile) sabit, öngörülebilir aralıklarla kaydediyor.
+    // Böylece kayıttaki kare zamanlaması üretimin hızından tamamen bağımsız
+    // ve kusursuz düzenli oluyor; üretici yetişemezse tek etkisi ara sıra aynı
+    // karenin bir tık daha kaydedilmesi (görünmez), asla düzensiz zamanlama
+    // veya yırtık kare değil.
+    const supportsManualCapture = typeof (canvas as any).captureStream === 'function';
+    const stream: MediaStream = supportsManualCapture
+        ? (canvas as any).captureStream(0)
+        : (canvas as any).captureStream(VIDEO_FPS);
+    const captureTrack = stream.getVideoTracks()[0] as (MediaStreamTrack & { requestFrame?: () => void });
+    const manualMode = typeof captureTrack?.requestFrame === 'function';
     const mimeType = pickSupportedMimeType();
     const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 12_000_000 });
     const chunks: Blob[] = [];
@@ -914,57 +938,79 @@ async function recordDealVideo(
             resolve(new Blob(chunks, { type: mimeType }));
         };
 
-        const blit = () => visibleCtx.drawImage(buffer, 0, 0);
         const bufferCtx = buffer.getContext('2d')!;
         bufferCtx.imageSmoothingEnabled = true;
         bufferCtx.imageSmoothingQuality = 'high';
         const DEAL_SNAPSHOT_PREWARM_MS = 300;
-
-        // Bir önceki karenin render+blit'i bitmeden yenisini BAŞLATMIYORUZ —
-        // aksi halde aynı arabellek canvas'ına iki async çizim üst üste binip
-        // yarım çizilmiş/yırtık kareler kaydedilebiliyordu (takılma/titremenin
-        // asıl nedeni). Cihaz bir kareyi yetiştiremezse o an sadece atlanır,
-        // bir sonraki rAF tick'inde GÜNCEL elapsed değeriyle devam edilir.
-        let rendering = false;
         const startTime = performance.now();
-        const tick = () => {
-            const elapsed = performance.now() - startTime;
-            onProgress?.(Math.min(1, elapsed / videoDurationMs));
 
-            if (!rendering) {
-                rendering = true;
-                let renderPromise: Promise<unknown>;
+        // ── Üretici: en hızlı şekilde arka arkaya arabelleğe çizer ────────────
+        // Sabit bir hıza bağlı DEĞİL — bir kareyi bitirir bitirmez hemen
+        // güncel elapsed değeriyle bir sonrakine geçer. Yavaş kalırsa sadece
+        // ATLANAN ara zaman kaybolur (bazı ilerleme adımları hiç çizilmez),
+        // asla üst üste binen/yarım kalan bir çizim olmaz — renderDealImage
+        // (cachedImg verildiğinde) tamamen senkron çalıştığı için tüketicinin
+        // (aşağıdaki setInterval) arabellekten okuduğu an her zaman TAM
+        // tamamlanmış bir kare olur, asla yırtık değil.
+        let stopProducing = false;
+        const runProducer = async () => {
+            while (!stopProducing) {
+                const elapsed = performance.now() - startTime;
+                if (elapsed >= videoDurationMs) break;
+
                 if (elapsed < dealDurationMs) {
-                    renderPromise = renderDealImage(buffer, item, null, elapsed / dealDurationMs, cachedImg);
+                    await renderDealImage(buffer, item, null, elapsed / dealDurationMs, cachedImg);
                     if (elapsed > dealDurationMs - DEAL_SNAPSHOT_PREWARM_MS) {
                         getDealSnapshot().catch(() => {});
                     }
                 } else if (elapsed < dealDurationMs + SLIDE_DURATION_MS) {
                     const flipT = (elapsed - dealDurationMs) / SLIDE_DURATION_MS;
-                    renderPromise = getDealSnapshot().then((deal) => {
-                        const offset = easeInOutCubic(flipT) * CANVAS_W;
-                        bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
-                        bufferCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-                        bufferCtx.drawImage(deal, -offset, 0);
-                        bufferCtx.drawImage(promoSnapshot, CANVAS_W - offset, 0);
-                    });
+                    const deal = await getDealSnapshot();
+                    const offset = easeInOutCubic(flipT) * CANVAS_W;
+                    bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
+                    bufferCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+                    bufferCtx.drawImage(deal, -offset, 0);
+                    bufferCtx.drawImage(promoSnapshot, CANVAS_W - offset, 0);
                 } else {
                     bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
                     bufferCtx.drawImage(promoSnapshot, 0, 0);
-                    renderPromise = Promise.resolve();
+                    // Sahne artık tamamen statik — döngüyü CPU'yu boşa
+                    // yakmadan bir sonraki gerçek tik'e kadar rahatlat.
+                    await new Promise(r => setTimeout(r, 1000 / VIDEO_FPS));
                 }
-                renderPromise.then(blit).catch(() => {}).finally(() => { rendering = false; });
-            }
-
-            if (elapsed < videoDurationMs) {
-                requestAnimationFrame(tick);
-            } else {
-                // Son karenin de kaydedilmesi için kısa bir bekleme sonrası durdur
-                setTimeout(() => recorder.stop(), 150);
+                // Mikro görev sınırına (await) her turda bir kez uğruyoruz —
+                // tüketici setInterval'i (makro görev) ancak bu noktalarda
+                // araya girebilir, bu yüzden hiçbir zaman yarım çizilmiş bir
+                // arabellek okumaz.
             }
         };
+        const producerPromise = runProducer();
+
+        // ── Tüketici: SABİT aralıkla (üretim hızından bağımsız) kaydeder ─────
+        const frameIntervalMs = 1000 / VIDEO_FPS;
+        let stopped = false;
+        const stopAndResolve = () => {
+            if (stopped) return;
+            stopped = true;
+            clearInterval(outputTimer);
+            stopProducing = true;
+            setTimeout(() => recorder.stop(), 150);
+        };
+        const outputTimer = setInterval(() => {
+            const elapsed = performance.now() - startTime;
+            onProgress?.(Math.min(1, elapsed / videoDurationMs));
+            // Her iki modda da arabelleği görünen canvas'a basıyoruz — manuel
+            // modda bu, hemen ardından requestFrame() ile açıkça bir kare
+            // gönderir; eski tarayıcı (otomatik) modunda ise sadece canvas'ı
+            // "kirletip" mevcut captureStream(VIDEO_FPS) mekanizmasının
+            // yakalamasını sağlar.
+            visibleCtx.drawImage(buffer, 0, 0);
+            if (manualMode) captureTrack.requestFrame!();
+            if (elapsed >= videoDurationMs) stopAndResolve();
+        }, frameIntervalMs);
+
         recorder.start();
-        requestAnimationFrame(tick);
+        producerPromise.catch(() => {});
     });
 }
 
