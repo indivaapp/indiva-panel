@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-17-13 (ffprobe kanıtlı GC donma düzeltmesi — üretici tüketiciyle aynı hızda)
+# manuel tetikleme: 2026-07-17-14 (Dashboard'dan AI Link Analizi kaldırıldı)
 
 on:
   workflow_dispatch:
