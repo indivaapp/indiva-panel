@@ -499,7 +499,19 @@ async function renderDealImage(
     // İki satıra bölündü (altlı üstlü) — tek satırken sol taraftaki indirim
     // yıldızının altına giriyordu; alt alta durunca yatayda daha dar bir alan
     // kaplıyor ve yıldıza çarpmıyor.
-    try { await document.fonts.load("700 80px Caveat"); } catch { /* font yoksa sistem fontuna düşer */ }
+    // KÖK NEDEN (video yırtılması — bulundu): bu satır KOŞULSUZ olarak await
+    // ediliyordu — video kaydı sırasında renderDealImage saniyede onlarca kez
+    // çağrıldığı için, HER karede fonksiyon tam ortasında (arka plan+kart
+    // çizilmiş ama başlık/fiyat/CTA henüz çizilmemişken) askıya alınıp
+    // tarayıcının başka işler (setInterval tüketicisi dahil) yapmasına izin
+    // veriyordu — tüketici bu ANDA arabelleği kopyalarsa YARIM ÇİZİLMİŞ
+    // (yırtık) bir kare kaydediliyordu. document.fonts.check() SENKRON bir
+    // kontrol — font zaten yüklenmişse (ilk çağrıdan sonra hep öyle olur)
+    // await'e hiç uğramadan devam ediyoruz, animasyon döngüsü artık gerçekten
+    // bölünmez/atomik çalışıyor.
+    if (!document.fonts.check("700 80px Caveat")) {
+        try { await document.fonts.load("700 80px Caveat"); } catch { /* font yoksa sistem fontuna düşer */ }
+    }
     withSlideFade(ctx, (1 - headerP) * -12, headerP, () => {
         ctx.save();
         ctx.translate(CANVAS_W / 2, 195);
@@ -896,6 +908,11 @@ async function recordDealVideo(
 
     let appIconImg: HTMLImageElement | null = null;
     try { appIconImg = await loadAppIcon(); } catch { appIconImg = null; }
+    // Kayıt başlamadan ÖNCE "Caveat" fontunu bir kez ısıt — böylece animasyon
+    // döngüsündeki İLK kare bile document.fonts.check() ile senkron geçer,
+    // hiçbir kare yarım çizilmiş halde yakalanamaz (bkz. renderDealImage
+    // içindeki kök neden notu).
+    try { await document.fonts.load("700 80px Caveat"); } catch { /* yoksa sorun değil */ }
 
     // Geçiş ve ikinci sayfa kendi içinde ayrıca animasyon oynatmıyor (statik) —
     // önceden her karede İKİ tam sahneyi (blur filtreleri dahil) yeniden çizmek
