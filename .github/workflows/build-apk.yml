@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-17-3 (sosyal medya AI zaman aşımı düzeltmesi — 100'den 60'a)
+# manuel tetikleme: 2026-07-17-4 (AI aday listesine "İndirime Git" butonu eklendi)
 
 on:
   workflow_dispatch:
