@@ -60,7 +60,15 @@ export const getRecentDiscounts = async (days: number = 3): Promise<Discount[]> 
     const q = query(
         collection(db, 'discounts'),
         where('createdAt', '>=', cutoff),
-        orderBy('createdAt', 'desc')
+        orderBy('createdAt', 'desc'),
+        // Sabit üst sınır: temizlik script'i (cleanup-discounts.js) eksik composite
+        // index yüzünden aylarca hiçbir şey silmemiş, koleksiyon ~14K belgeye
+        // şişmişti — bu limit'siz sorgu tek bir "İlanları Yönet" ziyaretinde
+        // binlerce okuma tüketip günlük Firestore kotasını (50K) tek başına
+        // aşabiliyordu (2026-07-17'de gerçekleşti). İndex artık var ve temizlik
+        // çalışıyor ama bu limit, aynı tür maliyet patlamasına karşı kalıcı bir
+        // güvenlik payı olarak kalıyor.
+        limit(500)
     );
     const querySnapshot = await getDocs(q);
     return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Discount));
