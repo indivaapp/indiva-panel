@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-17-5 (video seslendirme metni / ElevenLabs özelliği eklendi)
+# manuel tetikleme: 2026-07-17-6 (#işbirliği etiketi + görsel/video footer'ı eklendi)
 
 on:
   workflow_dispatch:
