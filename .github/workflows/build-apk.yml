@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-16-1 (GitHub Secrets eklendi — VITE_ anahtarları artık doğru gömülüyor)
+# manuel tetikleme: 2026-07-17-1 (AI ürün paylaşımı, geri tuşu/scroll düzeltmesi, sosyal medya AI yeniden tasarımı)
 
 on:
   workflow_dispatch:
