@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-17-6 (#işbirliği etiketi + görsel/video footer'ı eklendi)
+# manuel tetikleme: 2026-07-17-7 (video takılma düzeltmesi + sahne süreleri manuel ayarlanabilir)
 
 on:
   workflow_dispatch:
