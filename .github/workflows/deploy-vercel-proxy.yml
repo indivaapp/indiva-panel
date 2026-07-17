@@ -1,0 +1,35 @@
+name: Deploy Vercel Proxy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'vercel-proxy/**'
+      - '.github/workflows/deploy-vercel-proxy.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ÖNEMLİ: `vercel-proxy` Vercel'de "Root Directory" ayarı zaten
+      # "vercel-proxy" olarak kayıtlı bir proje — bu yüzden `vercel` komutu
+      # repo KÖKÜNDEN çalıştırılmalı (klasörün içine cd edip çalıştırırsak
+      # CLI yolu iki kez birleştiriyor: ".../vercel-proxy/vercel-proxy" —
+      # canlı testte doğrulandı, "provided path does not exist" hatası verir).
+      - name: Deploy to Vercel (production)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: npx vercel --prod --yes --token="$VERCEL_TOKEN"

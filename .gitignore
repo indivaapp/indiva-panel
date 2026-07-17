@@ -37,3 +37,4 @@ logs.zip
 .claude/
 action_error.log
 logs_extracted/
+.env*
