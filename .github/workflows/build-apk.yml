@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-17-9 (video 1. sahne kaybı düzeltmesi + indirme geri bildirimi)
+# manuel tetikleme: 2026-07-17-10 (video 1. sahne kaybının GERÇEK kök nedeni düzeltildi — event loop açlığı)
 
 on:
   workflow_dispatch:
