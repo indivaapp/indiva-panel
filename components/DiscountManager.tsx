@@ -179,7 +179,12 @@ const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmi
 
     useEffect(() => { loadFirstPage(); }, [loadFirstPage]);
 
-    // Sayfanın sonuna yaklaşınca otomatik yeni sayfa yükle
+    // Sayfanın sonuna yaklaşınca otomatik yeni sayfa yükle.
+    // NOT: sentinel div'i sadece !isLoading iken render ediliyor (bkz. JSX).
+    // İlk yüklemede efekt mount anında çalışıyor ve o an sentinelRef.current
+    // hâlâ null oluyor — isLoading bağımlılığı olmadan observer BİR DAHA HİÇ
+    // kurulmuyordu (loadMore referansı değişmediği sürece), bu yüzden sonsuz
+    // kaydırma hiç tetiklenmiyor ve sadece ilk 6 ilan görünüyordu.
     useEffect(() => {
         const el = sentinelRef.current;
         if (!el) return;
@@ -188,7 +193,7 @@ const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmi
         }, { rootMargin: '400px' });
         observer.observe(el);
         return () => observer.disconnect();
-    }, [loadMore]);
+    }, [loadMore, isLoading]);
 
     useEffect(() => {
         const q = search.trim().toLowerCase();
@@ -215,13 +220,25 @@ const DiscountManager: React.FC<DiscountManagerProps> = ({ setActiveView, isAdmi
             {/* Header */}
             <div className="flex items-center justify-between mb-4 gap-3">
                 <h2 className="text-2xl font-bold text-white shrink-0">İlanları Düzenle</h2>
-                <button
-                    onClick={() => setActiveView('addDiscount')}
-                    className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white font-bold px-4 py-2 rounded-xl transition-colors shrink-0"
-                >
-                    <span className="text-lg">➕</span>
-                    <span className="text-sm">Yeni İlan</span>
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                    <button
+                        onClick={() => loadFirstPage()}
+                        disabled={isLoading}
+                        title="Listeyi yenile"
+                        className="flex items-center justify-center bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white font-bold w-10 h-10 rounded-xl transition-colors"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 ${isLoading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                    </button>
+                    <button
+                        onClick={() => setActiveView('addDiscount')}
+                        className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white font-bold px-4 py-2 rounded-xl transition-colors"
+                    >
+                        <span className="text-lg">➕</span>
+                        <span className="text-sm">Yeni İlan</span>
+                    </button>
+                </div>
             </div>
 
             {/* Search */}
