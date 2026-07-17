@@ -1,5 +1,5 @@
 name: Build Android APK
-# manuel tetikleme: 2026-07-17-12 (video yırtılmasının gerçek kök nedeni — gizli font await'i düzeltildi)
+# manuel tetikleme: 2026-07-17-13 (ffprobe kanıtlı GC donma düzeltmesi — üretici tüketiciyle aynı hızda)
 
 on:
   workflow_dispatch:
