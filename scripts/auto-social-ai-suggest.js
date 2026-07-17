@@ -130,7 +130,13 @@ en fazla 10 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
             temperature: 0.4,
             usage: { include: true },
         }),
-        signal: AbortSignal.timeout(50000),
+        // NOT: Bu script vercel-proxy'nin aksine Vercel'in 60sn sunucusuz
+        // fonksiyon sınırına tabi DEĞİL — GitHub Actions workflow'unun kendi
+        // 10 dakikalık bütçesi var (bkz. auto-social-ai-suggest.yml). 50sn'lik
+        // eski sınır gerçek (uzun) başlıklarla canlıda zaman aşımına
+        // ("aborted due to timeout" admin alerti) yol açtı — gerçek platform
+        // kısıtı olmadığı için 120sn'ye çıkarıldı.
+        signal: AbortSignal.timeout(120000),
     });
 
     if (!response.ok) {
