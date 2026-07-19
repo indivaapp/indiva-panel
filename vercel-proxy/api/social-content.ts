@@ -172,13 +172,25 @@ ${JSON.stringify({
 - "voiceover": Bu ürünü tanıtan bir VİDEO SESLENDİRME METNİ (script). Bu metin doğrudan bir
   metinden-sese (ElevenLabs) aracına yapıştırılıp seslendirilecek — SADECE konuşulacak metni
   yaz, sahne yönergesi/parantez/emoji/hashtag YAZMA, doğal konuşma diliyle Türkçe yaz.
-  Yapı şöyle olmalı (akıcı, tek parça, 4-6 cümle, ~15-25 saniyelik konuşma uzunluğunda):
-  1) Ürünü ve ne işe yaradığını çekici bir cümleyle tanıt.
-  2) Eski fiyatı ve yeni (indirimli) fiyatı, indirim yüzdesini net söyle (örn. "739 liralık bu
-     ürün şimdi sadece 199 liraya, yani yüzde 73 indirimle sizlerle").
-  3) Ürünün öne çıkan 1-2 özelliğinden bahset (varsa reviewCount/kategori ipucu kullanılabilir).
-  4) Kapanışta dinleyiciyi İNDİVA uygulamasını indirmeye ve bu tür fırsatları kaçırmamaya
-     teşvik eden, enerjik bir çağrı cümlesiyle bitir.
+
+  UZUNLUK — SIKI KURAL: TOPLAM 35-50 KELİME (kesinlikle 55 kelimeyi geçme). Bu bir video altyazı
+  metni değil, kısa ve vurucu bir reklam spotu — gereksiz cümle EKLEME, her kelimeyi say.
+
+  TON — profesyonel bir reklam seslendirme sanatçısı gibi yaz: sıcak, kendinden emin, doğrudan.
+  Yapay zekâ tarafından üretilmiş gibi HİSSETTİRMEMELİ — kalıp cümlelerden kaçın:
+  - "...seviyorsanız tam size göre", "Dikkat!", "Müjde!", "Müthiş fırsat" gibi klişe açılışlarla
+    BAŞLAMA. Doğrudan ürünle veya faydayla aç.
+  - Kapanışı her seferinde aynı kalıpla ("bu fırsatı kaçırmayın") YAZMA — çeşitlendir: bazen
+    aciliyet, bazen merak, bazen doğrudan davet kullan.
+  - Ürün özelliklerini teknik bir liste okur gibi sıralama (örn. "IP67 sertifikası sayesinde"
+    değil, faydasını günlük dille anlat: "suya, toza aldırmadan her yere götür" gibi).
+
+  İÇERMESİ GEREKENLER (bu sırayla değil, doğal bir akışa yedirilmiş şekilde):
+  - Ürün ne, kime/ne işe yarıyor — tek doğal cümlede.
+  - Eski ve yeni fiyat + indirim yüzdesi NET söylenmeli (örn. "739 lira yerine şimdi 199 lira,
+    yüzde 73 indirimli").
+  - Öne çıkan TEK bir fayda (özellik değil, faydası — varsa reviewCount/kategori ipucu olabilir).
+  - Kısa, enerjik bir İNDİVA çağrısı — ama klişe değil, doğal.
 
 SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma:
 {"title": "...", "caption": "...", "voiceover": "..."}`;
