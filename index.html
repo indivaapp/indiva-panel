@@ -60,6 +60,18 @@
 <link rel="stylesheet" href="/index.css">
 </head>
 <body class="bg-gray-900 text-gray-100 overflow-x-hidden antialiased select-none">
+    <script>
+        // ShareActivity/ProductShareActivity, native tarafta WebView'i şeffaf yapıyor
+        // (bkz. android/.../ShareActivity.java) ama body'nin burada sabit koyu
+        // arkaplanı (#111827 / bg-gray-900) bunu her zaman eziyordu — paylaşım
+        // overlay'i açılınca arkadaki uygulama (galeri vb.) hiç görünmüyor,
+        // tüm ekran siyah kesiliyordu. Bu iki global arayüz sadece o Activity'lerde
+        // enjekte edildiği için, sadece onlarda body'yi gerçekten şeffaf yapıyoruz.
+        if (typeof window.INDIVAShareMode !== 'undefined' || typeof window.INDIVAProductShareMode !== 'undefined') {
+            document.documentElement.style.backgroundColor = 'transparent';
+            document.body.style.backgroundColor = 'transparent';
+        }
+    </script>
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
 </body>
