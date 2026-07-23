@@ -117,7 +117,10 @@ const QuickShareOverlay: React.FC = () => {
     return (
         /* Arkaplan tamamen tıklanabilir/görünür bırakılıyor — sadece küçük bir
            toast gösteriliyor, tam ekran karartma YOK (arkadaki uygulama net görünsün). */
-        <div className="fixed inset-x-0 bottom-6 z-50 flex justify-center px-4 pointer-events-none">
+        <div
+            className="fixed inset-x-0 z-50 flex justify-center px-4 pointer-events-none"
+            style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 28px)' }}
+        >
             <div
                 className="max-w-xs w-full bg-gray-900/95 rounded-2xl border border-gray-700 shadow-2xl px-4 py-3 pointer-events-auto"
                 style={{ animation: 'slideUp 0.25s cubic-bezier(0.34,1.56,0.64,1)', backdropFilter: 'blur(6px)' }}
