@@ -303,13 +303,42 @@ const BG_PALETTES: [string, string, string][] = [
     ['#2c1a4d', '#a4133c', '#ff8500'], // mor-bordo-turuncu
 ];
 
+// Kategoriye göre "ruh hali" — her grup BG_PALETTES içindeki index'lere işaret
+// eder (Teknoloji → soğuk mavi/neon, Giyim & Moda → mor/pembe editoryal, vb.)
+// Eşlenmemiş bir kategori gelirse tüm palet havuzuna düşer (eski davranış).
+const CATEGORY_PALETTE_GROUPS: Record<string, number[]> = {
+    'Teknoloji':            [1, 6, 9],
+    'Beyaz Eşya':           [1, 6, 9],
+    'Otomotiv':             [1, 6, 9],
+    'Giyim & Moda':         [3, 8, 11],
+    'Ayakkabı & Çanta':     [3, 8, 11],
+    'Kozmetik & Bakım':     [3, 8, 11],
+    'Ev & Yaşam':           [5, 7, 10, 13],
+    'Mobilya & Dekorasyon': [5, 7, 10, 13],
+    'Bahçe & Yapı':         [5, 7, 10, 13],
+    'Süpermarket':          [5, 7, 10, 13],
+    'Yemek & İçecek':       [5, 7, 10, 13],
+    'Anne & Bebek':         [4, 12],
+    'Oyun & Oyuncak':       [4, 12],
+    'Kitap & Kırtasiye':    [4, 12],
+    'Pet Shop':             [4, 12],
+    'Spor & Outdoor':       [2, 10],
+    'Seyahat':              [2, 10],
+    'Sağlık':               [2, 10],
+};
+
 // Ürün id'sinden (discountId/id) deterministik palet seçer — aynı ürün her
 // zaman aynı paleti alır (fırsat sahnesi + promo sayfası tutarlı olur),
-// farklı ürünler dağılır.
-function pickPalette(seed: string): [string, string, string] {
+// aynı kategori içinde de gönderiden gönderiye renk değişir. Kategori
+// verilmezse (veya eşlenmemişse) tüm palet havuzuna düşer.
+function pickPalette(seed: string, category?: string): [string, string, string] {
     let hash = 0;
     for (let i = 0; i < seed.length; i++) {
         hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+    }
+    const pool = (category && CATEGORY_PALETTE_GROUPS[category]) || null;
+    if (pool && pool.length > 0) {
+        return BG_PALETTES[pool[hash % pool.length]];
     }
     return BG_PALETTES[hash % BG_PALETTES.length];
 }
@@ -377,6 +406,14 @@ function drawBackground(ctx: CanvasRenderingContext2D, palette: [string, string,
     sparkles.forEach(([x, y, s, c]) => drawSparkle(ctx, x, y, s, c));
 }
 
+// renderDealImage/recordSequenceVideo'nun gerçekte ihtiyaç duyduğu alanların
+// alt kümesi — tam SocialContentItem (caption/voiceover/status/createdAt vb.
+// içerir) yerine bunu kabul ediyoruz ki AI aday listesindeki (henüz kuyruğa
+// kaydedilmemiş, o alanları olmayan) ürünler de doğrudan video üretimine
+// verilebilsin (bkz. "3'lü hızlı fırsat videosu"). Gerçek SocialContentItem
+// nesneleri de yapısal olarak bunu karşıladığı için mevcut çağrılar bozulmaz.
+type DealRenderItem = Pick<SocialContentItem, 'id' | 'discountId' | 'title' | 'category' | 'newPrice' | 'oldPrice'>;
+
 /**
  * @param progress 0-1. Varsayılan 1 = statik/final görünüm (mevcut kullanım bozulmaz).
  *   Video animasyonu için 0'dan 1'e kadar art arda çağrılır.
@@ -386,7 +423,7 @@ function drawBackground(ctx: CanvasRenderingContext2D, palette: [string, string,
  */
 async function renderDealImage(
     canvas: HTMLCanvasElement,
-    item: SocialContentItem,
+    item: DealRenderItem,
     safeImageUrl: string | null,
     progress: number = 1,
     cachedImg?: HTMLImageElement | null,
@@ -424,7 +461,7 @@ async function renderDealImage(
     const savingsP    = easeOutBack(segProgress(progress, 0.330, 0.410));
     const ctaP        = easeOutBack(segProgress(progress, 0.380, 0.470));
 
-    const palette = pickPalette(item.discountId || item.id);
+    const palette = pickPalette(item.discountId || item.id, item.category);
     drawBackground(ctx, palette);
 
     // ── Ürün kartı: beyaz zemin + altın çerçeve (hafif zıplayarak büyür) ─────
@@ -856,15 +893,38 @@ function pickSupportedMimeType(): string {
     return 'video/webm';
 }
 
-async function recordDealVideo(
+interface VideoSegment {
+    item: DealRenderItem;
+    cachedImg: HTMLImageElement | null;
+    durationMs: number;
+}
+
+/**
+ * recordDealVideo'nun genelleştirilmiş hali — TEK ürün yerine bir DİZİ ürünü
+ * arka arkaya kaydedip sonunda TEK bir paylaşılan promo/outro'ya geçiş yapar
+ * (bkz. "3'lü hızlı fırsat videosu"). Tüm performans mimarisi (üretici/
+ * tüketici ayrımı, durgun-kare önbelleği, GC baskısı düzeltmesi, font ısıtma)
+ * korunuyor — sadece tek segment yerine N segment üzerinde döngü kuruluyor.
+ * recordDealVideo artık bunun tek-segmentlik bir sarmalayıcısı.
+ */
+async function recordSequenceVideo(
     canvas: HTMLCanvasElement,
-    item: SocialContentItem,
-    cachedImg: HTMLImageElement | null,
+    segments: VideoSegment[],
     onProgress?: (fraction: number) => void,
-    dealDurationMs: number = DEAL_DURATION_MS_DEFAULT,
     promoDurationMs: number = PROMO_DURATION_MS_DEFAULT,
 ): Promise<Blob> {
-    const videoDurationMs = dealDurationMs + SLIDE_DURATION_MS + promoDurationMs;
+    if (segments.length === 0) throw new Error('En az bir ürün seçilmeli.');
+
+    // Her segment kendi süresi + bir sonraki sahneye (segment veya promo)
+    // geçiş payı kaplar. Son segmentin geçişi promo'ya gider.
+    const bounds: { start: number; end: number }[] = [];
+    let cursor = 0;
+    for (const seg of segments) {
+        bounds.push({ start: cursor, end: cursor + seg.durationMs });
+        cursor += seg.durationMs + SLIDE_DURATION_MS;
+    }
+    const videoDurationMs = cursor + promoDurationMs;
+
     if (typeof (canvas as any).captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
         throw new Error('Bu tarayıcı video kaydını desteklemiyor.');
     }
@@ -927,31 +987,35 @@ async function recordDealVideo(
     // sayfası (ürüne bağlı olmadığı için) kayıt başlamadan HEMEN önce, fırsat
     // sahnesinin dondurulmuş hali de geçişten ~300ms önce arka planda
     // önceden ısıtılıyor — geçiş anına geldiğimizde ikisi de zaten hazır.
+    // Promo/outro ürüne bağlı değil (marka/CTA) — paletini SON segmentin
+    // ürününden alıyoruz (o segmentten geçişte renk sürekliliği en iyi olsun diye).
+    const lastItem = segments[segments.length - 1].item;
     const promoSnapshot = document.createElement('canvas');
     promoSnapshot.width = CANVAS_W;
     promoSnapshot.height = CANVAS_H;
-    await renderPromoFrame(promoSnapshot, appIconImg, pickPalette(item.discountId || item.id));
+    await renderPromoFrame(promoSnapshot, appIconImg, pickPalette(lastItem.discountId || lastItem.id, lastItem.category));
 
-    let dealSnapshotPromise: Promise<HTMLCanvasElement> | null = null;
-    const getDealSnapshot = () => {
-        if (!dealSnapshotPromise) {
-            dealSnapshotPromise = (async () => {
+    // Her segment kendi durgun-kare önbelleğini alır (bkz. SETTLE_PROGRESS notu).
+    const dealSnapshotPromises: (Promise<HTMLCanvasElement> | null)[] = segments.map(() => null);
+    const getDealSnapshot = (idx: number) => {
+        if (!dealSnapshotPromises[idx]) {
+            dealSnapshotPromises[idx] = (async () => {
                 const c = document.createElement('canvas');
                 c.width = CANVAS_W;
                 c.height = CANVAS_H;
-                await renderDealImage(c, item, null, 1, cachedImg, 'medium');
+                await renderDealImage(c, segments[idx].item, null, 1, segments[idx].cachedImg, 'medium');
                 return c;
             })();
         }
-        return dealSnapshotPromise;
+        return dealSnapshotPromises[idx]!;
     };
     // Tüm giriş animasyonlarının segProgress aralıkları en geç 0.470'te
     // biter (bkz. ctaP) — yani progress >= SETTLE_PROGRESS için
     // renderDealImage'ın çizdiği HER ŞEY (gradyan/kart/başlık/fiyat/CTA)
     // progress=1 ile MATEMATİKSEL OLARAK BİREBİR AYNIDIR (idleWave'in çok
     // hafif "nefes alma" salınımı hariç — bu ihmal edilebilir bir görsel
-    // fark karşılığında devasa bir performans kazancı). Bu yüzden fırsat
-    // sahnesinin ~ikinci yarısı boyunca ağır (10+ gölge bulanıklığı içeren)
+    // fark karşılığında devasa bir performans kazancı). Bu yüzden her
+    // segmentin ~ikinci yarısı boyunca ağır (10+ gölge bulanıklığı içeren)
     // tam render yerine ÖNCEDEN hazırlanmış aynı kareyi tekrar tekrar
     // kullanabiliyoruz — takılmanın en büyük kaynağı buydu.
     const SETTLE_PROGRESS = 0.5;
@@ -968,10 +1032,11 @@ async function recordDealVideo(
         bufferCtx.imageSmoothingEnabled = true;
         bufferCtx.imageSmoothingQuality = 'medium';
         const startTime = performance.now();
-        // Önbelleğe alınacak "durgun" kareyi ARKA PLANDA hemen hesaplamaya
-        // başla — SETTLE_PROGRESS'e ulaşıldığında (ilk ~%50'nin sonunda)
-        // zaten hazır olsun, tekrar beklemeye gerek kalmasın.
-        getDealSnapshot().catch(() => {});
+        // İlk segmentin durgun kareyi ARKA PLANDA hemen hesaplamaya başla —
+        // SETTLE_PROGRESS'e ulaşıldığında (ilk ~%50'nin sonunda) zaten hazır
+        // olsun, tekrar beklemeye gerek kalmasın.
+        getDealSnapshot(0).catch(() => {});
+        const prewarmed = new Set<number>([0]);
 
         // ── Üretici: TÜKETİCİYLE AYNI HIZDA (VIDEO_FPS) çizer ─────────────────
         // KANIT (canlı videoyu ffprobe ile kare kare analiz ettikten sonra
@@ -995,29 +1060,48 @@ async function recordDealVideo(
                 const elapsed = performance.now() - startTime;
                 if (elapsed >= videoDurationMs) break;
 
-                if (elapsed < dealDurationMs) {
-                    const p = elapsed / dealDurationMs;
-                    if (p >= SETTLE_PROGRESS) {
-                        // Sahne artık "durgun" — ağır tam render yerine
-                        // önbellekteki hazır kareyi kopyala (ucuz).
-                        const settled = await getDealSnapshot();
-                        bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
-                        bufferCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-                        bufferCtx.drawImage(settled, 0, 0);
-                    } else {
-                        await renderDealImage(buffer, item, null, p, cachedImg, 'medium');
-                    }
-                } else if (elapsed < dealDurationMs + SLIDE_DURATION_MS) {
-                    const flipT = (elapsed - dealDurationMs) / SLIDE_DURATION_MS;
-                    const deal = await getDealSnapshot();
-                    const offset = easeInOutCubic(flipT) * CANVAS_W;
-                    bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
-                    bufferCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-                    bufferCtx.drawImage(deal, -offset, 0);
-                    bufferCtx.drawImage(promoSnapshot, CANVAS_W - offset, 0);
-                } else {
+                // Elapsed zamana karşılık gelen segmenti bul (N küçük, döngü ucuz).
+                let segIdx = -1;
+                for (let i = 0; i < bounds.length; i++) {
+                    if (elapsed < bounds[i].end + SLIDE_DURATION_MS) { segIdx = i; break; }
+                }
+
+                if (segIdx === -1) {
+                    // Tüm segmentler bitti — promo/outro sahnesindeyiz.
                     bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
                     bufferCtx.drawImage(promoSnapshot, 0, 0);
+                } else {
+                    const { start, end } = bounds[segIdx];
+                    // Bir sonraki segmente (veya promo'ya) geçişten ~300ms önce
+                    // hedef kareyi arka planda ısıt.
+                    if (elapsed >= end - 300 && !prewarmed.has(segIdx + 1)) {
+                        prewarmed.add(segIdx + 1);
+                        if (segIdx + 1 < segments.length) getDealSnapshot(segIdx + 1).catch(() => {});
+                    }
+
+                    if (elapsed < end) {
+                        const p = (elapsed - start) / (end - start);
+                        if (p >= SETTLE_PROGRESS) {
+                            // Sahne artık "durgun" — ağır tam render yerine
+                            // önbellekteki hazır kareyi kopyala (ucuz).
+                            const settled = await getDealSnapshot(segIdx);
+                            bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
+                            bufferCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+                            bufferCtx.drawImage(settled, 0, 0);
+                        } else {
+                            await renderDealImage(buffer, segments[segIdx].item, null, p, segments[segIdx].cachedImg, 'medium');
+                        }
+                    } else {
+                        // Geçiş: bu segmentten bir sonrakine (veya son segmentse promo'ya).
+                        const flipT = (elapsed - end) / SLIDE_DURATION_MS;
+                        const current = await getDealSnapshot(segIdx);
+                        const next = segIdx + 1 < segments.length ? await getDealSnapshot(segIdx + 1) : promoSnapshot;
+                        const offset = easeInOutCubic(flipT) * CANVAS_W;
+                        bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
+                        bufferCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+                        bufferCtx.drawImage(current, -offset, 0);
+                        bufferCtx.drawImage(next, CANVAS_W - offset, 0);
+                    }
                 }
                 // Gerçek bir makro-görev sınırına (setTimeout) uğruyoruz — hem
                 // tüketicinin (setInterval) düzenli aralıklarla araya girmesini
@@ -1051,6 +1135,50 @@ async function recordDealVideo(
         recorder.start();
         producerPromise.catch(() => {});
     });
+}
+
+async function recordDealVideo(
+    canvas: HTMLCanvasElement,
+    item: SocialContentItem,
+    cachedImg: HTMLImageElement | null,
+    onProgress?: (fraction: number) => void,
+    dealDurationMs: number = DEAL_DURATION_MS_DEFAULT,
+    promoDurationMs: number = PROMO_DURATION_MS_DEFAULT,
+): Promise<Blob> {
+    return recordSequenceVideo(canvas, [{ item, cachedImg, durationMs: dealDurationMs }], onProgress, promoDurationMs);
+}
+
+/**
+ * Ürün görselini CORS-güvenli şekilde yükleyip verilen canvas'a çizer —
+ * önce görseli doğrudan dener (çoğu CDN zaten CORS'a izin veriyor), tainted
+ * çıkarsa proxy üzerinden CORS-safe bir kopyaya düşer. SocialContentCard'ın
+ * kendi önizlemesi VE çoklu ürün videosu (bkz. handleCreateMultiVideo)
+ * tarafından ortak kullanılır — mantık tek bir yerde.
+ */
+async function loadCleanProductImage(
+    canvas: HTMLCanvasElement,
+    item: DealRenderItem,
+    imageUrl: string,
+): Promise<HTMLImageElement | null> {
+    try {
+        const img = await renderDealImage(canvas, item, imageUrl);
+        canvas.toDataURL(); // tainted canvas mı diye ucuz bir kontrol — öyleyse burada atar
+        return img;
+    } catch {
+        // Görsel CORS'a kapalı (tainted) veya yüklenemedi — proxy'ye düş
+    }
+    let safeUrl: string | null = null;
+    try {
+        const uploaded = await uploadImageFromUrl(imageUrl);
+        safeUrl = uploaded?.downloadURL || null;
+    } catch {
+        safeUrl = null;
+    }
+    try {
+        return await renderDealImage(canvas, item, safeUrl);
+    } catch {
+        return null;
+    }
 }
 
 // ─── Tekil kart bileşeni ────────────────────────────────────────────────────
@@ -1091,35 +1219,13 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
             setRenderState('loading');
             const canvas = canvasRef.current;
             if (!canvas) return;
-
-            // 1) Önce ürün görselini DOĞRUDAN dene — birçok CDN (Amazon, n11 vb.)
-            // zaten CORS'a izin veriyor, proxy'ye hiç gerek kalmaz (daha hızlı,
-            // proxy servisi çökse bile çalışmaya devam eder).
-            try {
-                const img = await renderDealImage(canvas, item, item.imageUrl);
-                canvas.toDataURL(); // tainted canvas mı diye ucuz bir kontrol — öyleyse burada atar
+            const img = await loadCleanProductImage(canvas, item, item.imageUrl);
+            if (cancelled) return;
+            if (img) {
                 cachedImgRef.current = img;
-                if (!cancelled) setRenderState('ready');
-                return;
-            } catch {
-                // Görsel CORS'a kapalı (tainted) veya yüklenemedi — proxy'ye düş
-            }
-
-            // 2) Proxy üzerinden CORS-safe bir kopya al ve yeniden çiz
-            let safeUrl: string | null = null;
-            try {
-                const uploaded = await uploadImageFromUrl(item.imageUrl);
-                safeUrl = uploaded?.downloadURL || null;
-            } catch {
-                safeUrl = null;
-            }
-            if (cancelled || !canvasRef.current) return;
-            try {
-                const img = await renderDealImage(canvasRef.current, item, safeUrl);
-                cachedImgRef.current = img;
-                if (!cancelled) setRenderState('ready');
-            } catch {
-                if (!cancelled) setRenderState('error');
+                setRenderState('ready');
+            } else {
+                setRenderState('error');
             }
         })();
         return () => { cancelled = true; };
@@ -1433,6 +1539,17 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     const [contentError, setContentError] = useState<string | null>(null);
     const [usingPickId, setUsingPickId] = useState<string | null>(null);
 
+    // ── 3'lü hızlı fırsat videosu (aday listesinden çoklu seçim) ────────────
+    const [multiSelectIds, setMultiSelectIds] = useState<Set<string>>(new Set());
+    const [multiVideoMode, setMultiVideoMode] = useState(false);
+    const [multiVideoState, setMultiVideoState] = useState<'idle' | 'recording' | 'ready' | 'error'>('idle');
+    const [multiVideoProgress, setMultiVideoProgress] = useState(0);
+    const [multiVideoUrl, setMultiVideoUrl] = useState<string | null>(null);
+    const [multiVideoDownloadState, setMultiVideoDownloadState] = useState<'idle' | 'saving' | 'done'>('idle');
+    const multiCanvasRef = useRef<HTMLCanvasElement>(null);
+    const multiVideoBlobRef = useRef<Blob | null>(null);
+    const multiVideoExtRef = useRef<'mp4' | 'webm'>('mp4');
+
     const fetchItems = useCallback(async () => {
         setIsLoading(true);
         setError(null);
@@ -1573,6 +1690,94 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         setGeneratedContent(null);
         setContentError(null);
         setVoiceoverCopied(false);
+        setMultiVideoMode(false);
+        setMultiSelectIds(new Set());
+        setMultiVideoState('idle');
+        if (multiVideoUrl) URL.revokeObjectURL(multiVideoUrl);
+        setMultiVideoUrl(null);
+    };
+
+    const toggleMultiSelect = (e: React.MouseEvent, productId: string) => {
+        e.stopPropagation();
+        setMultiSelectIds(prev => {
+            const next = new Set(prev);
+            if (next.has(productId)) {
+                next.delete(productId);
+            } else if (next.size < 5) {
+                next.add(productId);
+            }
+            return next;
+        });
+    };
+
+    // Seçilen 2-5 ürünü tek bir videoda birleştirir (bkz. recordSequenceVideo).
+    // Her ürün için önce CORS-güvenli görseli hazırlar, sonra kayda başlar.
+    const handleCreateMultiVideo = async () => {
+        const selected = aiCandidates.filter(c => multiSelectIds.has(c.candidate.productId));
+        if (selected.length < 2) return;
+
+        setMultiVideoMode(true);
+        setMultiVideoState('recording');
+        setMultiVideoProgress(0);
+
+        const canvas = multiCanvasRef.current;
+        if (!canvas) { setMultiVideoState('error'); return; }
+
+        try {
+            const prepCanvas = document.createElement('canvas');
+            const segments = [];
+            for (const c of selected) {
+                const renderItem: DealRenderItem = {
+                    id: c.product.id,
+                    discountId: c.product.id,
+                    title: c.product.title,
+                    category: c.product.category,
+                    newPrice: c.product.newPrice,
+                    oldPrice: c.product.oldPrice,
+                };
+                const cachedImg = await loadCleanProductImage(prepCanvas, renderItem, c.product.imageUrl);
+                segments.push({ item: renderItem, cachedImg, durationMs: 3800 });
+            }
+            const blob = await recordSequenceVideo(canvas, segments, setMultiVideoProgress, PROMO_DURATION_MS_DEFAULT);
+            multiVideoBlobRef.current = blob;
+            multiVideoExtRef.current = blob.type.includes('mp4') ? 'mp4' : 'webm';
+            setMultiVideoUrl(URL.createObjectURL(blob));
+            setMultiVideoState('ready');
+        } catch {
+            setMultiVideoState('error');
+        }
+    };
+
+    const handleBackFromMultiVideo = () => {
+        setMultiVideoMode(false);
+        setMultiVideoState('idle');
+        if (multiVideoUrl) URL.revokeObjectURL(multiVideoUrl);
+        setMultiVideoUrl(null);
+        multiVideoBlobRef.current = null;
+    };
+
+    const handleDownloadMultiVideo = async () => {
+        if (!multiVideoBlobRef.current) return;
+        setMultiVideoDownloadState('saving');
+        try {
+            await saveFileToDevice(multiVideoBlobRef.current, `indiva-derleme-${Date.now()}.${multiVideoExtRef.current}`, 'İNDİVA Fırsat Derlemesi');
+            setMultiVideoDownloadState('done');
+            setTimeout(() => setMultiVideoDownloadState('idle'), 2000);
+        } catch {
+            setMultiVideoDownloadState('idle');
+        }
+    };
+
+    const handleShareMultiVideo = async () => {
+        if (!multiVideoBlobRef.current) return;
+        try {
+            await shareFile(
+                multiVideoBlobRef.current,
+                `indiva-derleme-${Date.now()}.${multiVideoExtRef.current}`,
+                multiVideoBlobRef.current.type,
+                'İNDİVA Fırsat Derlemesi',
+            );
+        } catch { /* sessiz — kullanıcı paylaşım penceresini iptal etmiş olabilir */ }
     };
 
     const handleCopyVoiceover = async () => {
@@ -1733,28 +1938,92 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                         className="bg-gray-800 border border-purple-600/40 rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto p-5"
                         onClick={e => e.stopPropagation()}
                     >
-                        {!selectedCandidate ? (
+                        {multiVideoMode ? (
+                            <>
+                                <div className="flex items-center justify-between mb-1">
+                                    <button onClick={handleBackFromMultiVideo} className="text-gray-400 hover:text-white text-xs flex items-center gap-1">
+                                        ← Listeye dön
+                                    </button>
+                                    <button onClick={closeAiModal} className="text-gray-400 hover:text-white text-xl leading-none">×</button>
+                                </div>
+                                <h3 className="text-white font-bold text-base mb-3">🎬 {multiSelectIds.size}'lü Fırsat Derlemesi</h3>
+
+                                <canvas ref={multiCanvasRef} className={multiVideoState === 'ready' ? 'hidden' : 'w-full rounded-xl bg-gray-950'} width={1080} height={1920} style={{ aspectRatio: '9/16', maxHeight: '50vh', objectFit: 'contain' }} />
+
+                                {multiVideoState === 'recording' && (
+                                    <div className="mt-3 space-y-2">
+                                        <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
+                                            <div className="h-full bg-purple-500 transition-all" style={{ width: `${multiVideoProgress}%` }} />
+                                        </div>
+                                        <p className="text-gray-400 text-xs text-center">Video oluşturuluyor… %{multiVideoProgress}</p>
+                                    </div>
+                                )}
+
+                                {multiVideoState === 'error' && (
+                                    <div className="mt-3 space-y-2.5">
+                                        <div className="bg-red-950/50 border border-red-500/20 rounded-xl px-3 py-2.5">
+                                            <p className="text-red-300 text-xs">❌ Video oluşturulamadı. Tekrar deneyin.</p>
+                                        </div>
+                                        <button
+                                            onClick={handleCreateMultiVideo}
+                                            className="w-full py-2 text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors"
+                                        >
+                                            🔄 Tekrar Dene
+                                        </button>
+                                    </div>
+                                )}
+
+                                {multiVideoState === 'ready' && multiVideoUrl && (
+                                    <div className="mt-3 space-y-3">
+                                        <video src={multiVideoUrl} controls loop className="w-full rounded-xl bg-gray-950" style={{ maxHeight: '50vh' }} />
+                                        <div className="flex gap-2">
+                                            <button
+                                                onClick={handleDownloadMultiVideo}
+                                                disabled={multiVideoDownloadState === 'saving'}
+                                                className="flex-1 py-2 text-xs font-semibold bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-200 rounded-lg transition-colors"
+                                            >
+                                                {multiVideoDownloadState === 'saving' ? 'Kaydediliyor…' : multiVideoDownloadState === 'done' ? '✓ Kaydedildi' : '⬇️ İndir'}
+                                            </button>
+                                            <button
+                                                onClick={handleShareMultiVideo}
+                                                className="flex-1 py-2 text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors"
+                                            >
+                                                📤 Paylaş
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </>
+                        ) : !selectedCandidate ? (
                             <>
                                 <div className="flex items-center justify-between mb-1">
                                     <h3 className="text-white font-bold text-base flex items-center gap-2">🤖 AI'nın Önerdiği {aiCandidates.length} Ürün</h3>
                                     <button onClick={closeAiModal} className="text-gray-400 hover:text-white text-xl leading-none">×</button>
                                 </div>
-                                <p className="text-gray-500 text-xs mb-4">Beğendiğiniz ürünü seçin — içerik SADECE o ürün için üretilecek.</p>
+                                <p className="text-gray-500 text-xs mb-4">Beğendiğiniz ürünü seçin — içerik SADECE o ürün için üretilecek. Ya da birden fazla ürün işaretleyip tek bir derleme videosu oluşturun.</p>
 
-                                <div className="space-y-2.5">
+                                <div className="space-y-2.5 pb-2">
                                     {aiCandidates.map((item) => {
                                         const discountPct = item.product.oldPrice > item.product.newPrice && item.product.oldPrice > 0
                                             ? Math.round(((item.product.oldPrice - item.product.newPrice) / item.product.oldPrice) * 100)
                                             : 0;
+                                        const isChecked = multiSelectIds.has(item.candidate.productId);
                                         return (
                                             <div
                                                 key={item.candidate.productId}
                                                 onClick={() => handleSelectCandidate(item)}
                                                 role="button"
                                                 tabIndex={0}
-                                                className="w-full text-left bg-gray-900/60 border border-gray-700 hover:border-purple-500/50 rounded-xl p-3 transition-colors cursor-pointer"
+                                                className={`w-full text-left bg-gray-900/60 border rounded-xl p-3 transition-colors cursor-pointer ${isChecked ? 'border-purple-500' : 'border-gray-700 hover:border-purple-500/50'}`}
                                             >
                                                 <div className="flex items-center gap-3">
+                                                    <button
+                                                        onClick={(e) => toggleMultiSelect(e, item.candidate.productId)}
+                                                        className={`shrink-0 w-5 h-5 rounded-md border-2 flex items-center justify-center text-[11px] font-bold transition-colors ${isChecked ? 'bg-purple-600 border-purple-600 text-white' : 'border-gray-600 text-transparent hover:border-purple-400'}`}
+                                                        aria-label="Derlemeye ekle"
+                                                    >
+                                                        ✓
+                                                    </button>
                                                     {item.product.imageUrl && (
                                                         <img src={item.product.imageUrl} alt="" className="w-14 h-14 object-contain bg-white rounded-lg shrink-0" />
                                                     )}
@@ -1793,6 +2062,21 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                         );
                                     })}
                                 </div>
+
+                                {multiSelectIds.size > 0 && (
+                                    <div className="sticky bottom-0 -mx-5 -mb-5 mt-3 px-5 py-3 bg-gray-800/95 border-t border-purple-600/30 flex items-center justify-between gap-3">
+                                        <p className="text-gray-300 text-xs">
+                                            {multiSelectIds.size} ürün seçildi{multiSelectIds.size < 2 ? ' (en az 2 gerekli)' : ''}
+                                        </p>
+                                        <button
+                                            onClick={handleCreateMultiVideo}
+                                            disabled={multiSelectIds.size < 2}
+                                            className="shrink-0 px-4 py-2 text-xs font-semibold bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+                                        >
+                                            🎬 {multiSelectIds.size}'lü Video Oluştur
+                                        </button>
+                                    </div>
+                                )}
                             </>
                         ) : (
                             <>
