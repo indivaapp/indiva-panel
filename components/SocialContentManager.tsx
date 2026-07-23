@@ -420,6 +420,123 @@ function drawBackground(ctx: CanvasRenderingContext2D, palette: [string, string,
     sparkles.forEach(([x, y, s, c]) => drawSparkle(ctx, x, y, s, c));
 }
 
+// ── "Vitrin" şablonu (renderHeroScene/renderPromoFrame) için SÜREKLİ hareket
+// eden dekoratif arka plan — t (saniye, video boyunca hep artan) ile sürükleniyor/
+// dönüyor/nefes alıyor. drawBackground'dan farkı: video "durgun" (settle) evresine
+// girdikten sonra da HER karede yeniden çizilecek TEK katman bu — geri kalan
+// (kartlar/hero/ribbon/CTA gibi ağır gölgeli içerik) tek seferlik önbelleğe
+// alınıp üzerine bindiriliyor (bkz. HERO_SETTLE_PROGRESS notu, drawHeroFrame).
+// Bu sayede video boyunca (durgun kısımlar dahil) arka plan hep "canlı" kalıyor
+// ama ağır içerik tekrar tekrar render edilmiyor — performans/canlılık dengesi.
+const BG_EMOJI_PARTICLES: { x: number; y: number; dx: number; dy: number; sp: number; rot: number; size: number; emoji: string; ph: number }[] = [
+    { x: 130,  y: 235,  dx: 24, dy: 16, sp: 0.34, rot: 0.55,  size: 52, emoji: '🔥', ph: 0.0 },
+    { x: 955,  y: 165,  dx: 18, dy: 22, sp: 0.27, rot: -0.42, size: 44, emoji: '💸', ph: 1.1 },
+    { x: 985,  y: 545,  dx: 16, dy: 20, sp: 0.40, rot: 0.60,  size: 46, emoji: '🎉', ph: 2.3 },
+    { x: 75,   y: 660,  dx: 20, dy: 14, sp: 0.30, rot: -0.50, size: 40, emoji: '🛍️', ph: 0.7 },
+    { x: 1005, y: 1040, dx: 14, dy: 18, sp: 0.33, rot: 0.45,  size: 46, emoji: '💥', ph: 3.0 },
+    { x: 65,   y: 1110, dx: 22, dy: 16, sp: 0.26, rot: -0.35, size: 42, emoji: '✨', ph: 1.8 },
+    { x: 1015, y: 1680, dx: 18, dy: 14, sp: 0.37, rot: 0.55,  size: 44, emoji: '🔥', ph: 2.9 },
+    { x: 60,   y: 1790, dx: 16, dy: 18, sp: 0.31, rot: -0.48, size: 40, emoji: '💰', ph: 0.4 },
+    { x: 540,  y: 60,   dx: 20, dy: 12, sp: 0.29, rot: 0.40,  size: 38, emoji: '🏷️', ph: 1.4 },
+];
+
+function drawDecorativeBackground(ctx: CanvasRenderingContext2D, palette: [string, string, string], t: number) {
+    const bgGrad = ctx.createLinearGradient(0, 0, CANVAS_W, CANVAS_H);
+    bgGrad.addColorStop(0, palette[0]);
+    bgGrad.addColorStop(0.55, palette[1]);
+    bgGrad.addColorStop(1, palette[2]);
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    // Yumuşak ışık lekeleri — artık hafifçe süzülüyor (sabit değil)
+    ctx.save();
+    ctx.filter = 'blur(65px)';
+    const gx1 = 160 + Math.sin(t * 0.28) * 50, gy1 = 220 + Math.cos(t * 0.23) * 40;
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    ctx.beginPath(); ctx.arc(gx1, gy1, 190, 0, Math.PI * 2); ctx.fill();
+    const gx2 = CANVAS_W - 120 + Math.sin(t * 0.21 + 2) * 40, gy2 = CANVAS_H - 420 + Math.cos(t * 0.26 + 1) * 40;
+    ctx.fillStyle = 'rgba(255,214,102,0.16)';
+    ctx.beginPath(); ctx.arc(gx2, gy2, 230, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // % işaretleri — nefes alır gibi hafifçe titreşen opaklık
+    const bgMarks: [number, number, number, number, number, string][] = [
+        [140, 155, -18, 92, 0.32, '%'],
+        [940, 110, 16, 78, 0.30, '%50'],
+        [1010, 400, -12, 60, 0.24, '%'],
+        [50, 370, 22, 74, 0.28, '%70'],
+        [990, 920, -15, 84, 0.26, '%30'],
+        [70, 1180, 18, 70, 0.26, '%'],
+        [1025, 1580, -20, 80, 0.30, '%'],
+        [60, 1690, 14, 68, 0.26, '%40'],
+        [310, 1875, 10, 52, 0.18, '%'],
+        [790, 1885, -12, 50, 0.18, '%20'],
+    ];
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    bgMarks.forEach(([x, y, rot, size, alpha, text], i) => {
+        ctx.save();
+        ctx.globalAlpha = alpha * (0.75 + 0.25 * Math.sin(t * 0.6 + i * 1.3));
+        ctx.translate(x, y);
+        ctx.rotate(rot * Math.PI / 180);
+        ctx.font = `900 ${size}px Arial`;
+        ctx.fillStyle = i % 2 === 0 ? '#FFD966' : '#ffffff';
+        ctx.fillText(text, 0, 0);
+        ctx.restore();
+    });
+    ctx.restore();
+
+    // Uçuşan indirim emojileri — sürükleniyor + hafifçe dönüyor + nabız gibi büyüyüp küçülüyor
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    BG_EMOJI_PARTICLES.forEach(p => {
+        const x = p.x + Math.sin(t * p.sp + p.ph) * p.dx;
+        const y = p.y + Math.cos(t * p.sp * 0.8 + p.ph) * p.dy;
+        const scale = 1 + 0.14 * Math.sin(t * p.sp * 1.6 + p.ph);
+        const alpha = 0.5 + 0.35 * Math.sin(t * p.sp * 1.3 + p.ph * 1.7);
+        ctx.save();
+        ctx.globalAlpha = Math.max(0.18, alpha);
+        ctx.translate(x, y);
+        ctx.rotate(Math.sin(t * p.rot + p.ph) * 0.25);
+        ctx.scale(scale, scale);
+        ctx.font = `${p.size}px Arial`;
+        ctx.fillText(p.emoji, 0, 0);
+        ctx.restore();
+    });
+    ctx.restore();
+
+    // Parıltı dekorları — twinkle
+    const sparkles: [number, number, number, string][] = [
+        [90, 400, 16, 'rgba(255,255,255,0.55)'],
+        [1000, 240, 12, 'rgba(255,224,140,0.6)'],
+        [960, 520, 20, 'rgba(255,255,255,0.4)'],
+        [70, 700, 10, 'rgba(255,224,140,0.5)'],
+        [1010, 1250, 14, 'rgba(255,255,255,0.45)'],
+        [60, 1300, 18, 'rgba(255,224,140,0.4)'],
+    ];
+    sparkles.forEach(([x, y, s, c], i) => {
+        const twinkle = 0.5 + 0.5 * Math.sin(t * 1.4 + i * 1.9);
+        ctx.save();
+        ctx.globalAlpha = 0.35 + 0.65 * twinkle;
+        drawSparkle(ctx, x, y, s * (0.85 + 0.3 * twinkle), c);
+        ctx.restore();
+    });
+}
+
+// Kenarlara doğru koyulaşan "spot ışığı" vinyeti — vitrin şablonunun her iki
+// sahnesinde de (hero + promo) aynı, tek fark odak noktasının yüksekliği.
+function drawVignette(ctx: CanvasRenderingContext2D, centerY: number) {
+    ctx.save();
+    const vignette = ctx.createRadialGradient(CANVAS_W / 2, centerY, 220, CANVAS_W / 2, centerY, 1050);
+    vignette.addColorStop(0, 'rgba(0,0,0,0)');
+    vignette.addColorStop(1, 'rgba(0,0,0,0.55)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.restore();
+}
+
 // renderDealImage/recordSequenceVideo'nun gerçekte ihtiyaç duyduğu alanların
 // alt kümesi — tam SocialContentItem (caption/voiceover/status/createdAt vb.
 // içerir) yerine bunu kabul ediyoruz ki AI aday listesindeki (henüz kuyruğa
@@ -773,7 +890,13 @@ async function renderDealImage(
 // ── "Daha fazla fırsat" promo sayfası — videonun son bölümü. İçeriği üründen
 // bağımsız (her video için aynı metin/logo), ama arka plan rengi fırsat
 // sahnesiyle tutarlı olsun diye aynı palette parametresini alır. ────────────
-async function renderPromoFrame(canvas: HTMLCanvasElement, appIconImg: HTMLImageElement | null, palette: [string, string, string] = BG_PALETTES[0]): Promise<void> {
+async function renderPromoFrame(
+    canvas: HTMLCanvasElement,
+    appIconImg: HTMLImageElement | null,
+    palette: [string, string, string] = BG_PALETTES[0],
+    bgTimeSec: number = 0,
+    includeBackground: boolean = true,
+): Promise<void> {
     if (canvas.width !== CANVAS_W) canvas.width = CANVAS_W;
     if (canvas.height !== CANVAS_H) canvas.height = CANVAS_H;
     const ctx = canvas.getContext('2d');
@@ -781,7 +904,10 @@ async function renderPromoFrame(canvas: HTMLCanvasElement, appIconImg: HTMLImage
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-    drawBackground(ctx, palette);
+    if (includeBackground) {
+        drawDecorativeBackground(ctx, palette, bgTimeSec);
+        drawVignette(ctx, 900);
+    }
 
     const iconSize = 220, iconX = CANVAS_W / 2 - iconSize / 2, iconY = 360;
     if (appIconImg) {
@@ -876,6 +1002,35 @@ async function renderPromoFrame(canvas: HTMLCanvasElement, appIconImg: HTMLImage
 // diğer iki ürün yanlarda küçük kartlarda. Kullanıcının paylaştığı örnek
 // tasarıma (İNDİVA logosu + başlık + 2 yan kart + ortada ürün + parlayan
 // podyum halkaları + fiyat kurdelesi + CTA) birebir referansla çizildi.
+function drawPedestalRings(ctx: CanvasRenderingContext2D, palette: [string, string, string], cx: number, cy: number, t: number, entranceP: number) {
+    withPop(ctx, cx, cy, entranceP, entranceP, () => {
+        const pulse = 1 + 0.05 * Math.sin(t * 1.1);
+        ctx.save();
+        const glowR = 330 * pulse;
+        const glow = ctx.createRadialGradient(cx, cy, 20, cx, cy, glowR);
+        glow.addColorStop(0, hexToRgba(palette[2], 0.55));
+        glow.addColorStop(1, hexToRgba(palette[2], 0));
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, glowR, glowR * 0.4, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // Dönen kesikli halkalar — "spinning light" efekti, t ile hep dönüyor.
+        [220, 260, 300].forEach((r, i) => {
+            ctx.save();
+            ctx.strokeStyle = hexToRgba(palette[2], 0.5 - i * 0.13);
+            ctx.lineWidth = 3;
+            ctx.setLineDash([24, 16]);
+            ctx.lineDashOffset = (i % 2 === 0 ? -1 : 1) * t * 60 + i * 12;
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, r * pulse, r * 0.34 * pulse, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        });
+    });
+}
+
 async function renderHeroScene(
     canvas: HTMLCanvasElement,
     heroItem: DealRenderItem,
@@ -883,8 +1038,12 @@ async function renderHeroScene(
     heroImg: HTMLImageElement | null,
     sideImgs: (HTMLImageElement | null)[],
     progress: number = 1,
+    bgTimeSec: number = 0,
+    layers: { background?: boolean; rings?: boolean } = {},
     smoothingQuality: ImageSmoothingQuality = 'high',
 ): Promise<void> {
+    const includeBackground = layers.background !== false;
+    const includeRings = layers.rings !== false;
     if (canvas.width !== CANVAS_W) canvas.width = CANVAS_W;
     if (canvas.height !== CANVAS_H) canvas.height = CANVAS_H;
     const ctx = canvas.getContext('2d');
@@ -894,17 +1053,10 @@ async function renderHeroScene(
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
     const palette = pickPalette(heroItem.discountId || heroItem.id, heroItem.category);
-    drawBackground(ctx, palette);
-
-    // Kenarlara doğru koyulaşan vinyet — referans görseldeki "spot ışığı"
-    // hissi (ortada parlak, kenarlarda neredeyse siyah).
-    ctx.save();
-    const vignette = ctx.createRadialGradient(CANVAS_W / 2, 1000, 220, CANVAS_W / 2, 1000, 1050);
-    vignette.addColorStop(0, 'rgba(0,0,0,0)');
-    vignette.addColorStop(1, 'rgba(0,0,0,0.55)');
-    ctx.fillStyle = vignette;
-    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    ctx.restore();
+    if (includeBackground) {
+        drawDecorativeBackground(ctx, palette, bgTimeSec);
+        drawVignette(ctx, 1000);
+    }
 
     // ── Animasyon segmentleri (0.72'de tamamen durgunlaşır — bkz. HERO_SETTLE_PROGRESS) ──
     const brandP    = easeOutCubic(segProgress(progress, 0.00, 0.08));
@@ -947,15 +1099,24 @@ async function renderHeroScene(
         if (!item || p <= 0.001) return;
         const slideOffset = (1 - p) * (fromLeft ? -160 : 160);
         withSlideFadeX(ctx, slideOffset, p, () => {
+            // Koyu "cam" panel — beyaz kutu yerine, gradyanlı arka planla
+            // kaynaşan yarı saydam koyu zemin + parlayan renkli kenarlık.
             ctx.save();
-            ctx.shadowColor = 'rgba(0,0,0,0.5)';
-            ctx.shadowBlur = 30;
-            ctx.shadowOffsetY = 12;
-            ctx.fillStyle = '#ffffff';
+            ctx.shadowColor = 'rgba(0,0,0,0.55)';
+            ctx.shadowBlur = 32;
+            ctx.shadowOffsetY = 14;
+            const cardGrad = ctx.createLinearGradient(x, cardY, x, cardY + cardH);
+            cardGrad.addColorStop(0, hexToRgba('#1c1530', 0.82));
+            cardGrad.addColorStop(1, hexToRgba('#0b0a18', 0.90));
+            ctx.fillStyle = cardGrad;
             drawRoundedRect(ctx, x, cardY, cardW, cardH, 28);
             ctx.restore();
+
             ctx.save();
-            ctx.strokeStyle = palette[2];
+            const borderGrad = ctx.createLinearGradient(x, cardY, x + cardW, cardY + cardH);
+            borderGrad.addColorStop(0, palette[2]);
+            borderGrad.addColorStop(1, palette[1]);
+            ctx.strokeStyle = borderGrad;
             ctx.lineWidth = 4;
             strokeRoundedRect(ctx, x + 2, cardY + 2, cardW - 4, cardH - 4, 26);
             ctx.restore();
@@ -964,33 +1125,49 @@ async function renderHeroScene(
                 ? Math.round(((item.oldPrice - item.newPrice) / item.oldPrice) * 100) : 0;
 
             const imgPad = 22, imgBoxH = 240;
+            // Ürün görselinin arkasında yumuşak, ışıklı bir "sahne" — çıplak
+            // koyu zeminde havada asılı durmasın diye (beyaz kutu yerine bu).
+            ctx.save();
+            const imgGlow = ctx.createRadialGradient(
+                x + cardW / 2, cardY + imgPad + imgBoxH / 2, 10,
+                x + cardW / 2, cardY + imgPad + imgBoxH / 2, imgBoxH * 0.62,
+            );
+            imgGlow.addColorStop(0, 'rgba(255,255,255,0.16)');
+            imgGlow.addColorStop(1, 'rgba(255,255,255,0)');
+            ctx.fillStyle = imgGlow;
+            ctx.fillRect(x + imgPad, cardY + imgPad, cardW - imgPad * 2, imgBoxH);
+            ctx.restore();
             if (img) {
                 const availW = cardW - imgPad * 2;
                 const scale = Math.min(availW / img.width, imgBoxH / img.height);
                 const dw = img.width * scale, dh = img.height * scale;
+                ctx.save();
+                ctx.shadowColor = 'rgba(0,0,0,0.35)';
+                ctx.shadowBlur = 18;
                 ctx.drawImage(img, x + (cardW - dw) / 2, cardY + imgPad + (imgBoxH - dh) / 2, dw, dh);
+                ctx.restore();
             }
 
             ctx.textAlign = 'center';
             if (item.category) {
                 ctx.font = '800 20px Arial';
-                ctx.fillStyle = palette[1];
+                ctx.fillStyle = palette[2];
                 ctx.fillText(item.category.toUpperCase(), x + cardW / 2, cardY + imgPad + imgBoxH + 30);
             }
             ctx.font = '700 26px Arial';
-            ctx.fillStyle = '#1f2937';
+            ctx.fillStyle = '#f1f5f9';
             const titleLines = wrapText(ctx, item.title, cardW - 40, 2);
             let ty = cardY + imgPad + imgBoxH + 62;
             titleLines.forEach(line => { ctx.fillText(line, x + cardW / 2, ty); ty += 32; });
 
             ty += 8;
             ctx.font = '900 34px Arial';
-            ctx.fillStyle = palette[1];
+            ctx.fillStyle = '#FFE066';
             ctx.fillText(`${Math.floor(item.newPrice).toLocaleString('tr-TR')} TL`, x + cardW / 2, ty);
             if (discountPct > 0) {
                 ty += 30;
                 ctx.font = '800 20px Arial';
-                ctx.fillStyle = '#16a34a';
+                ctx.fillStyle = '#4ade80';
                 ctx.fillText(`%${discountPct} İndirim`, x + cardW / 2, ty);
             }
             ctx.textAlign = 'left';
@@ -999,32 +1176,11 @@ async function renderHeroScene(
     drawSideCard(leftX, sideItems[0], sideImgs[0], cardLP, true);
     drawSideCard(rightX, sideItems[1], sideImgs[1], cardRP, false);
 
-    // ── Podyum: parlayan halkalar + hero ürün ────────────────────────────
+    // ── Podyum: dönen/parlayan halkalar + hero ürün ──────────────────────
     const pedestalCX = CANVAS_W / 2, pedestalCY = 1280;
-    const ringSettle = segProgress(progress, 0.22, 0.40);
-    const pulse = 1 + 0.04 * idleWave(progress, 3, 0) * ringSettle;
-    withPop(ctx, pedestalCX, pedestalCY, ringP, ringP, () => {
-        ctx.save();
-        const glowR = 330 * pulse;
-        const glow = ctx.createRadialGradient(pedestalCX, pedestalCY, 20, pedestalCX, pedestalCY, glowR);
-        glow.addColorStop(0, hexToRgba(palette[2], 0.55));
-        glow.addColorStop(1, hexToRgba(palette[2], 0));
-        ctx.fillStyle = glow;
-        ctx.beginPath();
-        ctx.ellipse(pedestalCX, pedestalCY, glowR, glowR * 0.4, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-
-        [220, 260, 300].forEach((r, i) => {
-            ctx.save();
-            ctx.strokeStyle = hexToRgba(palette[2], 0.5 - i * 0.13);
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.ellipse(pedestalCX, pedestalCY, r * pulse, r * 0.34 * pulse, 0, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.restore();
-        });
-    });
+    if (includeRings) {
+        drawPedestalRings(ctx, palette, pedestalCX, pedestalCY, bgTimeSec, ringP);
+    }
 
     const heroCY = 1100, heroSize = 480;
     const heroSettle = segProgress(progress, 0.30, 0.50);
@@ -1445,23 +1601,65 @@ async function recordHeroCompilationVideo(
     try { appIconImg = await loadAppIcon(); } catch { appIconImg = null; }
 
     const palette = pickPalette(heroItem.discountId || heroItem.id, heroItem.category);
-    const promoSnapshot = document.createElement('canvas');
-    promoSnapshot.width = CANVAS_W;
-    promoSnapshot.height = CANVAS_H;
-    await renderPromoFrame(promoSnapshot, appIconImg, palette);
+    const pedestalCX = CANVAS_W / 2, pedestalCY = 1280;
 
-    let heroSnapshotPromise: Promise<HTMLCanvasElement> | null = null;
-    const getHeroSnapshot = () => {
-        if (!heroSnapshotPromise) {
-            heroSnapshotPromise = (async () => {
+    // İçerik (kart/hero/ribbon/CTA — ağır gölgeli, tek seferlik) SEFFAF zeminle
+    // önbelleğe alınıyor; arka plan (gradyan+emoji+halka) her karede ayrı ayrı
+    // TAZE çizilip altına konuyor — böylece video "durgun" evrede bile
+    // (settle sonrası + geçiş + promo sayfası) arka plan hiç durmadan hareket
+    // etmeye devam ediyor, ama pahalı içerik tekrar render edilmiyor.
+    let heroContentSnapshotPromise: Promise<HTMLCanvasElement> | null = null;
+    const getHeroContentSnapshot = () => {
+        if (!heroContentSnapshotPromise) {
+            heroContentSnapshotPromise = (async () => {
                 const c = document.createElement('canvas');
                 c.width = CANVAS_W;
                 c.height = CANVAS_H;
-                await renderHeroScene(c, heroItem, sideItems, heroImg, sideImgs, 1, 'medium');
+                await renderHeroScene(c, heroItem, sideItems, heroImg, sideImgs, 1, 0, { background: false, rings: false }, 'medium');
                 return c;
             })();
         }
-        return heroSnapshotPromise!;
+        return heroContentSnapshotPromise!;
+    };
+    let promoContentSnapshotPromise: Promise<HTMLCanvasElement> | null = null;
+    const getPromoContentSnapshot = () => {
+        if (!promoContentSnapshotPromise) {
+            promoContentSnapshotPromise = (async () => {
+                const c = document.createElement('canvas');
+                c.width = CANVAS_W;
+                c.height = CANVAS_H;
+                await renderPromoFrame(c, appIconImg, palette, 0, false);
+                return c;
+            })();
+        }
+        return promoContentSnapshotPromise!;
+    };
+
+    // Geçiş sırasında (kısa, ~600ms) her iki bileşik kareyi de canlı üretmemiz
+    // gerekiyor (arka plan orada da hareket etsin diye) — yeniden kullanılan
+    // iki canvas'a çiziyoruz, her karede YENİ canvas oluşturup GC baskısı
+    // yaratmamak için (bkz. dosyanın genelindeki GC notları).
+    const heroComposeCanvas = document.createElement('canvas');
+    heroComposeCanvas.width = CANVAS_W; heroComposeCanvas.height = CANVAS_H;
+    const heroComposeCtx = heroComposeCanvas.getContext('2d')!;
+    const promoComposeCanvas = document.createElement('canvas');
+    promoComposeCanvas.width = CANVAS_W; promoComposeCanvas.height = CANVAS_H;
+    const promoComposeCtx = promoComposeCanvas.getContext('2d')!;
+
+    const composeHero = async (targetCtx: CanvasRenderingContext2D, tSec: number) => {
+        const content = await getHeroContentSnapshot();
+        targetCtx.setTransform(1, 0, 0, 1, 0, 0);
+        drawDecorativeBackground(targetCtx, palette, tSec);
+        drawVignette(targetCtx, 1000);
+        drawPedestalRings(targetCtx, palette, pedestalCX, pedestalCY, tSec, 1);
+        targetCtx.drawImage(content, 0, 0);
+    };
+    const composePromo = async (targetCtx: CanvasRenderingContext2D, tSec: number) => {
+        const content = await getPromoContentSnapshot();
+        targetCtx.setTransform(1, 0, 0, 1, 0, 0);
+        drawDecorativeBackground(targetCtx, palette, tSec);
+        drawVignette(targetCtx, 900);
+        targetCtx.drawImage(content, 0, 0);
     };
 
     return new Promise((resolve, reject) => {
@@ -1476,7 +1674,7 @@ async function recordHeroCompilationVideo(
         bufferCtx.imageSmoothingEnabled = true;
         bufferCtx.imageSmoothingQuality = 'medium';
         const startTime = performance.now();
-        getHeroSnapshot().catch(() => {});
+        getHeroContentSnapshot().catch(() => {});
 
         const frameIntervalMs = 1000 / VIDEO_FPS;
         let stopProducing = false;
@@ -1484,28 +1682,25 @@ async function recordHeroCompilationVideo(
             while (!stopProducing) {
                 const elapsed = performance.now() - startTime;
                 if (elapsed >= videoDurationMs) break;
+                const tSec = elapsed / 1000;
 
                 if (elapsed < sceneDurationMs) {
                     const p = elapsed / sceneDurationMs;
                     if (p >= HERO_SETTLE_PROGRESS) {
-                        const settled = await getHeroSnapshot();
-                        bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
-                        bufferCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-                        bufferCtx.drawImage(settled, 0, 0);
+                        await composeHero(bufferCtx, tSec);
                     } else {
-                        await renderHeroScene(buffer, heroItem, sideItems, heroImg, sideImgs, p, 'medium');
+                        await renderHeroScene(buffer, heroItem, sideItems, heroImg, sideImgs, p, tSec, {}, 'medium');
                     }
                 } else if (elapsed < sceneDurationMs + SLIDE_DURATION_MS) {
                     const flipT = (elapsed - sceneDurationMs) / SLIDE_DURATION_MS;
-                    const current = await getHeroSnapshot();
+                    await Promise.all([composeHero(heroComposeCtx, tSec), composePromo(promoComposeCtx, tSec)]);
                     const offset = easeInOutCubic(flipT) * CANVAS_W;
                     bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
                     bufferCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-                    bufferCtx.drawImage(current, -offset, 0);
-                    bufferCtx.drawImage(promoSnapshot, CANVAS_W - offset, 0);
+                    bufferCtx.drawImage(heroComposeCanvas, -offset, 0);
+                    bufferCtx.drawImage(promoComposeCanvas, CANVAS_W - offset, 0);
                 } else {
-                    bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
-                    bufferCtx.drawImage(promoSnapshot, 0, 0);
+                    await composePromo(bufferCtx, tSec);
                 }
 
                 await new Promise(r => setTimeout(r, frameIntervalMs));
