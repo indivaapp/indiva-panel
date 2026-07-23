@@ -696,32 +696,50 @@ export const suggestSocialCandidates = async (discounts: Discount[]): Promise<So
     // 12 fonksiyon sınırını aşıyordu) — body'de "discounts" (dizi) gönderilirse
     // aday puanlama moduna, "discount" (tekil) gönderilirse tek ürün içerik
     // üretme moduna girer.
-    const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            discounts: discounts.map(d => ({
-                id: d.id,
-                title: d.title,
-                brand: d.brand,
-                category: d.category,
-                oldPrice: d.oldPrice,
-                newPrice: d.newPrice,
-                reviewCount: d.reviewCount,
-            })),
-        }),
-        signal: AbortSignal.timeout(65000),
-    });
+    const attempt = async (): Promise<SocialContentCandidate[]> => {
+        const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                discounts: discounts.map(d => ({
+                    id: d.id,
+                    title: d.title,
+                    brand: d.brand,
+                    category: d.category,
+                    oldPrice: d.oldPrice,
+                    newPrice: d.newPrice,
+                    reviewCount: d.reviewCount,
+                })),
+            }),
+            signal: AbortSignal.timeout(65000),
+        });
 
-    const raw = await res.text();
-    let data: any;
-    try {
-        data = JSON.parse(raw);
-    } catch {
-        throw new Error(res.ok ? 'AI sunucudan geçersiz yanıt geldi' : `Sunucu hatası (${res.status}) — tekrar deneyin`);
+        const raw = await res.text();
+        let data: any;
+        try {
+            data = JSON.parse(raw);
+        } catch {
+            throw new Error(res.ok ? 'AI sunucudan geçersiz yanıt geldi' : `Sunucu hatası (${res.status}) — tekrar deneyin`);
+        }
+        if (!data.success) throw new Error(data.error || 'AI önerisi alınamadı');
+        return data.candidates as SocialContentCandidate[];
+    };
+
+    // Kullanıcı geri bildirimi: "AI ile Öner" ilk tıkta zaman aşımı hatası
+    // veriyor, 2-3 kez tıklayınca çalışıyordu — AI sağlayıcısının ara sıra
+    // yaşadığı geçici (transient) hatalar/zaman aşımları içindi. Kullanıcının
+    // elle tekrar tıklamasına gerek kalmasın diye burada otomatik yeniden
+    // deniyoruz (kısa bir bekleme ile, art arda 3 deneme).
+    let lastErr: unknown;
+    for (let i = 0; i < 3; i++) {
+        try {
+            return await attempt();
+        } catch (e) {
+            lastErr = e;
+            if (i < 2) await new Promise(r => setTimeout(r, 1200));
+        }
     }
-    if (!data.success) throw new Error(data.error || 'AI önerisi alınamadı');
-    return data.candidates as SocialContentCandidate[];
+    throw lastErr;
 };
 
 /** Seçilen TEK ürün için başlık+caption+seslendirme metni üretir. "Yeniden Üret"
