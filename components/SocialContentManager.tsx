@@ -279,6 +279,20 @@ function withSlideFade(ctx: CanvasRenderingContext2D, offsetY: number, alpha: nu
     draw();
     ctx.restore();
 }
+function withSlideFadeX(ctx: CanvasRenderingContext2D, offsetX: number, alpha: number, draw: () => void) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(offsetX, 0);
+    draw();
+    ctx.restore();
+}
+function hexToRgba(hex: string, alpha: number): string {
+    const h = hex.replace('#', '');
+    const r = parseInt(h.substring(0, 2), 16);
+    const g = parseInt(h.substring(2, 4), 16);
+    const b = parseInt(h.substring(4, 6), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+}
 
 // ── Arka plan renk paletleri ─────────────────────────────────────────────
 // Her palet [koyu köşe, orta canlı ton, parlak vurgu] — aynı ışık/kontrast
@@ -856,6 +870,253 @@ async function renderPromoFrame(canvas: HTMLCanvasElement, appIconImg: HTMLImage
     ctx.textAlign = 'left';
 }
 
+// ── "Hero + yan ürünler" sahnesi — 3'lü derleme videosu için, art arda tek
+// tek ürün göstermek yerine (eski recordSequenceVideo davranışı) tek bir
+// "vitrin" kompozisyonu: en yüksek indirimli ürün ortada podyumda büyük,
+// diğer iki ürün yanlarda küçük kartlarda. Kullanıcının paylaştığı örnek
+// tasarıma (İNDİVA logosu + başlık + 2 yan kart + ortada ürün + parlayan
+// podyum halkaları + fiyat kurdelesi + CTA) birebir referansla çizildi.
+async function renderHeroScene(
+    canvas: HTMLCanvasElement,
+    heroItem: DealRenderItem,
+    sideItems: DealRenderItem[],
+    heroImg: HTMLImageElement | null,
+    sideImgs: (HTMLImageElement | null)[],
+    progress: number = 1,
+    smoothingQuality: ImageSmoothingQuality = 'high',
+): Promise<void> {
+    if (canvas.width !== CANVAS_W) canvas.width = CANVAS_W;
+    if (canvas.height !== CANVAS_H) canvas.height = CANVAS_H;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = smoothingQuality;
+    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+    const palette = pickPalette(heroItem.discountId || heroItem.id, heroItem.category);
+    drawBackground(ctx, palette);
+
+    // Kenarlara doğru koyulaşan vinyet — referans görseldeki "spot ışığı"
+    // hissi (ortada parlak, kenarlarda neredeyse siyah).
+    ctx.save();
+    const vignette = ctx.createRadialGradient(CANVAS_W / 2, 1000, 220, CANVAS_W / 2, 1000, 1050);
+    vignette.addColorStop(0, 'rgba(0,0,0,0)');
+    vignette.addColorStop(1, 'rgba(0,0,0,0.55)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.restore();
+
+    // ── Animasyon segmentleri (0.72'de tamamen durgunlaşır — bkz. HERO_SETTLE_PROGRESS) ──
+    const brandP    = easeOutCubic(segProgress(progress, 0.00, 0.08));
+    const headlineP = easeOutCubic(segProgress(progress, 0.05, 0.15));
+    const cardLP    = easeOutBack(segProgress(progress, 0.10, 0.26));
+    const cardRP    = easeOutBack(segProgress(progress, 0.14, 0.30));
+    const ringP     = easeOutCubic(segProgress(progress, 0.22, 0.40));
+    const heroP     = easeOutBack(segProgress(progress, 0.30, 0.50));
+    const ribbonP   = easeOutBack(segProgress(progress, 0.50, 0.62));
+    const ctaP      = easeOutBack(segProgress(progress, 0.62, 0.72));
+
+    // ── Marka ─────────────────────────────────────────────────────────────
+    withSlideFade(ctx, (1 - brandP) * -10, brandP, () => {
+        ctx.textAlign = 'center';
+        ctx.font = '900 62px Arial';
+        ctx.fillStyle = palette[2];
+        ctx.shadowColor = 'rgba(0,0,0,0.5)';
+        ctx.shadowBlur = 20;
+        ctx.fillText('İNDİVA', CANVAS_W / 2, 175);
+        ctx.shadowBlur = 0;
+        ctx.textAlign = 'left';
+    });
+
+    // ── Başlık ────────────────────────────────────────────────────────────
+    withSlideFade(ctx, (1 - headlineP) * -10, headlineP, () => {
+        ctx.textAlign = 'center';
+        ctx.font = '900 66px Arial';
+        ctx.fillStyle = '#ffffff';
+        ctx.shadowColor = 'rgba(0,0,0,0.4)';
+        ctx.shadowBlur = 14;
+        ctx.fillText('GÜNÜN FIRSATLARI', CANVAS_W / 2, 305);
+        ctx.shadowBlur = 0;
+        ctx.textAlign = 'left';
+    });
+
+    // ── Yan kartlar (küçük ürünler) ──────────────────────────────────────
+    const cardW = 300, cardH = 440, cardY = 380;
+    const leftX = 60, rightX = CANVAS_W - 60 - cardW;
+    const drawSideCard = (x: number, item: DealRenderItem | undefined, img: HTMLImageElement | null | undefined, p: number, fromLeft: boolean) => {
+        if (!item || p <= 0.001) return;
+        const slideOffset = (1 - p) * (fromLeft ? -160 : 160);
+        withSlideFadeX(ctx, slideOffset, p, () => {
+            ctx.save();
+            ctx.shadowColor = 'rgba(0,0,0,0.5)';
+            ctx.shadowBlur = 30;
+            ctx.shadowOffsetY = 12;
+            ctx.fillStyle = '#ffffff';
+            drawRoundedRect(ctx, x, cardY, cardW, cardH, 28);
+            ctx.restore();
+            ctx.save();
+            ctx.strokeStyle = palette[2];
+            ctx.lineWidth = 4;
+            strokeRoundedRect(ctx, x + 2, cardY + 2, cardW - 4, cardH - 4, 26);
+            ctx.restore();
+
+            const discountPct = item.oldPrice > item.newPrice && item.oldPrice > 0
+                ? Math.round(((item.oldPrice - item.newPrice) / item.oldPrice) * 100) : 0;
+
+            const imgPad = 22, imgBoxH = 240;
+            if (img) {
+                const availW = cardW - imgPad * 2;
+                const scale = Math.min(availW / img.width, imgBoxH / img.height);
+                const dw = img.width * scale, dh = img.height * scale;
+                ctx.drawImage(img, x + (cardW - dw) / 2, cardY + imgPad + (imgBoxH - dh) / 2, dw, dh);
+            }
+
+            ctx.textAlign = 'center';
+            if (item.category) {
+                ctx.font = '800 20px Arial';
+                ctx.fillStyle = palette[1];
+                ctx.fillText(item.category.toUpperCase(), x + cardW / 2, cardY + imgPad + imgBoxH + 30);
+            }
+            ctx.font = '700 26px Arial';
+            ctx.fillStyle = '#1f2937';
+            const titleLines = wrapText(ctx, item.title, cardW - 40, 2);
+            let ty = cardY + imgPad + imgBoxH + 62;
+            titleLines.forEach(line => { ctx.fillText(line, x + cardW / 2, ty); ty += 32; });
+
+            ty += 8;
+            ctx.font = '900 34px Arial';
+            ctx.fillStyle = palette[1];
+            ctx.fillText(`${Math.floor(item.newPrice).toLocaleString('tr-TR')} TL`, x + cardW / 2, ty);
+            if (discountPct > 0) {
+                ty += 30;
+                ctx.font = '800 20px Arial';
+                ctx.fillStyle = '#16a34a';
+                ctx.fillText(`%${discountPct} İndirim`, x + cardW / 2, ty);
+            }
+            ctx.textAlign = 'left';
+        });
+    };
+    drawSideCard(leftX, sideItems[0], sideImgs[0], cardLP, true);
+    drawSideCard(rightX, sideItems[1], sideImgs[1], cardRP, false);
+
+    // ── Podyum: parlayan halkalar + hero ürün ────────────────────────────
+    const pedestalCX = CANVAS_W / 2, pedestalCY = 1280;
+    const ringSettle = segProgress(progress, 0.22, 0.40);
+    const pulse = 1 + 0.04 * idleWave(progress, 3, 0) * ringSettle;
+    withPop(ctx, pedestalCX, pedestalCY, ringP, ringP, () => {
+        ctx.save();
+        const glowR = 330 * pulse;
+        const glow = ctx.createRadialGradient(pedestalCX, pedestalCY, 20, pedestalCX, pedestalCY, glowR);
+        glow.addColorStop(0, hexToRgba(palette[2], 0.55));
+        glow.addColorStop(1, hexToRgba(palette[2], 0));
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.ellipse(pedestalCX, pedestalCY, glowR, glowR * 0.4, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        [220, 260, 300].forEach((r, i) => {
+            ctx.save();
+            ctx.strokeStyle = hexToRgba(palette[2], 0.5 - i * 0.13);
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.ellipse(pedestalCX, pedestalCY, r * pulse, r * 0.34 * pulse, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        });
+    });
+
+    const heroCY = 1100, heroSize = 480;
+    const heroSettle = segProgress(progress, 0.30, 0.50);
+    const heroIdle = 1 + 0.02 * idleWave(progress, 4, 1.5) * heroSettle;
+    withPop(ctx, pedestalCX, heroCY, heroP * heroIdle, heroP, () => {
+        if (heroImg) {
+            const scale = Math.min(heroSize / heroImg.width, heroSize / heroImg.height);
+            const dw = heroImg.width * scale, dh = heroImg.height * scale;
+            ctx.save();
+            ctx.shadowColor = 'rgba(0,0,0,0.5)';
+            ctx.shadowBlur = 40;
+            ctx.shadowOffsetY = 20;
+            ctx.drawImage(heroImg, pedestalCX - dw / 2, heroCY - dh / 2, dw, dh);
+            ctx.restore();
+        }
+    });
+
+    // ── Fiyat kurdelesi ──────────────────────────────────────────────────
+    const heroDiscountPct = heroItem.oldPrice > heroItem.newPrice && heroItem.oldPrice > 0
+        ? Math.round(((heroItem.oldPrice - heroItem.newPrice) / heroItem.oldPrice) * 100) : 0;
+    withSlideFade(ctx, (1 - ribbonP) * 20, ribbonP, () => {
+        if (heroItem.oldPrice > heroItem.newPrice) {
+            ctx.textAlign = 'center';
+            ctx.font = '600 32px Arial';
+            ctx.fillStyle = 'rgba(255,255,255,0.65)';
+            const oldText = `${Math.floor(heroItem.oldPrice).toLocaleString('tr-TR')} TL`;
+            ctx.fillText(oldText, pedestalCX, 1400);
+            const oldW = ctx.measureText(oldText).width;
+            ctx.strokeStyle = 'rgba(255,255,255,0.65)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(pedestalCX - oldW / 2, 1390);
+            ctx.lineTo(pedestalCX + oldW / 2, 1390);
+            ctx.stroke();
+            ctx.textAlign = 'left';
+        }
+
+        const rw = 540, rh = 130, rx = pedestalCX - rw / 2, ry = 1480 - rh / 2;
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.4)';
+        ctx.shadowBlur = 25;
+        ctx.shadowOffsetY = 10;
+        const ribbonGrad = ctx.createLinearGradient(rx, 0, rx + rw, 0);
+        ribbonGrad.addColorStop(0, palette[2]);
+        ribbonGrad.addColorStop(1, palette[1]);
+        ctx.fillStyle = ribbonGrad;
+        drawRoundedRect(ctx, rx, ry, rw, rh, 20);
+        ctx.restore();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '700 26px Arial';
+        ctx.fillText(heroDiscountPct > 0 ? `ÖZEL İNDİRİM · %${heroDiscountPct}` : 'ÖZEL İNDİRİM', pedestalCX, ry + 34);
+        ctx.font = '900 58px Arial';
+        ctx.fillText(`${Math.floor(heroItem.newPrice).toLocaleString('tr-TR')} TL`, pedestalCX, ry + 87);
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
+    });
+
+    // ── CTA butonu ───────────────────────────────────────────────────────
+    const ctaW = 780, ctaH = 110, ctaX = (CANVAS_W - ctaW) / 2, ctaY = 1580;
+    withPop(ctx, CANVAS_W / 2, ctaY + ctaH / 2, ctaP, ctaP, () => {
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.3)';
+        ctx.shadowBlur = 30;
+        ctx.shadowOffsetY = 10;
+        const ctaGrad = ctx.createLinearGradient(ctaX, 0, ctaX + ctaW, 0);
+        ctaGrad.addColorStop(0, '#ff9d3a');
+        ctaGrad.addColorStop(1, '#ff5a1a');
+        ctx.fillStyle = ctaGrad;
+        drawRoundedRect(ctx, ctaX, ctaY, ctaW, ctaH, 55);
+        ctx.restore();
+        ctx.font = '900 38px Arial';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('HEMEN SATIN AL!', CANVAS_W / 2, ctaY + ctaH / 2 + 2);
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
+    });
+
+    withPop(ctx, CANVAS_W / 2, ctaY + ctaH + 55, ctaP, ctaP, () => {
+        ctx.textAlign = 'center';
+        ctx.font = '600 28px Arial';
+        ctx.fillStyle = 'rgba(255,255,255,0.75)';
+        const footerLines = wrapText(ctx, 'İNDİVA — Online Alışverişte İndirim & Fırsat Uygulaması', CANVAS_W - 140, 2);
+        let fy = ctaY + ctaH + 50;
+        footerLines.forEach(line => { ctx.fillText(line, CANVAS_W / 2, fy); fy += 36; });
+        ctx.textAlign = 'left';
+    });
+}
+
 // ── Sayfa çevirme geçişi: fırsat sahnesi yatayda katlanıp promo sayfasına
 // döner (klasik "kart çevirme" efekti — cos(açı) ile yatay ölçek) ───────────
 function easeInOutCubic(t: number): number {
@@ -1128,6 +1389,141 @@ async function recordSequenceVideo(
             // Arabelleği SABİT aralıklarla görünen canvas'a basıyoruz — canvas'ı
             // "kirletip" otomatik captureStream(VIDEO_FPS) mekanizmasının
             // düzenli aralıklarla yakalamasını sağlıyoruz.
+            visibleCtx.drawImage(buffer, 0, 0);
+            if (elapsed >= videoDurationMs) stopAndResolve();
+        }, frameIntervalMs);
+
+        recorder.start();
+        producerPromise.catch(() => {});
+    });
+}
+
+// Giriş animasyonu segProgress aralıkları en geç 0.72'de biter (bkz. ctaP
+// renderHeroScene içinde) — bu yüzden progress >= HERO_SETTLE_PROGRESS için
+// sahne matematiksel olarak progress=1 ile birebir aynı (idleWave'in hafif
+// salınımı hariç), ağır tam render yerine önbellekteki kareyi tekrar kullanabiliriz.
+const HERO_SETTLE_PROGRESS = 0.75;
+
+/**
+ * "3'lü hızlı fırsat" videosunun modern vitrin şablonu — recordSequenceVideo'nun
+ * art arda tek tek ürün gösteren slayt mantığı yerine, TEK bir kompozisyon
+ * (hero ürün ortada podyumda + 2 yan ürün kartı) kaydeder, sonunda aynı
+ * kart-çevirme geçişiyle promo/outro sayfasına geçer.
+ */
+async function recordHeroCompilationVideo(
+    canvas: HTMLCanvasElement,
+    heroItem: DealRenderItem,
+    sideItems: DealRenderItem[],
+    heroImg: HTMLImageElement | null,
+    sideImgs: (HTMLImageElement | null)[],
+    onProgress?: (fraction: number) => void,
+    sceneDurationMs: number = 6000,
+    promoDurationMs: number = PROMO_DURATION_MS_DEFAULT,
+): Promise<Blob> {
+    const videoDurationMs = sceneDurationMs + SLIDE_DURATION_MS + promoDurationMs;
+
+    if (typeof (canvas as any).captureStream !== 'function' || typeof MediaRecorder === 'undefined') {
+        throw new Error('Bu tarayıcı video kaydını desteklemiyor.');
+    }
+    if (canvas.width !== CANVAS_W) canvas.width = CANVAS_W;
+    if (canvas.height !== CANVAS_H) canvas.height = CANVAS_H;
+    const visibleCtx = canvas.getContext('2d');
+    if (!visibleCtx) throw new Error('Canvas context alınamadı.');
+    visibleCtx.imageSmoothingEnabled = true;
+    visibleCtx.imageSmoothingQuality = 'high';
+
+    const buffer = document.createElement('canvas');
+    buffer.width = CANVAS_W;
+    buffer.height = CANVAS_H;
+
+    const stream: MediaStream = (canvas as any).captureStream(VIDEO_FPS);
+    const mimeType = pickSupportedMimeType();
+    const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 8_000_000 });
+    const chunks: Blob[] = [];
+
+    let appIconImg: HTMLImageElement | null = null;
+    try { appIconImg = await loadAppIcon(); } catch { appIconImg = null; }
+
+    const palette = pickPalette(heroItem.discountId || heroItem.id, heroItem.category);
+    const promoSnapshot = document.createElement('canvas');
+    promoSnapshot.width = CANVAS_W;
+    promoSnapshot.height = CANVAS_H;
+    await renderPromoFrame(promoSnapshot, appIconImg, palette);
+
+    let heroSnapshotPromise: Promise<HTMLCanvasElement> | null = null;
+    const getHeroSnapshot = () => {
+        if (!heroSnapshotPromise) {
+            heroSnapshotPromise = (async () => {
+                const c = document.createElement('canvas');
+                c.width = CANVAS_W;
+                c.height = CANVAS_H;
+                await renderHeroScene(c, heroItem, sideItems, heroImg, sideImgs, 1, 'medium');
+                return c;
+            })();
+        }
+        return heroSnapshotPromise!;
+    };
+
+    return new Promise((resolve, reject) => {
+        recorder.ondataavailable = (e: BlobEvent) => { if (e.data.size > 0) chunks.push(e.data); };
+        recorder.onerror = () => reject(new Error('Video kaydı başarısız oldu.'));
+        recorder.onstop = () => {
+            stream.getTracks().forEach(t => t.stop());
+            resolve(new Blob(chunks, { type: mimeType }));
+        };
+
+        const bufferCtx = buffer.getContext('2d')!;
+        bufferCtx.imageSmoothingEnabled = true;
+        bufferCtx.imageSmoothingQuality = 'medium';
+        const startTime = performance.now();
+        getHeroSnapshot().catch(() => {});
+
+        const frameIntervalMs = 1000 / VIDEO_FPS;
+        let stopProducing = false;
+        const runProducer = async () => {
+            while (!stopProducing) {
+                const elapsed = performance.now() - startTime;
+                if (elapsed >= videoDurationMs) break;
+
+                if (elapsed < sceneDurationMs) {
+                    const p = elapsed / sceneDurationMs;
+                    if (p >= HERO_SETTLE_PROGRESS) {
+                        const settled = await getHeroSnapshot();
+                        bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
+                        bufferCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+                        bufferCtx.drawImage(settled, 0, 0);
+                    } else {
+                        await renderHeroScene(buffer, heroItem, sideItems, heroImg, sideImgs, p, 'medium');
+                    }
+                } else if (elapsed < sceneDurationMs + SLIDE_DURATION_MS) {
+                    const flipT = (elapsed - sceneDurationMs) / SLIDE_DURATION_MS;
+                    const current = await getHeroSnapshot();
+                    const offset = easeInOutCubic(flipT) * CANVAS_W;
+                    bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
+                    bufferCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+                    bufferCtx.drawImage(current, -offset, 0);
+                    bufferCtx.drawImage(promoSnapshot, CANVAS_W - offset, 0);
+                } else {
+                    bufferCtx.setTransform(1, 0, 0, 1, 0, 0);
+                    bufferCtx.drawImage(promoSnapshot, 0, 0);
+                }
+
+                await new Promise(r => setTimeout(r, frameIntervalMs));
+            }
+        };
+        const producerPromise = runProducer();
+
+        let stopped = false;
+        const stopAndResolve = () => {
+            if (stopped) return;
+            stopped = true;
+            clearInterval(outputTimer);
+            stopProducing = true;
+            setTimeout(() => recorder.stop(), 150);
+        };
+        const outputTimer = setInterval(() => {
+            const elapsed = performance.now() - startTime;
+            onProgress?.(Math.min(1, elapsed / videoDurationMs));
             visibleCtx.drawImage(buffer, 0, 0);
             if (elapsed >= videoDurationMs) stopAndResolve();
         }, frameIntervalMs);
@@ -1703,18 +2099,19 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
             const next = new Set(prev);
             if (next.has(productId)) {
                 next.delete(productId);
-            } else if (next.size < 5) {
+            } else if (next.size < 3) {
                 next.add(productId);
             }
             return next;
         });
     };
 
-    // Seçilen 2-5 ürünü tek bir videoda birleştirir (bkz. recordSequenceVideo).
-    // Her ürün için önce CORS-güvenli görseli hazırlar, sonra kayda başlar.
+    // Tam 3 ürünü tek bir "vitrin" videosunda birleştirir (bkz. renderHeroScene) —
+    // en yüksek indirimli ürün ortada hero, diğer ikisi yan kartlarda. Her ürün
+    // için önce CORS-güvenli görseli hazırlar, sonra kayda başlar.
     const handleCreateMultiVideo = async () => {
         const selected = aiCandidates.filter(c => multiSelectIds.has(c.candidate.productId));
-        if (selected.length < 2) return;
+        if (selected.length !== 3) return;
 
         setMultiVideoMode(true);
         setMultiVideoState('recording');
@@ -1725,7 +2122,8 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
 
         try {
             const prepCanvas = document.createElement('canvas');
-            const segments = [];
+            const renderItems: DealRenderItem[] = [];
+            const images: (HTMLImageElement | null)[] = [];
             for (const c of selected) {
                 const renderItem: DealRenderItem = {
                     id: c.product.id,
@@ -1736,9 +2134,23 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                     oldPrice: c.product.oldPrice,
                 };
                 const cachedImg = await loadCleanProductImage(prepCanvas, renderItem, c.product.imageUrl);
-                segments.push({ item: renderItem, cachedImg, durationMs: 3800 });
+                renderItems.push(renderItem);
+                images.push(cachedImg);
             }
-            const blob = await recordSequenceVideo(canvas, segments, setMultiVideoProgress, PROMO_DURATION_MS_DEFAULT);
+
+            // Hero: en yüksek indirim yüzdesine sahip ürün — geri kalan ikisi yan kartlarda.
+            let heroIdx = 0, bestPct = -1;
+            renderItems.forEach((it, i) => {
+                const pct = it.oldPrice > it.newPrice && it.oldPrice > 0
+                    ? (it.oldPrice - it.newPrice) / it.oldPrice : 0;
+                if (pct > bestPct) { bestPct = pct; heroIdx = i; }
+            });
+            const heroItem = renderItems[heroIdx];
+            const heroImg = images[heroIdx];
+            const sideItems = renderItems.filter((_, i) => i !== heroIdx);
+            const sideImgs = images.filter((_, i) => i !== heroIdx);
+
+            const blob = await recordHeroCompilationVideo(canvas, heroItem, sideItems, heroImg, sideImgs, setMultiVideoProgress);
             multiVideoBlobRef.current = blob;
             multiVideoExtRef.current = blob.type.includes('mp4') ? 'mp4' : 'webm';
             setMultiVideoUrl(URL.createObjectURL(blob));
@@ -1946,7 +2358,7 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                     </button>
                                     <button onClick={closeAiModal} className="text-gray-400 hover:text-white text-xl leading-none">×</button>
                                 </div>
-                                <h3 className="text-white font-bold text-base mb-3">🎬 {multiSelectIds.size}'lü Fırsat Derlemesi</h3>
+                                <h3 className="text-white font-bold text-base mb-3">🎬 3'lü Vitrin Videosu</h3>
 
                                 <canvas ref={multiCanvasRef} className={multiVideoState === 'ready' ? 'hidden' : 'w-full rounded-xl bg-gray-950'} width={1080} height={1920} style={{ aspectRatio: '9/16', maxHeight: '50vh', objectFit: 'contain' }} />
 
@@ -2000,7 +2412,7 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                     <h3 className="text-white font-bold text-base flex items-center gap-2">🤖 AI'nın Önerdiği {aiCandidates.length} Ürün</h3>
                                     <button onClick={closeAiModal} className="text-gray-400 hover:text-white text-xl leading-none">×</button>
                                 </div>
-                                <p className="text-gray-500 text-xs mb-4">Beğendiğiniz ürünü seçin — içerik SADECE o ürün için üretilecek. Ya da birden fazla ürün işaretleyip tek bir derleme videosu oluşturun.</p>
+                                <p className="text-gray-500 text-xs mb-4">Beğendiğiniz ürünü seçin — içerik SADECE o ürün için üretilecek. Ya da tam 3 ürün işaretleyip modern bir vitrin videosu oluşturun.</p>
 
                                 <div className="space-y-2.5 pb-2">
                                     {aiCandidates.map((item) => {
@@ -2066,14 +2478,14 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                 {multiSelectIds.size > 0 && (
                                     <div className="sticky bottom-0 -mx-5 -mb-5 mt-3 px-5 py-3 bg-gray-800/95 border-t border-purple-600/30 flex items-center justify-between gap-3">
                                         <p className="text-gray-300 text-xs">
-                                            {multiSelectIds.size} ürün seçildi{multiSelectIds.size < 2 ? ' (en az 2 gerekli)' : ''}
+                                            {multiSelectIds.size}/3 ürün seçildi{multiSelectIds.size < 3 ? ' (tam 3 gerekli)' : ''}
                                         </p>
                                         <button
                                             onClick={handleCreateMultiVideo}
-                                            disabled={multiSelectIds.size < 2}
+                                            disabled={multiSelectIds.size !== 3}
                                             className="shrink-0 px-4 py-2 text-xs font-semibold bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
                                         >
-                                            🎬 {multiSelectIds.size}'lü Video Oluştur
+                                            🎬 3'lü Vitrin Videosu Oluştur
                                         </button>
                                     </div>
                                 )}
