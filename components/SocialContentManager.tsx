@@ -19,6 +19,7 @@ interface SocialContentManagerProps {
 
 const CANVAS_W = 1080;
 const CANVAS_H = 1920; // 9:16 — Instagram Hikaye/Reels formatı
+const INDIVA_ORANGE = '#FF7A1A'; // Marka turuncusu — vitrin şablonunda palet yerine sabit kullanılır
 
 // ─── Canvas çizim yardımcıları ──────────────────────────────────────────────
 
@@ -1065,14 +1066,13 @@ async function renderHeroScene(
     const cardRP    = easeOutBack(segProgress(progress, 0.14, 0.30));
     const ringP     = easeOutCubic(segProgress(progress, 0.22, 0.40));
     const heroP     = easeOutBack(segProgress(progress, 0.30, 0.50));
-    const ribbonP   = easeOutBack(segProgress(progress, 0.50, 0.62));
     const ctaP      = easeOutBack(segProgress(progress, 0.62, 0.72));
 
     // ── Marka ─────────────────────────────────────────────────────────────
     withSlideFade(ctx, (1 - brandP) * -10, brandP, () => {
         ctx.textAlign = 'center';
         ctx.font = '900 62px Arial';
-        ctx.fillStyle = palette[2];
+        ctx.fillStyle = INDIVA_ORANGE;
         ctx.shadowColor = 'rgba(0,0,0,0.5)';
         ctx.shadowBlur = 20;
         ctx.fillText('İNDİVA', CANVAS_W / 2, 175);
@@ -1125,17 +1125,14 @@ async function renderHeroScene(
                 ? Math.round(((item.oldPrice - item.newPrice) / item.oldPrice) * 100) : 0;
 
             const imgPad = 22, imgBoxH = 240;
-            // Ürün görselinin arkasında yumuşak, ışıklı bir "sahne" — çıplak
-            // koyu zeminde havada asılı durmasın diye (beyaz kutu yerine bu).
+            // Ürün görselinin arkasında İNDİVA turuncusu bir "sahne" —
+            // çıplak koyu zeminde (siyaha yakın) havada asılı durmasın diye.
             ctx.save();
-            const imgGlow = ctx.createRadialGradient(
-                x + cardW / 2, cardY + imgPad + imgBoxH / 2, 10,
-                x + cardW / 2, cardY + imgPad + imgBoxH / 2, imgBoxH * 0.62,
-            );
-            imgGlow.addColorStop(0, 'rgba(255,255,255,0.16)');
-            imgGlow.addColorStop(1, 'rgba(255,255,255,0)');
-            ctx.fillStyle = imgGlow;
-            ctx.fillRect(x + imgPad, cardY + imgPad, cardW - imgPad * 2, imgBoxH);
+            const imgPlateGrad = ctx.createLinearGradient(x + imgPad, cardY + imgPad, x + imgPad, cardY + imgPad + imgBoxH);
+            imgPlateGrad.addColorStop(0, '#ff9d3a');
+            imgPlateGrad.addColorStop(1, '#ff5a1a');
+            ctx.fillStyle = imgPlateGrad;
+            drawRoundedRect(ctx, x + imgPad, cardY + imgPad, cardW - imgPad * 2, imgBoxH, 18);
             ctx.restore();
             if (img) {
                 const availW = cardW - imgPad * 2;
@@ -1176,72 +1173,128 @@ async function renderHeroScene(
     drawSideCard(leftX, sideItems[0], sideImgs[0], cardLP, true);
     drawSideCard(rightX, sideItems[1], sideImgs[1], cardRP, false);
 
-    // ── Podyum: dönen/parlayan halkalar + hero ürün ──────────────────────
-    const pedestalCX = CANVAS_W / 2, pedestalCY = 1280;
+    // ── Hero kartı — yan kartlarla aynı dilde ama büyük: çerçeve + turuncu
+    // ürün "sahnesi" + isim + fiyat, HEPSİ TEK kart içinde (ayrı bir indirim
+    // kurdelesi YOK — kullanıcı geri bildirimiyle karta entegre edildi).
+    const pedestalCX = CANVAS_W / 2;
+    const heroCardW = 760, heroCardX = (CANVAS_W - heroCardW) / 2, heroCardY = 860;
+    const heroPad = 32, heroImgAreaH = 380;
+    const heroDiscountPct = heroItem.oldPrice > heroItem.newPrice && heroItem.oldPrice > 0
+        ? Math.round(((heroItem.oldPrice - heroItem.newPrice) / heroItem.oldPrice) * 100) : 0;
+
+    // Kart yüksekliği başlığın kaç satır sürdüğüne göre değişir — panel'i
+    // çizmeden önce (içerikle aynı font ile) satır sayısını ölçüyoruz.
+    ctx.font = '800 38px Arial';
+    const heroTitleLines = wrapText(ctx, heroItem.title, heroCardW - heroPad * 2 - 20, 2);
+    const heroTitleLineH = 46;
+    const heroBadgeH = 50, herPriceH = 84;
+    const heroCardH = heroPad + heroImgAreaH + 34 + heroTitleLines.length * heroTitleLineH + 20 + heroBadgeH + 22 + herPriceH + heroPad;
+
+    const pedestalCY = heroCardY + heroCardH - 20;
     if (includeRings) {
         drawPedestalRings(ctx, palette, pedestalCX, pedestalCY, bgTimeSec, ringP);
     }
 
-    const heroCY = 1100, heroSize = 480;
     const heroSettle = segProgress(progress, 0.30, 0.50);
-    const heroIdle = 1 + 0.02 * idleWave(progress, 4, 1.5) * heroSettle;
-    withPop(ctx, pedestalCX, heroCY, heroP * heroIdle, heroP, () => {
+    const heroIdle = 1 + 0.01 * idleWave(progress, 4, 1.5) * heroSettle;
+    withPop(ctx, heroCardX + heroCardW / 2, heroCardY + heroCardH / 2, heroP * heroIdle, heroP, () => {
+        // Kart paneli (yan kartlarla aynı koyu cam + turuncu çerçeve)
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.55)';
+        ctx.shadowBlur = 40;
+        ctx.shadowOffsetY = 18;
+        const panelGrad = ctx.createLinearGradient(heroCardX, heroCardY, heroCardX, heroCardY + heroCardH);
+        panelGrad.addColorStop(0, hexToRgba('#1c1530', 0.85));
+        panelGrad.addColorStop(1, hexToRgba('#0b0a18', 0.92));
+        ctx.fillStyle = panelGrad;
+        drawRoundedRect(ctx, heroCardX, heroCardY, heroCardW, heroCardH, 36);
+        ctx.restore();
+
+        ctx.save();
+        ctx.strokeStyle = INDIVA_ORANGE;
+        ctx.lineWidth = 6;
+        strokeRoundedRect(ctx, heroCardX + 3, heroCardY + 3, heroCardW - 6, heroCardH - 6, 34);
+        ctx.restore();
+
+        // Turuncu ürün "sahnesi" — ürün fotoğrafı (genelde beyaz zeminli)
+        // çıplak koyu kartta değil, İNDİVA turuncusu bir plaka üzerinde dursun.
+        ctx.save();
+        const plateGrad = ctx.createLinearGradient(heroCardX + heroPad, heroCardY + heroPad, heroCardX + heroPad, heroCardY + heroPad + heroImgAreaH);
+        plateGrad.addColorStop(0, '#ff9d3a');
+        plateGrad.addColorStop(1, '#ff5a1a');
+        ctx.fillStyle = plateGrad;
+        drawRoundedRect(ctx, heroCardX + heroPad, heroCardY + heroPad, heroCardW - heroPad * 2, heroImgAreaH, 24);
+        ctx.restore();
+
         if (heroImg) {
-            const scale = Math.min(heroSize / heroImg.width, heroSize / heroImg.height);
+            const availW = heroCardW - heroPad * 2 - 40, availH = heroImgAreaH - 40;
+            const scale = Math.min(availW / heroImg.width, availH / heroImg.height);
             const dw = heroImg.width * scale, dh = heroImg.height * scale;
             ctx.save();
-            ctx.shadowColor = 'rgba(0,0,0,0.5)';
-            ctx.shadowBlur = 40;
-            ctx.shadowOffsetY = 20;
-            ctx.drawImage(heroImg, pedestalCX - dw / 2, heroCY - dh / 2, dw, dh);
+            ctx.shadowColor = 'rgba(0,0,0,0.3)';
+            ctx.shadowBlur = 22;
+            ctx.drawImage(
+                heroImg,
+                heroCardX + heroCardW / 2 - dw / 2,
+                heroCardY + heroPad + heroImgAreaH / 2 - dh / 2,
+                dw, dh,
+            );
             ctx.restore();
         }
-    });
 
-    // ── Fiyat kurdelesi ──────────────────────────────────────────────────
-    const heroDiscountPct = heroItem.oldPrice > heroItem.newPrice && heroItem.oldPrice > 0
-        ? Math.round(((heroItem.oldPrice - heroItem.newPrice) / heroItem.oldPrice) * 100) : 0;
-    withSlideFade(ctx, (1 - ribbonP) * 20, ribbonP, () => {
-        if (heroItem.oldPrice > heroItem.newPrice) {
-            ctx.textAlign = 'center';
-            ctx.font = '600 32px Arial';
+        let ty = heroCardY + heroPad + heroImgAreaH + 34 + heroTitleLineH - 10;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
+        ctx.font = '800 38px Arial';
+        ctx.fillStyle = '#f1f5f9';
+        heroTitleLines.forEach(line => { ctx.fillText(line, heroCardX + heroCardW / 2, ty); ty += heroTitleLineH; });
+
+        ty += 20;
+        const badgeText = heroDiscountPct > 0 ? `ÖZEL İNDİRİM · %${heroDiscountPct}` : 'ÖZEL İNDİRİM';
+        ctx.font = '800 24px Arial';
+        const badgeW = ctx.measureText(badgeText).width + 48;
+        ctx.fillStyle = INDIVA_ORANGE;
+        drawRoundedRect(ctx, heroCardX + heroCardW / 2 - badgeW / 2, ty, badgeW, heroBadgeH, heroBadgeH / 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(badgeText, heroCardX + heroCardW / 2, ty + heroBadgeH / 2 + 1);
+        ctx.textBaseline = 'alphabetic';
+
+        ty += heroBadgeH + 22 + herPriceH - 18;
+        const newPriceText = `${Math.floor(heroItem.newPrice).toLocaleString('tr-TR')} TL`;
+        const oldPriceText = heroItem.oldPrice > heroItem.newPrice
+            ? `${Math.floor(heroItem.oldPrice).toLocaleString('tr-TR')} TL` : '';
+        ctx.font = '900 66px Arial';
+        const newW = ctx.measureText(newPriceText).width;
+        let oldW = 0;
+        if (oldPriceText) { ctx.font = '600 34px Arial'; oldW = ctx.measureText(oldPriceText).width; }
+        const gap = oldPriceText ? 22 : 0;
+        const priceStartX = heroCardX + heroCardW / 2 - (newW + gap + oldW) / 2;
+        ctx.textAlign = 'left';
+        ctx.save();
+        ctx.shadowColor = 'rgba(255,224,102,0.5)';
+        ctx.shadowBlur = 22;
+        ctx.font = '900 66px Arial';
+        ctx.fillStyle = '#FFE066';
+        ctx.fillText(newPriceText, priceStartX, ty);
+        ctx.restore();
+        if (oldPriceText) {
+            const oldX = priceStartX + newW + gap, oldY = ty - 10;
+            ctx.font = '600 34px Arial';
             ctx.fillStyle = 'rgba(255,255,255,0.65)';
-            const oldText = `${Math.floor(heroItem.oldPrice).toLocaleString('tr-TR')} TL`;
-            ctx.fillText(oldText, pedestalCX, 1400);
-            const oldW = ctx.measureText(oldText).width;
+            ctx.fillText(oldPriceText, oldX, oldY);
             ctx.strokeStyle = 'rgba(255,255,255,0.65)';
             ctx.lineWidth = 3;
             ctx.beginPath();
-            ctx.moveTo(pedestalCX - oldW / 2, 1390);
-            ctx.lineTo(pedestalCX + oldW / 2, 1390);
+            ctx.moveTo(oldX, oldY - 12);
+            ctx.lineTo(oldX + oldW, oldY - 12);
             ctx.stroke();
-            ctx.textAlign = 'left';
         }
-
-        const rw = 540, rh = 130, rx = pedestalCX - rw / 2, ry = 1480 - rh / 2;
-        ctx.save();
-        ctx.shadowColor = 'rgba(0,0,0,0.4)';
-        ctx.shadowBlur = 25;
-        ctx.shadowOffsetY = 10;
-        const ribbonGrad = ctx.createLinearGradient(rx, 0, rx + rw, 0);
-        ribbonGrad.addColorStop(0, palette[2]);
-        ribbonGrad.addColorStop(1, palette[1]);
-        ctx.fillStyle = ribbonGrad;
-        drawRoundedRect(ctx, rx, ry, rw, rh, 20);
-        ctx.restore();
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '700 26px Arial';
-        ctx.fillText(heroDiscountPct > 0 ? `ÖZEL İNDİRİM · %${heroDiscountPct}` : 'ÖZEL İNDİRİM', pedestalCX, ry + 34);
-        ctx.font = '900 58px Arial';
-        ctx.fillText(`${Math.floor(heroItem.newPrice).toLocaleString('tr-TR')} TL`, pedestalCX, ry + 87);
         ctx.textAlign = 'left';
-        ctx.textBaseline = 'alphabetic';
     });
 
     // ── CTA butonu ───────────────────────────────────────────────────────
-    const ctaW = 780, ctaH = 110, ctaX = (CANVAS_W - ctaW) / 2, ctaY = 1580;
+    const ctaW = 780, ctaH = 110, ctaX = (CANVAS_W - ctaW) / 2, ctaY = heroCardY + heroCardH + 40;
     withPop(ctx, CANVAS_W / 2, ctaY + ctaH / 2, ctaP, ctaP, () => {
         ctx.save();
         ctx.shadowColor = 'rgba(0,0,0,0.3)';
