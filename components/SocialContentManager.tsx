@@ -1158,10 +1158,24 @@ function drawShowcaseCard(
     drawRoundedRect(ctx, x, y, w, h, cornerR);
     ctx.restore();
 
+    // Çerçeve — düz tek renk yerine yumuşak geçişli bir gradyan (sol-üstte
+    // sıcak/açık bir parıltı, sağ-altta koyu bir gölge tonuna doğru erir) +
+    // hemen içinde ince, cam gibi bir parlaklık çizgisi. Kullanıcı geri
+    // bildirimi: düz çerçeve "çok basit/amatör" görünüyordu.
     ctx.save();
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    const borderGrad = ctx.createLinearGradient(x, y, x + w, y + h);
+    borderGrad.addColorStop(0, 'rgba(255,224,170,0.95)');
+    borderGrad.addColorStop(0.45, 'rgba(255,158,70,0.55)');
+    borderGrad.addColorStop(1, 'rgba(110,26,10,0.7)');
+    ctx.strokeStyle = borderGrad;
     ctx.lineWidth = borderW;
     strokeRoundedRect(ctx, x + borderW / 2, y + borderW / 2, w - borderW, h - borderW, cornerR - 2);
+    ctx.restore();
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+    ctx.lineWidth = big ? 1.5 : 1;
+    strokeRoundedRect(ctx, x + borderW + 2, y + borderW + 2, w - (borderW + 2) * 2, h - (borderW + 2) * 2, Math.max(4, cornerR - borderW - 6));
     ctx.restore();
 
     // Görsel alanı: koyu bir zeminde DEĞİL, ürünün kendi (beyaz zeminli)
