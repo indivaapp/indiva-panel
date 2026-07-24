@@ -1102,36 +1102,34 @@ interface CardGeometry {
     x: number; y: number; w: number; h: number;
     pad: number; imgAreaH: number;
     titleLines: string[]; titleFont: number; titleLineH: number;
-    labelFont: number; labelH: number;
-    priceFont: number; priceRowH: number; panelPad: number; panelGapInner: number; panelH: number;
+    chipFont: number; oldFont: number; newFont: number; barH: number;
     cornerR: number; borderW: number;
     big: boolean;
 }
 
 // Yan kartlar VE hero kartı AYNI çizim mantığını paylaşır (kullanıcı geri
 // bildirimi: ikisi çok farklı görünüyordu) — sadece ölçek (big) değişir.
-// Fiyat + indirim etiketi TEK bir "fiyat etiketi" panelinde birleşti (bkz.
-// drawShowcaseCard) — ayrı ayrı yüzen bir rozet ve dar bir fiyat kutusu
-// yerine, gerçek bir e-ticaret fiyat etiketi gibi tek çerçeve.
+// Fiyat + indirim: gerçek e-ticaret uygulamalarındaki gibi (Trendyol/
+// Hepsiburada tarzı) BEYAZ, tam genişlikte bir "fiyat şeridi" — turuncu
+// kartın üstünde yarı saydam koyu bir kutu (önceki deneme) rengi çamura
+// dönüştürüyordu; beyaz zemin + koyu/kırmızı metin her palette'te net
+// kontrast garantiliyor ve kart kenarlarıyla hizalı, düzenli duruyor.
 function computeCardGeometry(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, item: DealRenderItem, big: boolean): CardGeometry {
     const pad = big ? 32 : 22;
     const imgAreaH = big ? 380 : 230;
     const titleFont = big ? 38 : 26;
     const titleLineH = big ? 46 : 32;
-    const labelFont = big ? 27 : 19;
-    const labelH = big ? 34 : 24;
-    const priceFont = big ? 60 : 32;
-    const priceRowH = big ? 58 : 34;
-    const panelPad = big ? 24 : 16;
-    const panelGapInner = big ? 10 : 6;
-    const panelH = panelPad * 2 + labelH + panelGapInner + priceRowH;
+    const chipFont = big ? 24 : 17;
+    const oldFont = big ? 26 : 16;
+    const newFont = big ? 50 : 30;
+    const barH = big ? 84 : 56;
     const cornerR = big ? 36 : 28;
     const borderW = big ? 6 : 4;
     ctx.font = `800 ${titleFont}px Arial`;
     const titleLines = wrapText(ctx, item.title, w - pad * 2, 2);
-    const gapImgTitle = big ? 34 : 22, gapTitlePanel = big ? 26 : 18;
-    const h = pad + imgAreaH + gapImgTitle + titleLines.length * titleLineH + gapTitlePanel + panelH + pad;
-    return { x, y, w, h, pad, imgAreaH, titleLines, titleFont, titleLineH, labelFont, labelH, priceFont, priceRowH, panelPad, panelGapInner, panelH, cornerR, borderW, big };
+    const gapImgTitle = big ? 34 : 22, gapTitleBar = big ? 26 : 18;
+    const h = pad + imgAreaH + gapImgTitle + titleLines.length * titleLineH + gapTitleBar + barH + pad;
+    return { x, y, w, h, pad, imgAreaH, titleLines, titleFont, titleLineH, chipFont, oldFont, newFont, barH, cornerR, borderW, big };
 }
 
 function drawShowcaseCard(
@@ -1141,7 +1139,7 @@ function drawShowcaseCard(
     img: HTMLImageElement | null | undefined,
     palette: [string, string, string],
 ) {
-    const { x, y, w, h, pad, imgAreaH, titleLines, titleFont, titleLineH, labelFont, labelH, priceFont, priceRowH, panelPad, panelGapInner, panelH, cornerR, borderW, big } = g;
+    const { x, y, w, h, pad, imgAreaH, titleLines, titleFont, titleLineH, chipFont, oldFont, newFont, barH, cornerR, borderW, big } = g;
 
     // Panel: turuncu gradyan — ürün adı/fiyat bilgisinin arkası artık siyah
     // DEĞİL, İNDİVA turuncusu (kullanıcı geri bildirimi).
@@ -1188,70 +1186,68 @@ function drawShowcaseCard(
     titleLines.forEach(line => { ctx.fillText(line, x + w / 2, ty); ty += titleLineH; });
     ctx.shadowBlur = 0;
 
-    // Tek bir "fiyat etiketi" paneli — indirim yüzdesi ile fiyat artık ayrı
-    // yüzen bir rozet + dar bir kutu değil, gerçek bir e-ticaret fiyat
-    // etiketi gibi TEK çerçeve içinde: üstte küçük "%X İNDİRİM" satırı,
-    // altında eski fiyat (küçük, üstü çizili, solda) + yeni fiyat (büyük,
-    // sağda) — ikisi de sola hizalı, panel ortalanmış (kullanıcı geri
-    // bildirimi: konumlar/çerçeve dağınık ve amatörce görünüyordu).
+    // Fiyat şeridi — Trendyol/Hepsiburada tarzı: BEYAZ, kartın tam
+    // genişliğinde bir şerit (koyu yarı saydam kutu turuncu zeminle
+    // karışıp çamur rengi bir görünüm veriyordu — kullanıcı geri bildirimi).
+    // Solda kırmızı indirim rozeti, sağda eski/yeni fiyat — gerçek bir
+    // e-ticaret fiyat etiketi gibi net kontrast ve düzenli hizalama.
     ty += big ? 26 : 18;
     const discountPct = item.oldPrice > item.newPrice && item.oldPrice > 0
         ? Math.round(((item.oldPrice - item.newPrice) / item.oldPrice) * 100) : 0;
-    const labelText = discountPct > 0 ? `%${discountPct} İNDİRİM` : 'ÖZEL İNDİRİM';
+    const chipText = discountPct > 0 ? `%${discountPct}` : '★';
     const newPriceText = `${Math.floor(item.newPrice).toLocaleString('tr-TR')} TL`;
     const oldPriceText = item.oldPrice > item.newPrice ? `${Math.floor(item.oldPrice).toLocaleString('tr-TR')} TL` : '';
-    const oldFont = big ? 28 : 17;
 
-    ctx.font = `900 ${labelFont}px Arial`;
-    const labelW = ctx.measureText(labelText).width;
-    ctx.font = `900 ${priceFont}px Arial`;
+    const barX = x + pad, barY = ty, barW = w - pad * 2;
+    const barR = big ? 18 : 13;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.28)';
+    ctx.shadowBlur = big ? 16 : 10;
+    ctx.shadowOffsetY = big ? 6 : 4;
+    ctx.fillStyle = '#ffffff';
+    drawRoundedRect(ctx, barX, barY, barW, barH, barR);
+    ctx.restore();
+
+    const innerPad = big ? 18 : 12;
+    const chipPadX = big ? 16 : 11;
+    ctx.font = `900 ${chipFont}px Arial`;
+    const chipTextW = ctx.measureText(chipText).width;
+    const chipH = barH - innerPad * 1.1;
+    const chipW = chipTextW + chipPadX * 2;
+    const chipX = barX + innerPad, chipY = barY + (barH - chipH) / 2;
+    ctx.fillStyle = '#E11D3C';
+    drawRoundedRect(ctx, chipX, chipY, chipW, chipH, chipH / 2);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(chipText, chipX + chipW / 2, chipY + chipH / 2 + 1);
+    ctx.textBaseline = 'alphabetic';
+
+    ctx.font = `900 ${newFont}px Arial`;
     const newW = ctx.measureText(newPriceText).width;
     let oldW = 0;
+    const priceGap = big ? 12 : 8;
     if (oldPriceText) { ctx.font = `700 ${oldFont}px Arial`; oldW = ctx.measureText(oldPriceText).width; }
-    const priceGap = oldPriceText ? (big ? 18 : 10) : 0;
-    const contentW = Math.max(labelW, oldW + priceGap + newW);
-    const panelW = contentW + panelPad * 2;
-    const panelX = x + w / 2 - panelW / 2;
-    const panelY = ty;
-    const panelR = big ? 20 : 14;
-
-    ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.30)';
-    drawRoundedRect(ctx, panelX, panelY, panelW, panelH, panelR);
-    ctx.restore();
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-    ctx.lineWidth = big ? 2 : 1.5;
-    strokeRoundedRect(ctx, panelX + 1, panelY + 1, panelW - 2, panelH - 2, panelR - 1);
-    ctx.restore();
-
+    const priceGroupW = oldW + (oldPriceText ? priceGap : 0) + newW;
+    let curX = barX + barW - innerPad - priceGroupW;
+    const priceBaselineY = barY + barH / 2 + newFont * 0.32;
     ctx.textAlign = 'left';
-    ctx.font = `900 ${labelFont}px Arial`;
-    ctx.fillStyle = '#FFD966';
-    const labelBaselineY = panelY + panelPad + labelH * 0.76;
-    ctx.fillText(labelText, panelX + panelPad, labelBaselineY);
-
-    const priceBaselineY = panelY + panelPad + labelH + panelGapInner + priceRowH * 0.8;
-    let curX = panelX + panelPad;
     if (oldPriceText) {
+        const oldY = barY + barH / 2 + oldFont * 0.3;
         ctx.font = `700 ${oldFont}px Arial`;
-        ctx.fillStyle = 'rgba(255,255,255,0.65)';
-        ctx.fillText(oldPriceText, curX, priceBaselineY);
-        ctx.strokeStyle = 'rgba(255,255,255,0.65)';
-        ctx.lineWidth = big ? 2.5 : 1.5;
+        ctx.fillStyle = '#9CA3AF';
+        ctx.fillText(oldPriceText, curX, oldY);
+        ctx.strokeStyle = '#9CA3AF';
+        ctx.lineWidth = big ? 2 : 1.5;
         ctx.beginPath();
-        ctx.moveTo(curX, priceBaselineY - oldFont * 0.35);
-        ctx.lineTo(curX + oldW, priceBaselineY - oldFont * 0.35);
+        ctx.moveTo(curX, oldY - oldFont * 0.34);
+        ctx.lineTo(curX + oldW, oldY - oldFont * 0.34);
         ctx.stroke();
         curX += oldW + priceGap;
     }
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.35)';
-    ctx.shadowBlur = 8;
-    ctx.font = `900 ${priceFont}px Arial`;
-    ctx.fillStyle = '#ffffff';
+    ctx.font = `900 ${newFont}px Arial`;
+    ctx.fillStyle = '#161221';
     ctx.fillText(newPriceText, curX, priceBaselineY);
-    ctx.restore();
     ctx.textAlign = 'left';
 }
 
@@ -2591,6 +2587,19 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                             ? <><span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Taranıyor…</>
                             : <>🤖 AI ile Öner</>}
                     </button>
+                    {/* Modal kapatılınca aiCandidates hafızada kalıyor — yanlışlıkla
+                        kapatılınca "AI ile Öner"e tekrar basmak gereksiz bir AI
+                        çağrısına (maliyet) yol açıyordu. Bu buton hiçbir API çağrısı
+                        yapmadan son listeyi tekrar açar. */}
+                    {aiCandidates.length > 0 && (
+                        <button
+                            onClick={() => setShowAiModal(true)}
+                            title="Son AI önerisini tekrar aç (yeniden taramaz)"
+                            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
+                        >
+                            📋 Son Öneriler
+                        </button>
+                    )}
                     <button
                         onClick={fetchItems}
                         className="text-sm text-gray-400 hover:text-white px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors"
