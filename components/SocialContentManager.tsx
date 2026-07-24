@@ -1128,7 +1128,11 @@ function computeCardGeometry(ctx: CanvasRenderingContext2D, x: number, y: number
     ctx.font = `800 ${titleFont}px Arial`;
     const titleLines = wrapText(ctx, item.title, w - pad * 2, 2);
     const gapImgTitle = big ? 34 : 22, gapTitleBar = big ? 26 : 18;
-    const h = pad + imgAreaH + gapImgTitle + titleLines.length * titleLineH + gapTitleBar + barH + pad;
+    // Fiyat şeridinin ALTINDA, üstündeki kadar (hatta biraz daha fazla) boşluk
+    // bırakılıyor — kullanıcı geri bildirimi: şerit kartın alt kenarına çok
+    // yapışık duruyordu.
+    const bottomPad = pad + (big ? 26 : 16);
+    const h = pad + imgAreaH + gapImgTitle + titleLines.length * titleLineH + gapTitleBar + barH + bottomPad;
     return { x, y, w, h, pad, imgAreaH, titleLines, titleFont, titleLineH, chipFont, oldFont, newFont, barH, cornerR, borderW, big };
 }
 
