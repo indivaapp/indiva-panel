@@ -1102,30 +1102,36 @@ interface CardGeometry {
     x: number; y: number; w: number; h: number;
     pad: number; imgAreaH: number;
     titleLines: string[]; titleFont: number; titleLineH: number;
-    badgeFont: number; badgeH: number;
-    priceFont: number; priceRowH: number;
+    labelFont: number; labelH: number;
+    priceFont: number; priceRowH: number; panelPad: number; panelGapInner: number; panelH: number;
     cornerR: number; borderW: number;
     big: boolean;
 }
 
 // Yan kartlar VE hero kartı AYNI çizim mantığını paylaşır (kullanıcı geri
 // bildirimi: ikisi çok farklı görünüyordu) — sadece ölçek (big) değişir.
+// Fiyat + indirim etiketi TEK bir "fiyat etiketi" panelinde birleşti (bkz.
+// drawShowcaseCard) — ayrı ayrı yüzen bir rozet ve dar bir fiyat kutusu
+// yerine, gerçek bir e-ticaret fiyat etiketi gibi tek çerçeve.
 function computeCardGeometry(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, item: DealRenderItem, big: boolean): CardGeometry {
     const pad = big ? 32 : 22;
     const imgAreaH = big ? 380 : 230;
     const titleFont = big ? 38 : 26;
     const titleLineH = big ? 46 : 32;
-    const badgeFont = big ? 24 : 18;
-    const badgeH = big ? 50 : 38;
-    const priceFont = big ? 62 : 32;
-    const priceRowH = big ? 80 : 44;
+    const labelFont = big ? 27 : 19;
+    const labelH = big ? 34 : 24;
+    const priceFont = big ? 60 : 32;
+    const priceRowH = big ? 58 : 34;
+    const panelPad = big ? 24 : 16;
+    const panelGapInner = big ? 10 : 6;
+    const panelH = panelPad * 2 + labelH + panelGapInner + priceRowH;
     const cornerR = big ? 36 : 28;
     const borderW = big ? 6 : 4;
     ctx.font = `800 ${titleFont}px Arial`;
     const titleLines = wrapText(ctx, item.title, w - pad * 2, 2);
-    const gapImgTitle = big ? 34 : 22, gapTitleBadge = big ? 20 : 14, gapBadgePrice = big ? 22 : 14;
-    const h = pad + imgAreaH + gapImgTitle + titleLines.length * titleLineH + gapTitleBadge + badgeH + gapBadgePrice + priceRowH + pad;
-    return { x, y, w, h, pad, imgAreaH, titleLines, titleFont, titleLineH, badgeFont, badgeH, priceFont, priceRowH, cornerR, borderW, big };
+    const gapImgTitle = big ? 34 : 22, gapTitlePanel = big ? 26 : 18;
+    const h = pad + imgAreaH + gapImgTitle + titleLines.length * titleLineH + gapTitlePanel + panelH + pad;
+    return { x, y, w, h, pad, imgAreaH, titleLines, titleFont, titleLineH, labelFont, labelH, priceFont, priceRowH, panelPad, panelGapInner, panelH, cornerR, borderW, big };
 }
 
 function drawShowcaseCard(
@@ -1135,7 +1141,7 @@ function drawShowcaseCard(
     img: HTMLImageElement | null | undefined,
     palette: [string, string, string],
 ) {
-    const { x, y, w, h, pad, imgAreaH, titleLines, titleFont, titleLineH, badgeFont, badgeH, priceFont, priceRowH, cornerR, borderW, big } = g;
+    const { x, y, w, h, pad, imgAreaH, titleLines, titleFont, titleLineH, labelFont, labelH, priceFont, priceRowH, panelPad, panelGapInner, panelH, cornerR, borderW, big } = g;
 
     // Panel: turuncu gradyan — ürün adı/fiyat bilgisinin arkası artık siyah
     // DEĞİL, İNDİVA turuncusu (kullanıcı geri bildirimi).
@@ -1182,69 +1188,69 @@ function drawShowcaseCard(
     titleLines.forEach(line => { ctx.fillText(line, x + w / 2, ty); ty += titleLineH; });
     ctx.shadowBlur = 0;
 
-    ty += big ? 20 : 14;
+    // Tek bir "fiyat etiketi" paneli — indirim yüzdesi ile fiyat artık ayrı
+    // yüzen bir rozet + dar bir kutu değil, gerçek bir e-ticaret fiyat
+    // etiketi gibi TEK çerçeve içinde: üstte küçük "%X İNDİRİM" satırı,
+    // altında eski fiyat (küçük, üstü çizili, solda) + yeni fiyat (büyük,
+    // sağda) — ikisi de sola hizalı, panel ortalanmış (kullanıcı geri
+    // bildirimi: konumlar/çerçeve dağınık ve amatörce görünüyordu).
+    ty += big ? 26 : 18;
     const discountPct = item.oldPrice > item.newPrice && item.oldPrice > 0
         ? Math.round(((item.oldPrice - item.newPrice) / item.oldPrice) * 100) : 0;
-    const badgeText = discountPct > 0 ? `ÖZEL İNDİRİM · %${discountPct}` : 'ÖZEL İNDİRİM';
-    ctx.font = `800 ${badgeFont}px Arial`;
-    const badgeW = ctx.measureText(badgeText).width + (big ? 48 : 32);
-    ctx.fillStyle = 'rgba(0,0,0,0.32)';
-    drawRoundedRect(ctx, x + w / 2 - badgeW / 2, ty, badgeW, badgeH, badgeH / 2);
-    ctx.fillStyle = '#ffffff';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(badgeText, x + w / 2, ty + badgeH / 2 + 1);
-    ctx.textBaseline = 'alphabetic';
-
-    // Fiyat, İNDİVA uygulamasındaki gibi çerçeveli bir kutu içinde: eski fiyat
-    // solda küçük (üstü çizili), yeni fiyat sağda büyük. Rozetle arasına da
-    // (kullanıcı geri bildirimi: "fiyat çok yapışık görünüyor") daha fazla
-    // boşluk bırakıldı.
-    ty += badgeH + (big ? 34 : 22) + priceRowH - (big ? 18 : 12);
+    const labelText = discountPct > 0 ? `%${discountPct} İNDİRİM` : 'ÖZEL İNDİRİM';
     const newPriceText = `${Math.floor(item.newPrice).toLocaleString('tr-TR')} TL`;
     const oldPriceText = item.oldPrice > item.newPrice ? `${Math.floor(item.oldPrice).toLocaleString('tr-TR')} TL` : '';
-    const oldFont = big ? 30 : 18;
+    const oldFont = big ? 28 : 17;
+
+    ctx.font = `900 ${labelFont}px Arial`;
+    const labelW = ctx.measureText(labelText).width;
     ctx.font = `900 ${priceFont}px Arial`;
     const newW = ctx.measureText(newPriceText).width;
     let oldW = 0;
-    if (oldPriceText) { ctx.font = `600 ${oldFont}px Arial`; oldW = ctx.measureText(oldPriceText).width; }
-    const priceGap = oldPriceText ? (big ? 20 : 12) : 0;
-    const innerPadX = big ? 30 : 20;
-    const boxH = priceFont * 0.98;
-    const boxW = oldW + priceGap + newW + innerPadX * 2;
-    const boxX = x + w / 2 - boxW / 2;
-    const boxY = ty - priceFont * 0.78;
+    if (oldPriceText) { ctx.font = `700 ${oldFont}px Arial`; oldW = ctx.measureText(oldPriceText).width; }
+    const priceGap = oldPriceText ? (big ? 18 : 10) : 0;
+    const contentW = Math.max(labelW, oldW + priceGap + newW);
+    const panelW = contentW + panelPad * 2;
+    const panelX = x + w / 2 - panelW / 2;
+    const panelY = ty;
+    const panelR = big ? 20 : 14;
 
     ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.24)';
-    drawRoundedRect(ctx, boxX, boxY, boxW, boxH, boxH / 2.6);
+    ctx.fillStyle = 'rgba(0,0,0,0.30)';
+    drawRoundedRect(ctx, panelX, panelY, panelW, panelH, panelR);
     ctx.restore();
     ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-    ctx.lineWidth = big ? 3 : 2;
-    strokeRoundedRect(ctx, boxX + 1.5, boxY + 1.5, boxW - 3, boxH - 3, boxH / 2.6 - 1.5);
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = big ? 2 : 1.5;
+    strokeRoundedRect(ctx, panelX + 1, panelY + 1, panelW - 2, panelH - 2, panelR - 1);
     ctx.restore();
 
-    let curX = boxX + innerPadX;
     ctx.textAlign = 'left';
+    ctx.font = `900 ${labelFont}px Arial`;
+    ctx.fillStyle = '#FFD966';
+    const labelBaselineY = panelY + panelPad + labelH * 0.76;
+    ctx.fillText(labelText, panelX + panelPad, labelBaselineY);
+
+    const priceBaselineY = panelY + panelPad + labelH + panelGapInner + priceRowH * 0.8;
+    let curX = panelX + panelPad;
     if (oldPriceText) {
-        const oldY = ty - (big ? 8 : 5);
-        ctx.font = `600 ${oldFont}px Arial`;
-        ctx.fillStyle = 'rgba(255,255,255,0.8)';
-        ctx.fillText(oldPriceText, curX, oldY);
-        ctx.strokeStyle = 'rgba(255,255,255,0.8)';
-        ctx.lineWidth = big ? 3 : 2;
+        ctx.font = `700 ${oldFont}px Arial`;
+        ctx.fillStyle = 'rgba(255,255,255,0.65)';
+        ctx.fillText(oldPriceText, curX, priceBaselineY);
+        ctx.strokeStyle = 'rgba(255,255,255,0.65)';
+        ctx.lineWidth = big ? 2.5 : 1.5;
         ctx.beginPath();
-        ctx.moveTo(curX, oldY - (big ? 10 : 6));
-        ctx.lineTo(curX + oldW, oldY - (big ? 10 : 6));
+        ctx.moveTo(curX, priceBaselineY - oldFont * 0.35);
+        ctx.lineTo(curX + oldW, priceBaselineY - oldFont * 0.35);
         ctx.stroke();
         curX += oldW + priceGap;
     }
     ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.3)';
-    ctx.shadowBlur = 10;
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 8;
     ctx.font = `900 ${priceFont}px Arial`;
     ctx.fillStyle = '#ffffff';
-    ctx.fillText(newPriceText, curX, ty);
+    ctx.fillText(newPriceText, curX, priceBaselineY);
     ctx.restore();
     ctx.textAlign = 'left';
 }
