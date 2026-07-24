@@ -358,6 +358,28 @@ function pickPalette(seed: string, category?: string): [string, string, string] 
     return BG_PALETTES[hash % BG_PALETTES.length];
 }
 
+// "Vitrin" şablonu (renderHeroScene/renderPromoFrame'in bu şablon için
+// çağrıları) SADECE bu sıcak (kırmızı/bordo/turuncu/altın) paletleri kullanır
+// — kartların içi HER ZAMAN turuncu olduğu için (bkz. drawShowcaseCard),
+// arka plan mor/mavi/yeşil gibi soğuk bir tona düşerse kartla çarpışıyordu
+// (kullanıcı geri bildirimi: "mor ile turuncu hiç uyuşmuyor"). Genel
+// BG_PALETTES havuzundaki soğuk paletler burada kasıtlı olarak DIŞLANDI.
+const VITRIN_BG_PALETTES: [string, string, string][] = [
+    ['#2b0f0f', '#9d0208', '#faa307'], // bordo-kızıl-amber
+    ['#3a1c1c', '#c1440e', '#ffbe0b'], // toprak kırmızı-turuncu-altın
+    ['#3d0e14', '#d7263d', '#f46036'], // bordo-kırmızı-mercan
+    ['#1f0a0a', '#8a1c1c', '#ff7a1a'], // neredeyse siyah-kızıl-turuncu
+    ['#241005', '#9a3412', '#fbbf24'], // koyu kahve-turuncu-altın sarısı
+    ['#170a12', '#7a1f3d', '#ff8c42'], // koyu bordo-pembemsi kızıl-turuncu
+];
+function pickVitrinPalette(seed: string): [string, string, string] {
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+        hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+    }
+    return VITRIN_BG_PALETTES[hash % VITRIN_BG_PALETTES.length];
+}
+
 // ── Arka plan: gradyan + ışık lekeleri + % işaretleri + parıltılar ──────────
 // renderDealImage VE promo sayfası (renderPromoFrame) ortak kullanır — marka
 // kimliği (İNDİVA renkleri, "indirim çılgınlığı" dokusu) her yerde aynı kalsın.
@@ -1173,36 +1195,57 @@ function drawShowcaseCard(
     ctx.fillText(badgeText, x + w / 2, ty + badgeH / 2 + 1);
     ctx.textBaseline = 'alphabetic';
 
-    ty += badgeH + (big ? 22 : 14) + priceRowH - (big ? 18 : 12);
+    // Fiyat, İNDİVA uygulamasındaki gibi çerçeveli bir kutu içinde: eski fiyat
+    // solda küçük (üstü çizili), yeni fiyat sağda büyük. Rozetle arasına da
+    // (kullanıcı geri bildirimi: "fiyat çok yapışık görünüyor") daha fazla
+    // boşluk bırakıldı.
+    ty += badgeH + (big ? 34 : 22) + priceRowH - (big ? 18 : 12);
     const newPriceText = `${Math.floor(item.newPrice).toLocaleString('tr-TR')} TL`;
     const oldPriceText = item.oldPrice > item.newPrice ? `${Math.floor(item.oldPrice).toLocaleString('tr-TR')} TL` : '';
+    const oldFont = big ? 30 : 18;
     ctx.font = `900 ${priceFont}px Arial`;
     const newW = ctx.measureText(newPriceText).width;
     let oldW = 0;
-    const oldFont = big ? 34 : 20;
     if (oldPriceText) { ctx.font = `600 ${oldFont}px Arial`; oldW = ctx.measureText(oldPriceText).width; }
-    const priceGap = oldPriceText ? (big ? 22 : 14) : 0;
-    const priceStartX = x + w / 2 - (newW + priceGap + oldW) / 2;
+    const priceGap = oldPriceText ? (big ? 20 : 12) : 0;
+    const innerPadX = big ? 30 : 20;
+    const boxH = priceFont * 0.98;
+    const boxW = oldW + priceGap + newW + innerPadX * 2;
+    const boxX = x + w / 2 - boxW / 2;
+    const boxY = ty - priceFont * 0.78;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.24)';
+    drawRoundedRect(ctx, boxX, boxY, boxW, boxH, boxH / 2.6);
+    ctx.restore();
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = big ? 3 : 2;
+    strokeRoundedRect(ctx, boxX + 1.5, boxY + 1.5, boxW - 3, boxH - 3, boxH / 2.6 - 1.5);
+    ctx.restore();
+
+    let curX = boxX + innerPadX;
     ctx.textAlign = 'left';
+    if (oldPriceText) {
+        const oldY = ty - (big ? 8 : 5);
+        ctx.font = `600 ${oldFont}px Arial`;
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        ctx.fillText(oldPriceText, curX, oldY);
+        ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+        ctx.lineWidth = big ? 3 : 2;
+        ctx.beginPath();
+        ctx.moveTo(curX, oldY - (big ? 10 : 6));
+        ctx.lineTo(curX + oldW, oldY - (big ? 10 : 6));
+        ctx.stroke();
+        curX += oldW + priceGap;
+    }
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.3)';
     ctx.shadowBlur = 10;
     ctx.font = `900 ${priceFont}px Arial`;
     ctx.fillStyle = '#ffffff';
-    ctx.fillText(newPriceText, priceStartX, ty);
+    ctx.fillText(newPriceText, curX, ty);
     ctx.restore();
-    if (oldPriceText) {
-        const oldX = priceStartX + newW + priceGap, oldY = ty - (big ? 10 : 6);
-        ctx.font = `600 ${oldFont}px Arial`;
-        ctx.fillStyle = 'rgba(255,255,255,0.75)';
-        ctx.fillText(oldPriceText, oldX, oldY);
-        ctx.strokeStyle = 'rgba(255,255,255,0.75)';
-        ctx.lineWidth = big ? 3 : 2;
-        ctx.beginPath();
-        ctx.moveTo(oldX, oldY - (big ? 12 : 8));
-        ctx.lineTo(oldX + oldW, oldY - (big ? 12 : 8));
-        ctx.stroke();
-    }
     ctx.textAlign = 'left';
 }
 
@@ -1227,7 +1270,7 @@ async function renderHeroScene(
     ctx.imageSmoothingQuality = smoothingQuality;
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
-    const palette = pickPalette(heroItem.discountId || heroItem.id, heroItem.category);
+    const palette = pickVitrinPalette(heroItem.discountId || heroItem.id);
     if (includeBackground) {
         drawDecorativeBackground(ctx, palette, bgTimeSec);
         drawVignette(ctx, 1000);
@@ -1268,8 +1311,8 @@ async function renderHeroScene(
 
     // ── Yan kartlar (küçük ürünler) — hero kartıyla BİREBİR AYNI çizim
     // fonksiyonunu paylaşır (drawShowcaseCard), sadece küçük ölçekte.
-    const cardW = 300, cardY = 380;
-    const leftX = 60, rightX = CANVAS_W - 60 - cardW;
+    const cardW = 360, cardY = 380;
+    const leftX = 50, rightX = CANVAS_W - 50 - cardW;
     const leftG = sideItems[0] ? computeCardGeometry(ctx, leftX, cardY, cardW, sideItems[0], false) : null;
     const rightG = sideItems[1] ? computeCardGeometry(ctx, rightX, cardY, cardW, sideItems[1], false) : null;
     const drawSideCard = (g: CardGeometry | null, item: DealRenderItem | undefined, img: HTMLImageElement | null | undefined, p: number, fromLeft: boolean) => {
@@ -1664,15 +1707,15 @@ async function recordHeroCompilationVideo(
     let appIconImg: HTMLImageElement | null = null;
     try { appIconImg = await loadAppIcon(); } catch { appIconImg = null; }
 
-    const palette = pickPalette(heroItem.discountId || heroItem.id, heroItem.category);
+    const palette = pickVitrinPalette(heroItem.discountId || heroItem.id);
 
     // renderHeroScene ile BİREBİR AYNI geometri hesabı (yan kart yükseklikleri
     // → hero kartın Y'si → podyum/parıltı merkezi) — composeHero'nun (durgun
     // evrede) canlı katmanları (halka/parıltı) doğru yerde çizebilmesi için.
     const measureCtx = buffer.getContext('2d')!;
-    const sideCardY = 380, sideCardW = 300;
-    const leftG = sideItems[0] ? computeCardGeometry(measureCtx, 60, sideCardY, sideCardW, sideItems[0], false) : null;
-    const rightG = sideItems[1] ? computeCardGeometry(measureCtx, CANVAS_W - 60 - sideCardW, sideCardY, sideCardW, sideItems[1], false) : null;
+    const sideCardY = 380, sideCardW = 360;
+    const leftG = sideItems[0] ? computeCardGeometry(measureCtx, 50, sideCardY, sideCardW, sideItems[0], false) : null;
+    const rightG = sideItems[1] ? computeCardGeometry(measureCtx, CANVAS_W - 50 - sideCardW, sideCardY, sideCardW, sideItems[1], false) : null;
     const sideCardMaxH = Math.max(leftG?.h ?? 0, rightG?.h ?? 0, 420);
     const heroCardW = 760, heroCardX = (CANVAS_W - heroCardW) / 2, heroCardY = sideCardY + sideCardMaxH + 40;
     const heroCardH = computeCardGeometry(measureCtx, heroCardX, heroCardY, heroCardW, heroItem, true).h;
@@ -2381,12 +2424,13 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         });
     };
 
-    // Tam 3 ürünü tek bir "vitrin" videosunda birleştirir (bkz. renderHeroScene) —
-    // en yüksek indirimli ürün ortada hero, diğer ikisi yan kartlarda. Her ürün
-    // için önce CORS-güvenli görseli hazırlar, sonra kayda başlar.
+    // 1 ürün seçilirse ESKİ tekli şablonla (renderDealImage/recordSequenceVideo —
+    // bu motor SİLİNMEDİ, hâlâ tekli ürün kartındaki ile birebir aynı), 3 ürün
+    // seçilirse yeni "vitrin" şablonuyla (renderHeroScene) video üretir. Her
+    // ürün için önce CORS-güvenli görseli hazırlar, sonra kayda başlar.
     const handleCreateMultiVideo = async () => {
         const selected = aiCandidates.filter(c => multiSelectIds.has(c.candidate.productId));
-        if (selected.length !== 3) return;
+        if (selected.length !== 1 && selected.length !== 3) return;
 
         setMultiVideoMode(true);
         setMultiVideoState('recording');
@@ -2413,27 +2457,40 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                 images.push(cachedImg);
             }
 
-            // Hero: en yüksek indirim yüzdesine sahip ürün — geri kalan ikisi yan kartlarda.
-            let heroIdx = 0, bestPct = -1;
-            renderItems.forEach((it, i) => {
-                const pct = it.oldPrice > it.newPrice && it.oldPrice > 0
-                    ? (it.oldPrice - it.newPrice) / it.oldPrice : 0;
-                if (pct > bestPct) { bestPct = pct; heroIdx = i; }
-            });
-            const heroItem = renderItems[heroIdx];
-            const heroImg = images[heroIdx];
-            const sideItems = renderItems.filter((_, i) => i !== heroIdx);
-            const sideImgs = images.filter((_, i) => i !== heroIdx);
-
             const sceneMs = Math.max(3, Math.min(60, multiSceneSec)) * 1000;
             const promoMs = Math.max(3, Math.min(60, multiPromoSec)) * 1000;
-            const blob = await recordHeroCompilationVideo(canvas, heroItem, sideItems, heroImg, sideImgs, setMultiVideoProgress, sceneMs, promoMs);
+
+            let blob: Blob;
+            if (renderItems.length === 1) {
+                // Eski tekli şablon — SocialContentCard'daki "Video Oluştur" ile
+                // aynı motor (recordSequenceVideo tek segmentle == recordDealVideo).
+                blob = await recordSequenceVideo(
+                    canvas,
+                    [{ item: renderItems[0], cachedImg: images[0], durationMs: sceneMs }],
+                    setMultiVideoProgress,
+                    promoMs,
+                );
+            } else {
+                // Hero: en yüksek indirim yüzdesine sahip ürün — geri kalan ikisi yan kartlarda.
+                let heroIdx = 0, bestPct = -1;
+                renderItems.forEach((it, i) => {
+                    const pct = it.oldPrice > it.newPrice && it.oldPrice > 0
+                        ? (it.oldPrice - it.newPrice) / it.oldPrice : 0;
+                    if (pct > bestPct) { bestPct = pct; heroIdx = i; }
+                });
+                const heroItem = renderItems[heroIdx];
+                const heroImg = images[heroIdx];
+                const sideItems = renderItems.filter((_, i) => i !== heroIdx);
+                const sideImgs = images.filter((_, i) => i !== heroIdx);
+                blob = await recordHeroCompilationVideo(canvas, heroItem, sideItems, heroImg, sideImgs, setMultiVideoProgress, sceneMs, promoMs);
+            }
+
             multiVideoBlobRef.current = blob;
             multiVideoExtRef.current = blob.type.includes('mp4') ? 'mp4' : 'webm';
             setMultiVideoUrl(URL.createObjectURL(blob));
             setMultiVideoState('ready');
         } catch (e) {
-            console.error('3\'lü vitrin videosu oluşturulamadı:', e);
+            console.error('Video oluşturulamadı:', e);
             setMultiVideoState('error');
         }
     };
@@ -2650,7 +2707,7 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                     </button>
                                     <button onClick={closeAiModal} className="text-gray-400 hover:text-white text-xl leading-none">×</button>
                                 </div>
-                                <h3 className="text-white font-bold text-base mb-3">🎬 3'lü Vitrin Videosu</h3>
+                                <h3 className="text-white font-bold text-base mb-3">🎬 {multiSelectIds.size === 1 ? 'Ürün Videosu' : "3'lü Vitrin Videosu"}</h3>
 
                                 {multiVideoState === 'recording' && (
                                     <div className="mt-3 space-y-2">
@@ -2702,7 +2759,7 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                     <h3 className="text-white font-bold text-base flex items-center gap-2">🤖 AI'nın Önerdiği {aiCandidates.length} Ürün</h3>
                                     <button onClick={closeAiModal} className="text-gray-400 hover:text-white text-xl leading-none">×</button>
                                 </div>
-                                <p className="text-gray-500 text-xs mb-4">Beğendiğiniz ürünü seçin — içerik SADECE o ürün için üretilecek. Ya da tam 3 ürün işaretleyip modern bir vitrin videosu oluşturun.</p>
+                                <p className="text-gray-500 text-xs mb-4">Beğendiğiniz ürünü seçin — içerik SADECE o ürün için üretilecek. Ya da işaretleme kutucuklarıyla 1 ürün (klasik video) veya 3 ürün (vitrin videosu) seçin.</p>
 
                                 <div className="space-y-2.5 pb-2">
                                     {aiCandidates.map((item) => {
@@ -2767,7 +2824,7 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
 
                                 {multiSelectIds.size > 0 && (
                                     <div className="sticky bottom-0 -mx-5 -mb-5 mt-3 px-5 py-3 bg-gray-800/95 border-t border-purple-600/30 space-y-2.5">
-                                        {multiSelectIds.size === 3 && (
+                                        {(multiSelectIds.size === 1 || multiSelectIds.size === 3) && (
                                             <div className="w-full flex items-center gap-3 bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2">
                                                 <label className="flex items-center gap-1.5 text-[11px] text-gray-400 flex-1">
                                                     1. Ekran (sn)
@@ -2795,14 +2852,14 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                         )}
                                         <div className="flex items-center justify-between gap-3">
                                             <p className="text-gray-300 text-xs">
-                                                {multiSelectIds.size}/3 ürün seçildi{multiSelectIds.size < 3 ? ' (tam 3 gerekli)' : ''}
+                                                {multiSelectIds.size} ürün seçildi{multiSelectIds.size === 2 ? ' (1 veya 3 olmalı)' : ''}
                                             </p>
                                             <button
                                                 onClick={handleCreateMultiVideo}
-                                                disabled={multiSelectIds.size !== 3}
+                                                disabled={multiSelectIds.size !== 1 && multiSelectIds.size !== 3}
                                                 className="shrink-0 px-4 py-2 text-xs font-semibold bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
                                             >
-                                                🎬 3'lü Vitrin Videosu Oluştur
+                                                {multiSelectIds.size === 1 ? '🎬 Video Oluştur' : "🎬 3'lü Vitrin Videosu Oluştur"}
                                             </button>
                                         </div>
                                     </div>
