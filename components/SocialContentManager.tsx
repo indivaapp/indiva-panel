@@ -2980,9 +2980,12 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                 ))}
             </div>
 
-            {/* AI Sosyal Medya İçerik Önerisi Modalı — Adım 1: 10 aday, Adım 2: seçilenin içeriği */}
+            {/* AI Sosyal Medya İçerik Önerisi Modalı — Adım 1: 10 aday, Adım 2: seçilenin içeriği.
+                z-50 DEĞİL, z-[1100] — BottomNav z-[1000] kullanıyor ve bu modalın altına
+                girip sticky footer'ı (İçerik Metni Üret butonu dahil) kapatıyordu
+                (kullanıcı geri bildirimi, ekran görüntüsüyle doğrulandı). */}
             {showAiModal && aiCandidates.length > 0 && (
-                <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={closeAiModal}>
+                <div className="fixed inset-0 z-[1100] bg-black/70 flex items-center justify-center p-4" onClick={closeAiModal}>
                     <div
                         className="bg-gray-800 border border-purple-600/40 rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto p-5"
                         onClick={e => e.stopPropagation()}
