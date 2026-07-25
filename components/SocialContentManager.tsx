@@ -1471,6 +1471,10 @@ const MUSIC_URL_SINGLE = '/audio/social-single.mp3';
 const MUSIC_URL_VITRIN = '/audio/social-vitrin.mp3';
 const MUSIC_VOLUME = 0.2;
 const MUSIC_FADE_OUT_MS = 2000;
+// Seslendirme (yüklenen mp3) videoda her zaman biraz gecikmeli başlar —
+// arka fon müziği hemen başlarken seslendirme 2sn sonra girer (kullanıcı
+// talebi). Müziğin kendi zamanlaması/sönmesi bundan ETKİLENMEZ.
+const NARRATION_DELAY_SEC = 2;
 
 let sharedAudioCtx: AudioContext | null = null;
 function getSharedAudioContext(): AudioContext | null {
@@ -1510,10 +1514,10 @@ async function attachSocialAudio(
             try { await audioCtx.resume(); } catch { /* kullanıcı jesti olmadan devam edemeyebilir, sessiz devam */ }
         }
 
-        const tracks: { buffer: AudioBuffer; volume: number; loop: boolean }[] = [];
+        const tracks: { buffer: AudioBuffer; volume: number; loop: boolean; delaySec: number }[] = [];
         try {
             const musicBuffer = await loadAudioBufferCached(audioCtx, musicUrl);
-            tracks.push({ buffer: musicBuffer, volume: MUSIC_VOLUME, loop: true });
+            tracks.push({ buffer: musicBuffer, volume: MUSIC_VOLUME, loop: true, delaySec: 0 });
         } catch (e) {
             console.warn('Arka fon müziği yüklenemedi:', e);
         }
@@ -1521,7 +1525,7 @@ async function attachSocialAudio(
             try {
                 const arrayBuffer = await narrationBlob.arrayBuffer();
                 const narrationBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-                tracks.push({ buffer: narrationBuffer, volume: 1, loop: false });
+                tracks.push({ buffer: narrationBuffer, volume: 1, loop: false, delaySec: NARRATION_DELAY_SEC });
             } catch (e) {
                 console.warn('Seslendirme dosyası yüklenemedi/decode edilemedi:', e);
             }
@@ -1543,11 +1547,15 @@ async function attachSocialAudio(
             source.buffer = t.buffer;
             source.loop = t.loop;
             source.connect(gainNode);
-            source.start(now);
+            // Video çok kısaysa (nadir) gecikme, süreyi aşıp start>stop hatası
+            // vermesin diye videonun son ~50ms'sine kırpılıyor.
+            const startAt = now + Math.min(t.delaySec, Math.max(0, durationSec - 0.05));
+            source.start(startAt);
             source.stop(now + durationSec);
 
             // Sadece döngüye giren (müzik) parça sönerek biter — tek seferlik
-            // seslendirme doğal haliyle kesiliyor.
+            // seslendirme doğal haliyle kesiliyor. Müziğin başlama/sönme
+            // zamanlaması seslendirme gecikmesinden ETKİLENMEZ (kullanıcı talebi).
             if (t.loop && MUSIC_FADE_OUT_MS > 0 && MUSIC_FADE_OUT_MS < videoDurationMs) {
                 const fadeStartSec = now + durationSec - MUSIC_FADE_OUT_MS / 1000;
                 gainNode.gain.setValueAtTime(t.volume, fadeStartSec);
