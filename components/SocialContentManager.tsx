@@ -2423,6 +2423,11 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     const [discountsLoading, setDiscountsLoading] = useState(false);
     const [pickerQuery, setPickerQuery] = useState('');
     const [creatingId, setCreatingId] = useState<string | null>(null);
+    // Sonsuz kaydırma: liste ilk açıldığında 10 ürün gösterir, aşağı kaydırdıkça
+    // 10'ar ürün daha açılır (kullanıcı geri bildirimi: ~30 ürün tek seferde
+    // gösterilmesi kalabalık duruyordu). Arama yapıldığında sıfırlanır.
+    const PICKER_PAGE_SIZE = 10;
+    const [pickerVisibleCount, setPickerVisibleCount] = useState(PICKER_PAGE_SIZE);
 
     // AI ile sosyal medya içerik önerisi — İKİ AŞAMALI:
     // 1) suggestSocialCandidates: son 100 ilandan en iyi 10'u PUANLAR (içerik yok).
@@ -2523,6 +2528,7 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     const togglePicker = async () => {
         const next = !pickerOpen;
         setPickerOpen(next);
+        if (next) setPickerVisibleCount(PICKER_PAGE_SIZE);
         if (next && allDiscounts.length === 0) {
             setDiscountsLoading(true);
             try {
@@ -2536,10 +2542,27 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         }
     };
 
-    const filteredDiscounts = (pickerQuery.trim()
+    const filteredDiscounts = pickerQuery.trim()
         ? allDiscounts.filter(d => d.title.toLowerCase().includes(pickerQuery.trim().toLowerCase()))
-        : allDiscounts
-    ).slice(0, 30);
+        : allDiscounts;
+    const visibleDiscounts = filteredDiscounts.slice(0, pickerVisibleCount);
+
+    // Arama değiştiğinde sayfalama sıfırlanır — yoksa örn. 50. üründe arama
+    // yapılınca liste boş görünüp aşağı kaydırmadan sonuç gelmiyormuş gibi
+    // olurdu.
+    const handlePickerQueryChange = (value: string) => {
+        setPickerQuery(value);
+        setPickerVisibleCount(PICKER_PAGE_SIZE);
+    };
+
+    // Liste kutusunun sonuna yaklaşınca (son 80px) 10 ürün daha açar —
+    // sonsuz kaydırma. Zaten hepsi gösteriliyorsa hiçbir şey yapmaz.
+    const handlePickerListScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        const el = e.currentTarget;
+        if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80) {
+            setPickerVisibleCount(prev => Math.min(filteredDiscounts.length, prev + PICKER_PAGE_SIZE));
+        }
+    };
 
     // Son 100 ilanı tarayıp AI'a en iyi 10 adayı puanlatan akış (henüz içerik
     // üretmez). Sadece bu buton tıklandığında çalışır — otomatik/periyodik değil.
@@ -2913,7 +2936,7 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                         <input
                             type="text"
                             value={pickerQuery}
-                            onChange={(e) => setPickerQuery(e.target.value)}
+                            onChange={(e) => handlePickerQueryChange(e.target.value)}
                             placeholder="Ürün adıyla ara…"
                             className="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-orange-500 mb-3"
                         />
@@ -2923,9 +2946,9 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                         {!discountsLoading && filteredDiscounts.length === 0 && (
                             <p className="text-gray-500 text-sm text-center py-6">Eşleşen fırsat bulunamadı.</p>
                         )}
-                        {!discountsLoading && (
-                            <div className="max-h-80 overflow-y-auto space-y-2">
-                                {filteredDiscounts.map(d => (
+                        {!discountsLoading && filteredDiscounts.length > 0 && (
+                            <div className="max-h-80 overflow-y-auto space-y-2" onScroll={handlePickerListScroll}>
+                                {visibleDiscounts.map(d => (
                                     <div
                                         key={d.id}
                                         className="flex items-center gap-3 bg-gray-900 rounded-xl p-2.5"
