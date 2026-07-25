@@ -3,10 +3,10 @@
  *
  * Günde 3 kez (13:00/17:00/21:00 TR'den 3dk önce) son 60 ilanı tarar, AI ile
  * (OpenRouter, deepseek/deepseek-v4-flash) kalite/satış potansiyeli/ilgi
- * çekicilik kriterlerine göre EN İYİ 10 ürünü PUANLAR ve Firestore'a yazar,
+ * çekicilik kriterlerine göre EN İYİ 20 ürünü PUANLAR ve Firestore'a yazar,
  * admin'e ('panel_admin_alerts' topic) push bildirimi gönderir. Bu aşamada
- * HİÇBİR ürün için başlık/caption ÜRETİLMEZ — admin panelde bu 10 adaydan
- * birini seçtiğinde SADECE o ürün için içerik üretilir (10'unun tamamı için
+ * HİÇBİR ürün için başlık/caption ÜRETİLMEZ — admin panelde bu 20 adaydan
+ * birini seçtiğinde SADECE o ürün için içerik üretilir (20'sinin tamamı için
  * gereksiz AI çağrısı yapılmaz, admin beğenmezse "Yeniden Üret" ile tekrar
  * dener). Panel açıldığında SocialContentManager.tsx bu hazır aday listesini
  * okuyup otomatik gösterir.
@@ -76,7 +76,7 @@ async function fetchRecentDiscounts(db) {
         .filter(d => !d.isAd);
 }
 
-async function suggestTenCandidates(discounts, db) {
+async function suggestCandidates(discounts, db) {
     const compact = discounts.map((d, i) => ({
         index: i + 1,
         id: d.id,
@@ -92,14 +92,14 @@ async function suggestTenCandidates(discounts, db) {
 
     const prompt = `Sen İNDİVA uygulamasının sosyal medya içerik editörüsün. Aşağıda son ${compact.length} indirim ilanı JSON olarak veriliyor.
 
-GÖREV — EN İYİ 10 ADAYI PUANLA VE SIRALA:
+GÖREV — EN İYİ 20 ADAYI PUANLA VE SIRALA:
 Her ürünü sosyal medyada (Instagram story/post) paylaşılmaya UYGUNLUK açısından 1-10 arası puanla.
 Puanlarken şu kriterleri birlikte değerlendir:
 - Satış/popülerlik potansiyeli (reviewCount, marka tanınırlığı, kategori popülerliği ipucu olarak kullanılabilir)
 - İndirim oranı (discountPercent) — yüksek indirim daha çekici
 - İlgi çekicilik — geniş kitleye hitap eden, mainstream bir ürün/kategori/marka (çok nadir/niş bir ürün düşük puan almalı)
 
-En yüksek puanlı 10 FARKLI ürünü seç (mümkünse farklı kategorilerden çeşitlilik olsun, aynı ürünü iki kez seçme).
+En yüksek puanlı 20 FARKLI ürünü seç (mümkünse farklı kategorilerden çeşitlilik olsun, aynı ürünü iki kez seçme).
 Bu aşamada başlık veya sosyal medya metni YAZMA — sadece puanla ve kısa bir gerekçe ver.
 
 İLANLAR (her ilanın başındaki "index" numarasıyla referans ver, "id" alanını YAZMA/KOPYALAMA):
@@ -108,7 +108,7 @@ ${JSON.stringify(compact)}
 SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma. Her "index" MUTLAKA
 yukarıdaki listeden seçtiğin ilanın "index" alanındaki TAM SAYI olmalı (1 ile ${compact.length} arası),
 "score" 1-10 arası tam sayı olmalı, "candidates" en yüksek puandan en düşüğe sıralı olmalı ve
-en fazla 10 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
+en fazla 20 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
 {
   "candidates": [
     {"index": 1, "score": 9, "reasoning": "neden bu puanı verdiğin, kısa Türkçe (max 100 karakter)"},
@@ -182,7 +182,7 @@ en fazla 10 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
         })
         .filter(Boolean)
         .sort((a, b) => b.score - a.score)
-        .slice(0, 10);
+        .slice(0, 20);
 
     if (candidates.length === 0) throw new Error('AI geçerli aday seçemedi');
     return candidates;
@@ -204,7 +204,7 @@ async function main() {
             return;
         }
 
-        const candidates = await suggestTenCandidates(discounts, db);
+        const candidates = await suggestCandidates(discounts, db);
         console.log(`✅ ${candidates.length} aday puanlandı:`);
         candidates.forEach(c => console.log(`   - [${c.score}/10] ${c.product.title}`));
 
@@ -215,7 +215,7 @@ async function main() {
         });
 
         await sendAdminNotification(
-            '🤖 10 yeni sosyal medya önerisi hazır!',
+            '🤖 20 yeni sosyal medya önerisi hazır!',
             'Beğendiğiniz ürünü seçin, içeriği o an üretilsin.',
             { type: 'SOCIAL_AI_READY' }
         );
