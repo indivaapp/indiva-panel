@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     getSocialContentQueue, markSocialContentPosted, getDiscountsForPicker, addManualSocialContent,
     getRecentDiscountsForSocialAi, suggestSocialCandidates, generateSocialContentForProduct, addSocialContentFromAiSuggestion,
-    getLatestAiSocialSuggestion, markAiSocialSuggestionOpened,
+    getLatestAiSocialSuggestion, markAiSocialSuggestionOpened, generateSocialContentForMultipleProducts,
     type SocialContentCandidate,
 } from '../services/firebase';
 import { uploadImageFromUrl } from '../services/dealFinder';
@@ -1484,55 +1484,85 @@ function loadAudioBufferCached(ctx: AudioContext, url: string): Promise<AudioBuf
     return audioBufferCache.get(url)!;
 }
 
-// Video kaydı süresince (videoDurationMs) çalacak bir müzik parçası MediaStream'e
-// eklenir — kısa kalırsa döngüye girer (loop), uzun kalırsa videonun sonunda
-// kesilir; son MUSIC_FADE_OUT_MS içinde ses yumuşakça sıfıra iniyor. Herhangi
-// bir adımda (izin, ağ, decode) hata olursa sessizce vazgeçilir — müziksiz
-// video, kayıt hiç başlamamasından her zaman daha iyidir.
-async function attachBackgroundMusic(
+// Video kaydı süresince (videoDurationMs) çalacak arka fon müziği VE (varsa)
+// admin'in elle yüklediği seslendirme (ElevenLabs) mp3'ü aynı anda MediaStream'e
+// karıştırılıp eklenir. Müzik kısa kalırsa döngüye girer, uzun kalırsa videonun
+// sonunda kesilir; son MUSIC_FADE_OUT_MS içinde yumuşakça sıfıra iner. Seslendirme
+// döngüye GİRMEZ, tam ses seviyesinde bir kere çalar (video daha uzunsa sonunda
+// kesilir). Herhangi bir adımda (izin, ağ, decode) hata olursa o parça sessizce
+// atlanır — eksik ses, kayıt hiç başlamamasından her zaman daha iyidir.
+async function attachSocialAudio(
     stream: MediaStream,
     musicUrl: string,
+    narrationBlob: Blob | null | undefined,
     videoDurationMs: number,
 ): Promise<{ stop: () => void } | null> {
     try {
         const audioCtx = getSharedAudioContext();
         if (!audioCtx) return null;
         if (audioCtx.state === 'suspended') {
-            try { await audioCtx.resume(); } catch { /* kullanıcı jesti olmadan devam edemeyebilir, müziksiz devam */ }
+            try { await audioCtx.resume(); } catch { /* kullanıcı jesti olmadan devam edemeyebilir, sessiz devam */ }
         }
-        const buffer = await loadAudioBufferCached(audioCtx, musicUrl);
+
+        const tracks: { buffer: AudioBuffer; volume: number; loop: boolean }[] = [];
+        try {
+            const musicBuffer = await loadAudioBufferCached(audioCtx, musicUrl);
+            tracks.push({ buffer: musicBuffer, volume: MUSIC_VOLUME, loop: true });
+        } catch (e) {
+            console.warn('Arka fon müziği yüklenemedi:', e);
+        }
+        if (narrationBlob) {
+            try {
+                const arrayBuffer = await narrationBlob.arrayBuffer();
+                const narrationBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                tracks.push({ buffer: narrationBuffer, volume: 1, loop: false });
+            } catch (e) {
+                console.warn('Seslendirme dosyası yüklenemedi/decode edilemedi:', e);
+            }
+        }
+        if (tracks.length === 0) return null;
 
         const destination = audioCtx.createMediaStreamDestination();
-        const gainNode = audioCtx.createGain();
-        gainNode.gain.value = MUSIC_VOLUME;
-        gainNode.connect(destination);
-
-        const source = audioCtx.createBufferSource();
-        source.buffer = buffer;
-        source.loop = true;
-        source.connect(gainNode);
-
         const durationSec = videoDurationMs / 1000;
         const now = audioCtx.currentTime;
-        source.start(now);
-        source.stop(now + durationSec);
+        const sources: AudioBufferSourceNode[] = [];
+        const gains: GainNode[] = [];
 
-        if (MUSIC_FADE_OUT_MS > 0 && MUSIC_FADE_OUT_MS < videoDurationMs) {
-            const fadeStartSec = now + durationSec - MUSIC_FADE_OUT_MS / 1000;
-            gainNode.gain.setValueAtTime(MUSIC_VOLUME, fadeStartSec);
-            gainNode.gain.linearRampToValueAtTime(0, now + durationSec);
-        }
+        tracks.forEach(t => {
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.value = t.volume;
+            gainNode.connect(destination);
+
+            const source = audioCtx.createBufferSource();
+            source.buffer = t.buffer;
+            source.loop = t.loop;
+            source.connect(gainNode);
+            source.start(now);
+            source.stop(now + durationSec);
+
+            // Sadece döngüye giren (müzik) parça sönerek biter — tek seferlik
+            // seslendirme doğal haliyle kesiliyor.
+            if (t.loop && MUSIC_FADE_OUT_MS > 0 && MUSIC_FADE_OUT_MS < videoDurationMs) {
+                const fadeStartSec = now + durationSec - MUSIC_FADE_OUT_MS / 1000;
+                gainNode.gain.setValueAtTime(t.volume, fadeStartSec);
+                gainNode.gain.linearRampToValueAtTime(0, now + durationSec);
+            }
+
+            sources.push(source);
+            gains.push(gainNode);
+        });
 
         destination.stream.getAudioTracks().forEach(t => stream.addTrack(t));
 
         return {
             stop: () => {
-                try { source.stop(); } catch { /* zaten durmuş olabilir */ }
-                try { source.disconnect(); gainNode.disconnect(); destination.disconnect(); } catch { /* no-op */ }
+                sources.forEach(s => { try { s.stop(); } catch { /* zaten durmuş olabilir */ } });
+                gains.forEach(g => { try { g.disconnect(); } catch { /* no-op */ } });
+                try { destination.disconnect(); } catch { /* no-op */ }
             },
         };
     } catch (e) {
-        console.warn('Arka fon müziği eklenemedi, müziksiz devam ediliyor:', e);
+        console.warn('Ses karıştırma başarısız, sessiz devam ediliyor:', e);
         return null;
     }
 }
@@ -1556,6 +1586,7 @@ async function recordSequenceVideo(
     segments: VideoSegment[],
     onProgress?: (fraction: number) => void,
     promoDurationMs: number = PROMO_DURATION_MS_DEFAULT,
+    narrationBlob?: Blob | null,
 ): Promise<Blob> {
     if (segments.length === 0) throw new Error('En az bir ürün seçilmeli.');
 
@@ -1602,11 +1633,11 @@ async function recordSequenceVideo(
     // otomatik yakalamanın daha DÜZENLİ kareler görmesini sağlıyor, riskli
     // manuel-frame API'sine ihtiyaç duymadan.
     const stream: MediaStream = (canvas as any).captureStream(VIDEO_FPS);
-    // Arka fon müziği — video kaydı ile birebir aynı sürede çalıp (kısaysa
-    // döngüye girip, uzunsa kesilip) stream'e ses parçası olarak ekleniyor.
+    // Arka fon müziği (+ varsa admin'in yüklediği seslendirme) — video kaydı
+    // ile birebir aynı sürede çalıp stream'e ses parçası olarak ekleniyor.
     // MediaRecorder'ın audio track'i de yakalaması için recorder OLUŞTURULMADAN
     // ÖNCE eklenmesi gerekiyor.
-    const musicHandle = await attachBackgroundMusic(stream, MUSIC_URL_SINGLE, videoDurationMs);
+    const musicHandle = await attachSocialAudio(stream, MUSIC_URL_SINGLE, narrationBlob, videoDurationMs);
     const mimeType = pickSupportedMimeType();
     // 12Mbps -> 8Mbps: sosyal medya zaten agresif sıkıştırıyor, fark
     // neredeyse görünmez ama kodlayıcı (encoder) yükü belirgin azalıyor —
@@ -1808,6 +1839,7 @@ async function recordHeroCompilationVideo(
     onProgress?: (fraction: number) => void,
     sceneDurationMs: number = 6000,
     promoDurationMs: number = PROMO_DURATION_MS_DEFAULT,
+    narrationBlob?: Blob | null,
 ): Promise<Blob> {
     const videoDurationMs = sceneDurationMs + SLIDE_DURATION_MS + promoDurationMs;
 
@@ -1828,7 +1860,7 @@ async function recordHeroCompilationVideo(
     const stream: MediaStream = (canvas as any).captureStream(VIDEO_FPS);
     // 3'lü vitrin videosu tekli şablondan FARKLI bir müzik kullanıyor
     // (kullanıcı talebi) — recorder oluşturulmadan önce eklenmesi gerekiyor.
-    const musicHandle = await attachBackgroundMusic(stream, MUSIC_URL_VITRIN, videoDurationMs);
+    const musicHandle = await attachSocialAudio(stream, MUSIC_URL_VITRIN, narrationBlob, videoDurationMs);
     const mimeType = pickSupportedMimeType();
     const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 8_000_000 });
     const chunks: Blob[] = [];
@@ -1984,8 +2016,9 @@ async function recordDealVideo(
     onProgress?: (fraction: number) => void,
     dealDurationMs: number = DEAL_DURATION_MS_DEFAULT,
     promoDurationMs: number = PROMO_DURATION_MS_DEFAULT,
+    narrationBlob?: Blob | null,
 ): Promise<Blob> {
-    return recordSequenceVideo(canvas, [{ item, cachedImg, durationMs: dealDurationMs }], onProgress, promoDurationMs);
+    return recordSequenceVideo(canvas, [{ item, cachedImg, durationMs: dealDurationMs }], onProgress, promoDurationMs, narrationBlob);
 }
 
 /**
@@ -2052,6 +2085,11 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
     // saniye cinsinden, kayıt sırasında ms'ye çevrilip recordDealVideo'ya verilir.
     const [dealSec, setDealSec] = useState(Math.round(DEAL_DURATION_MS_DEFAULT / 1000));
     const [promoSec, setPromoSec] = useState(Math.round(PROMO_DURATION_MS_DEFAULT / 1000));
+    // Admin ElevenLabs'te ürettiği seslendirmeyi (mp3) video oluşturulmadan
+    // ÖNCE yükleyebilir — arka fon müziğinin üstüne tam ses seviyesinde
+    // karıştırılıp videoya gömülür (kullanıcı talebi: manuel ekleme, API
+    // entegrasyonu ileride).
+    const [narrationFile, setNarrationFile] = useState<File | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -2113,7 +2151,7 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
         try {
             const dealMs = Math.max(3, Math.min(60, dealSec)) * 1000;
             const promoMs = Math.max(3, Math.min(60, promoSec)) * 1000;
-            const blob = await recordDealVideo(canvas, item, cachedImgRef.current, setVideoProgress, dealMs, promoMs);
+            const blob = await recordDealVideo(canvas, item, cachedImgRef.current, setVideoProgress, dealMs, promoMs, narrationFile);
             videoBlobRef.current = blob;
             const url = URL.createObjectURL(blob);
             setVideoUrl(url);
@@ -2284,6 +2322,28 @@ const SocialContentCard: React.FC<CardProps> = ({ item, onPosted }) => {
                         </div>
                     )}
                     {videoState !== 'ready' && (
+                        <label className="w-full flex items-center gap-2 bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2 text-[11px] text-gray-400 cursor-pointer">
+                            <span className="shrink-0">🎙️ Seslendirme (mp3, opsiyonel)</span>
+                            <span className="flex-1 truncate text-gray-300">{narrationFile ? narrationFile.name : 'Dosya seçilmedi — arka fon müziği tek başına çalar'}</span>
+                            {narrationFile && (
+                                <button
+                                    type="button"
+                                    onClick={(e) => { e.preventDefault(); setNarrationFile(null); }}
+                                    className="shrink-0 text-red-400 hover:text-red-300"
+                                >
+                                    ✕
+                                </button>
+                            )}
+                            <input
+                                type="file"
+                                accept="audio/mpeg,audio/mp3,.mp3"
+                                disabled={videoState === 'recording'}
+                                onChange={e => setNarrationFile(e.target.files?.[0] || null)}
+                                className="hidden"
+                            />
+                        </label>
+                    )}
+                    {videoState !== 'ready' && (
                         <button
                             onClick={handleCreateVideo}
                             disabled={renderState !== 'ready' || videoState === 'recording'}
@@ -2393,6 +2453,18 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     // dealSec/promoSec ile aynı mantık, saniye cinsinden ayarlanabilir.
     const [multiSceneSec, setMultiSceneSec] = useState(6);
     const [multiPromoSec, setMultiPromoSec] = useState(Math.round(PROMO_DURATION_MS_DEFAULT / 1000));
+    // Admin ElevenLabs'te ürettiği seslendirmeyi (mp3) video oluşturulmadan
+    // ÖNCE yükleyebilir — arka fon müziğinin üstüne karıştırılıp videoya gömülür.
+    const [multiNarrationFile, setMultiNarrationFile] = useState<File | null>(null);
+    // Video oluşturulduğunda (1 VEYA 3 ürün seçilmiş olsun) otomatik üretilen
+    // ürün açıklaması + seslendirme metni — önceden sadece "AI ile Öner"
+    // listesinde tek tek tıklanınca görülebiliyordu, artık video oluşturma
+    // akışının kendisinde de üretiliyor (kullanıcı geri bildirimi).
+    const [multiGeneratedContent, setMultiGeneratedContent] = useState<{ caption: string; voiceover: string } | null>(null);
+    const [multiContentLoading, setMultiContentLoading] = useState(false);
+    const [multiContentError, setMultiContentError] = useState<string | null>(null);
+    const [multiCaptionCopied, setMultiCaptionCopied] = useState(false);
+    const [multiVoiceoverCopied, setMultiVoiceoverCopied] = useState(false);
 
     const fetchItems = useCallback(async () => {
         setIsLoading(true);
@@ -2539,6 +2611,12 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         setMultiVideoState('idle');
         if (multiVideoUrl) URL.revokeObjectURL(multiVideoUrl);
         setMultiVideoUrl(null);
+        setMultiNarrationFile(null);
+        setMultiGeneratedContent(null);
+        setMultiContentError(null);
+        setMultiContentLoading(false);
+        setMultiCaptionCopied(false);
+        setMultiVoiceoverCopied(false);
     };
 
     const toggleMultiSelect = (e: React.MouseEvent, productId: string) => {
@@ -2565,6 +2643,8 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         setMultiVideoMode(true);
         setMultiVideoState('recording');
         setMultiVideoProgress(0);
+        setMultiGeneratedContent(null);
+        setMultiContentError(null);
 
         const canvas = multiCanvasRef.current;
         if (!canvas) { setMultiVideoState('error'); return; }
@@ -2599,6 +2679,7 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                     [{ item: renderItems[0], cachedImg: images[0], durationMs: sceneMs }],
                     setMultiVideoProgress,
                     promoMs,
+                    multiNarrationFile,
                 );
             } else {
                 // Hero: en yüksek indirim yüzdesine sahip ürün — geri kalan ikisi yan kartlarda.
@@ -2612,13 +2693,30 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                 const heroImg = images[heroIdx];
                 const sideItems = renderItems.filter((_, i) => i !== heroIdx);
                 const sideImgs = images.filter((_, i) => i !== heroIdx);
-                blob = await recordHeroCompilationVideo(canvas, heroItem, sideItems, heroImg, sideImgs, setMultiVideoProgress, sceneMs, promoMs);
+                blob = await recordHeroCompilationVideo(canvas, heroItem, sideItems, heroImg, sideImgs, setMultiVideoProgress, sceneMs, promoMs, multiNarrationFile);
             }
 
             multiVideoBlobRef.current = blob;
             multiVideoExtRef.current = blob.type.includes('mp4') ? 'mp4' : 'webm';
             setMultiVideoUrl(URL.createObjectURL(blob));
             setMultiVideoState('ready');
+
+            // Ürün açıklaması + seslendirme metni video ile PARALEL değil,
+            // video hazır olduktan HEMEN SONRA otomatik üretiliyor — İndir/
+            // Paylaş butonlarının altında gösterilecek (kullanıcı geri
+            // bildirimi: önceden bu metinler sadece "AI ile Öner" listesinde
+            // tek tek tıklanınca görülebiliyordu).
+            setMultiContentLoading(true);
+            try {
+                const content = renderItems.length === 1
+                    ? await generateSocialContentForProduct(selected[0].product)
+                    : await generateSocialContentForMultipleProducts(selected.map(c => c.product));
+                setMultiGeneratedContent({ caption: content.caption, voiceover: content.voiceover });
+            } catch (e: any) {
+                setMultiContentError(e?.message || 'İçerik üretilemedi.');
+            } finally {
+                setMultiContentLoading(false);
+            }
         } catch (e) {
             console.error('Video oluşturulamadı:', e);
             setMultiVideoState('error');
@@ -2631,6 +2729,11 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         if (multiVideoUrl) URL.revokeObjectURL(multiVideoUrl);
         setMultiVideoUrl(null);
         multiVideoBlobRef.current = null;
+        setMultiGeneratedContent(null);
+        setMultiContentError(null);
+        setMultiContentLoading(false);
+        setMultiCaptionCopied(false);
+        setMultiVoiceoverCopied(false);
     };
 
     const handleDownloadMultiVideo = async () => {
@@ -2655,6 +2758,28 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                 'İNDİVA Fırsat Derlemesi',
             );
         } catch { /* sessiz — kullanıcı paylaşım penceresini iptal etmiş olabilir */ }
+    };
+
+    const handleCopyMultiCaption = async () => {
+        if (!multiGeneratedContent?.caption) return;
+        try {
+            await Clipboard.write({ string: multiGeneratedContent.caption });
+            setMultiCaptionCopied(true);
+            setTimeout(() => setMultiCaptionCopied(false), 2000);
+        } catch {
+            // Clipboard API kullanılamıyorsa sessizce yok say
+        }
+    };
+
+    const handleCopyMultiVoiceover = async () => {
+        if (!multiGeneratedContent?.voiceover) return;
+        try {
+            await Clipboard.write({ string: multiGeneratedContent.voiceover });
+            setMultiVoiceoverCopied(true);
+            setTimeout(() => setMultiVoiceoverCopied(false), 2000);
+        } catch {
+            // Clipboard API kullanılamıyorsa sessizce yok say
+        }
     };
 
     const handleCopyVoiceover = async () => {
@@ -2893,6 +3018,40 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                                 📤 Paylaş
                                             </button>
                                         </div>
+
+                                        {multiContentLoading && (
+                                            <p className="text-gray-400 text-xs text-center flex items-center justify-center gap-1.5">
+                                                <span className="inline-block w-3 h-3 border-2 border-gray-500 border-t-gray-200 rounded-full animate-spin" />
+                                                Ürün açıklaması ve seslendirme metni üretiliyor…
+                                            </p>
+                                        )}
+                                        {multiContentError && (
+                                            <p className="text-red-400 text-xs text-center">❌ {multiContentError}</p>
+                                        )}
+                                        {multiGeneratedContent && (
+                                            <div className="space-y-2.5">
+                                                <div className="bg-gray-900/60 border border-gray-700 rounded-xl p-3">
+                                                    <div className="flex items-center justify-between mb-1.5">
+                                                        <p className="text-gray-400 text-[11px] font-semibold">📝 Ürün Açıklaması (caption)</p>
+                                                        <button onClick={handleCopyMultiCaption} className="text-purple-300 hover:text-purple-200 text-[11px] font-semibold">
+                                                            {multiCaptionCopied ? '✓ Kopyalandı' : '📋 Kopyala'}
+                                                        </button>
+                                                    </div>
+                                                    <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-line">{multiGeneratedContent.caption}</p>
+                                                </div>
+                                                {multiGeneratedContent.voiceover && (
+                                                    <div className="bg-gray-900/60 border border-gray-700 rounded-xl p-3">
+                                                        <div className="flex items-center justify-between mb-1.5">
+                                                            <p className="text-gray-400 text-[11px] font-semibold">🎙️ Seslendirme Metni (ElevenLabs için)</p>
+                                                            <button onClick={handleCopyMultiVoiceover} className="text-purple-300 hover:text-purple-200 text-[11px] font-semibold">
+                                                                {multiVoiceoverCopied ? '✓ Kopyalandı' : '📋 Kopyala'}
+                                                            </button>
+                                                        </div>
+                                                        <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-line">{multiGeneratedContent.voiceover}</p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </>
@@ -2992,6 +3151,27 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                                     />
                                                 </label>
                                             </div>
+                                        )}
+                                        {(multiSelectIds.size === 1 || multiSelectIds.size === 3) && (
+                                            <label className="w-full flex items-center gap-2 bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2 text-[11px] text-gray-400 cursor-pointer">
+                                                <span className="shrink-0">🎙️ Seslendirme (mp3, opsiyonel)</span>
+                                                <span className="flex-1 truncate text-gray-300">{multiNarrationFile ? multiNarrationFile.name : 'Dosya seçilmedi — arka fon müziği tek başına çalar'}</span>
+                                                {multiNarrationFile && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => { e.preventDefault(); setMultiNarrationFile(null); }}
+                                                        className="shrink-0 text-red-400 hover:text-red-300"
+                                                    >
+                                                        ✕
+                                                    </button>
+                                                )}
+                                                <input
+                                                    type="file"
+                                                    accept="audio/mpeg,audio/mp3,.mp3"
+                                                    onChange={e => setMultiNarrationFile(e.target.files?.[0] || null)}
+                                                    className="hidden"
+                                                />
+                                            </label>
                                         )}
                                         <div className="flex items-center justify-between gap-3">
                                             <p className="text-gray-300 text-xs">

@@ -2,20 +2,25 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { trackOpenRouterUsage } from './_aiUsageTracker';
 
 /**
- * Social Content — İKİ MOD tek dosyada (Vercel Hobby planının 12 serverless
- * fonksiyon sınırı yüzünden ayrı bir social-candidates.ts dosyası eklenemedi —
- * fonksiyon sayısı aşıldığında "No more than 12 Serverless Functions" hatası
- * canlı testte gözlemlendi, bu yüzden birleştirildi):
+ * Social Content — ÜÇ MOD tek dosyada (Vercel Hobby planının 12 serverless
+ * fonksiyon sınırı yüzünden ayrı dosyalara bölünemedi — fonksiyon sayısı
+ * aşıldığında "No more than 12 Serverless Functions" hatası canlı testte
+ * gözlemlendi, bu yüzden birleştirildi):
  *
  * 1) ADAY PUANLAMA — POST { discounts: [...] } (son ~60 ilan)
  *    → { success, candidates: [{ productId, score, reasoning }, ...] } (en fazla 10)
  *    Henüz başlık/caption ÜRETİLMEZ, sadece puanlanır.
  *
  * 2) TEK ÜRÜN İÇERİK ÜRETİMİ — POST { discount: {...} } (adaylardan seçilen TEK ürün)
- *    → { success, title, caption }
+ *    → { success, title, caption, voiceover }
  *    Admin bir aday seçtiğinde veya "Yeniden Üret" dediğinde çağrılır.
  *
- * Body'de "discounts" (dizi) mi "discount" (tekil) mi geldiğine göre mod seçilir.
+ * 3) ÇOKLU ÜRÜN İÇERİK ÜRETİMİ — POST { products: [...] } (2-3 ürün, 3'lü vitrin
+ *    videosu için) → { success, caption, voiceover } — ürünlerin TAMAMINI tek
+ *    caption/seslendirme metninde tanıtan içerik üretir.
+ *
+ * Body'de "discounts" (dizi), "discount" (tekil) veya "products" (dizi) hangisi
+ * geldiğine göre mod seçilir.
  */
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
@@ -138,6 +143,90 @@ en fazla 10 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
     return res.status(200).json({ success: true, candidates });
 }
 
+async function handleMultiContent(req: VercelRequest, res: VercelResponse) {
+    const { products } = req.body || {};
+    if (!Array.isArray(products) || products.length < 2 || products.length > 3) {
+        return res.status(400).json({ success: false, error: 'products dizisi 2 veya 3 ürün içermeli' });
+    }
+
+    const compact = products.map((p: any) => ({
+        title: p.title,
+        brand: p.brand || '',
+        category: p.category || '',
+        oldPrice: p.oldPrice || 0,
+        newPrice: p.newPrice || 0,
+        discountPercent: p.oldPrice > p.newPrice && p.oldPrice > 0
+            ? Math.round(((p.oldPrice - p.newPrice) / p.oldPrice) * 100) : 0,
+    }));
+
+    const prompt = `Sen İNDİVA uygulamasının sosyal medya içerik editörüsün. Aşağıda AYNI VİDEODA
+birlikte gösterilecek ${compact.length} farklı ürün var (bir "günün fırsatları" vitrin videosu).
+
+ÜRÜNLER:
+${JSON.stringify(compact)}
+
+ÜRETMEN GEREKENLER:
+- "caption": Instagram story/post metni (2-4 cümle + hashtag'ler), ${compact.length} ürünün
+  TAMAMINI kısaca anan, emoji kullanılabilir, sonunda İNDİVA'yı indirmeye teşvik eden bir cümle olsun.
+- "voiceover": Bu ${compact.length} ürünü TEK VİDEODA tanıtan bir VİDEO SESLENDİRME METNİ (script).
+  Bu metin doğrudan bir metinden-sese (ElevenLabs) aracına yapıştırılıp seslendirilecek — SADECE
+  konuşulacak metni yaz, sahne yönergesi/parantez/emoji/hashtag YAZMA, doğal konuşma diliyle Türkçe yaz.
+
+  UZUNLUK — SIKI KURAL: TOPLAM 45-70 KELİME (kesinlikle 80 kelimeyi geçme). ${compact.length} ürünü
+  sırayla, HER BİRİ İÇİN TEK KISA CÜMLE ile tanıt (fiyat/indirim dahil) — uzun açıklamalara girme.
+
+  TON — profesyonel bir reklam seslendirme sanatçısı gibi yaz: sıcak, kendinden emin, doğrudan,
+  bir üründen diğerine akıcı şekilde geçsin. Yapay zekâ tarafından üretilmiş gibi HİSSETTİRMEMELİ —
+  klişe açılış/kapanışları TEKRARLAMA ("Müjde!", "Dikkat!", "Bu fırsatı kaçırmayın" gibi kalıplardan kaçın).
+
+  İÇERMESİ GEREKENLER:
+  - Kısa, doğal bir açılış (İNDİVA'da bugünün öne çıkan fırsatları gibi, klişe olmayan).
+  - Her ürün için: ne olduğu + eski/yeni fiyat + indirim yüzdesi NET (örn. "739 lira yerine 199 lira").
+  - Kısa, enerjik bir kapanış çağrısı (İNDİVA'yı indirmeye teşvik).
+
+SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma:
+{"caption": "...", "voiceover": "..."}`;
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://indiva-proxy.vercel.app',
+            'X-Title': 'INDIVA Panel Social Multi Content',
+        },
+        body: JSON.stringify({
+            model: MODEL,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.85,
+            usage: { include: true },
+        }),
+        signal: AbortSignal.timeout(30000),
+    });
+
+    if (!response.ok) {
+        const errText = await response.text();
+        return res.status(502).json({ success: false, error: `OpenRouter ${response.status}: ${errText.substring(0, 200)}` });
+    }
+
+    const data = await response.json();
+    await trackOpenRouterUsage(data, 'social-multi-content');
+    const text = data?.choices?.[0]?.message?.content || '';
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+        return res.status(502).json({ success: false, error: 'AI JSON döndürmedi' });
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    const caption = String(parsed.caption || '');
+    const voiceover = String(parsed.voiceover || '');
+    if (!caption) {
+        return res.status(502).json({ success: false, error: 'AI eksik içerik döndürdü' });
+    }
+
+    return res.status(200).json({ success: true, caption, voiceover });
+}
+
 async function handleSingleContent(req: VercelRequest, res: VercelResponse) {
     const { discount } = req.body || {};
     if (!discount || !discount.title) {
@@ -248,9 +337,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     try {
-        const isCandidatesMode = Array.isArray((req.body || {}).discounts);
-        if (isCandidatesMode) {
+        const body = req.body || {};
+        if (Array.isArray(body.discounts)) {
             return await handleCandidates(req, res);
+        }
+        if (Array.isArray(body.products)) {
+            return await handleMultiContent(req, res);
         }
         return await handleSingleContent(req, res);
     } catch (err: any) {

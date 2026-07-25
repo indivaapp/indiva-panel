@@ -784,6 +784,38 @@ export const generateSocialContentForProduct = async (
     return { title: data.title, caption: `${data.caption}\n\n#işbirliği`, voiceover: data.voiceover || '' };
 };
 
+/** 3'lü vitrin videosu için — AYNI VİDEODA gösterilecek 2-3 ürünün TAMAMINI
+ *  tanıtan TEK bir ortak caption + seslendirme metni üretir (ürün başına ayrı
+ *  değil — video zaten üçünü birlikte gösteriyor). */
+export const generateSocialContentForMultipleProducts = async (
+    products: Array<Pick<Discount, 'title' | 'brand' | 'category' | 'oldPrice' | 'newPrice'>>
+): Promise<{ caption: string; voiceover: string }> => {
+    const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            products: products.map(p => ({
+                title: p.title,
+                brand: p.brand,
+                category: p.category,
+                oldPrice: p.oldPrice,
+                newPrice: p.newPrice,
+            })),
+        }),
+        signal: AbortSignal.timeout(35000),
+    });
+
+    const raw = await res.text();
+    let data: any;
+    try {
+        data = JSON.parse(raw);
+    } catch {
+        throw new Error(res.ok ? 'AI sunucudan geçersiz yanıt geldi' : `Sunucu hatası (${res.status}) — tekrar deneyin`);
+    }
+    if (!data.success) throw new Error(data.error || 'İçerik üretilemedi');
+    return { caption: `${data.caption}\n\n#işbirliği`, voiceover: data.voiceover || '' };
+};
+
 /** Seçilen ürün + üretilen içerik doğrudan kuyruğa eklenir. */
 export const addSocialContentFromAiSuggestion = async (
     discount: Pick<Discount, 'id' | 'title' | 'imageUrl' | 'category' | 'brand' | 'newPrice' | 'oldPrice'>,
