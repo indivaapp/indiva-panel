@@ -789,7 +789,7 @@ async function renderDealImage(
         ctx.shadowBlur = 10;
         ctx.fillStyle = '#ffffff';
         ctx.font = '800 46px Arial';
-        const titleLines = wrapText(ctx, item.title, CANVAS_W - 200, 2);
+        const titleLines = wrapText(ctx, item.title, CANVAS_W - 200, 3);
         let lineY = ty;
         titleLines.forEach(line => {
             ctx.fillText(line, CANVAS_W / 2, lineY);
@@ -802,7 +802,7 @@ async function renderDealImage(
     // animasyon dışında (progress'ten bağımsız) sabit hesaplamak için burada
     // bir kez daha (gerçek) satır sayısını ölç.
     ctx.font = '800 46px Arial';
-    const titleLineCount = wrapText(ctx, item.title, CANVAS_W - 200, 2).length;
+    const titleLineCount = wrapText(ctx, item.title, CANVAS_W - 200, 3).length;
     ty += titleLineCount * 60;
 
     // ── Fiyat satırı (ortalı grup: yeni fiyat + eski fiyat, zıplayarak büyür) ─
@@ -1114,6 +1114,12 @@ interface CardGeometry {
 // kartın üstünde yarı saydam koyu bir kutu (önceki deneme) rengi çamura
 // dönüştürüyordu; beyaz zemin + koyu/kırmızı metin her palette'te net
 // kontrast garantiliyor ve kart kenarlarıyla hizalı, düzenli duruyor.
+// Vitrin kartlarında (hero + yan kartlar) başlık için ayrılan satır sayısı —
+// hem wrapText'in kesme sınırı hem de kart yüksekliği/aşağı kayma telafisi
+// AYNI sabiti kullanmalı, yoksa 3. satır fiyat şeridinin üzerine biner
+// (kullanıcı geri bildirimi: 2 satır başlığın tamamını göstermiyordu).
+const SHOWCASE_TITLE_LINES = 3;
+
 function computeCardGeometry(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, item: DealRenderItem, big: boolean): CardGeometry {
     const pad = big ? 32 : 22;
     const imgAreaH = big ? 380 : 230;
@@ -1126,19 +1132,18 @@ function computeCardGeometry(ctx: CanvasRenderingContext2D, x: number, y: number
     const cornerR = big ? 36 : 28;
     const borderW = big ? 6 : 4;
     ctx.font = `800 ${titleFont}px Arial`;
-    const titleLines = wrapText(ctx, item.title, w - pad * 2, 2);
+    const titleLines = wrapText(ctx, item.title, w - pad * 2, SHOWCASE_TITLE_LINES);
     const gapImgTitle = big ? 34 : 22, gapTitleBar = big ? 26 : 18;
     // Fiyat şeridinin ALTINDA belirgin bir boşluk bırakılıyor — önceki küçük
     // boşluk artışı yetersiz kaldı, şerit hâlâ alt kenara yapışık görünüyordu
     // (kullanıcı geri bildirimi). Boşluk artık üsttekinin ~2 katı.
     const bottomPad = pad + (big ? 54 : 34);
-    // Başlık alanı DAİMA 2 satırlık sabit yükseklikte ayrılıyor (gerçek satır
-    // sayısı 1 veya 2 olsa da) — yoksa kısa başlıklı kartlar tek satırda kalıp
-    // fiyat şeridi yukarı kayıyor, uzun başlıklılar iki satıra taşıp kart
-    // boyu büyüyordu; 3'lü vitrinde yan yana kartlar farklı boyda görünüyordu
-    // (kullanıcı geri bildirimi).
-    const TITLE_AREA_LINES = 2;
-    const h = pad + imgAreaH + gapImgTitle + TITLE_AREA_LINES * titleLineH + gapTitleBar + barH + bottomPad;
+    // Başlık alanı DAİMA SHOWCASE_TITLE_LINES satırlık sabit yükseklikte
+    // ayrılıyor (gerçek satır sayısı daha az olsa da) — yoksa kısa başlıklı
+    // kartlar tek satırda kalıp fiyat şeridi yukarı kayıyor, uzun başlıklılar
+    // daha fazla satıra taşıp kart boyu büyüyordu; 3'lü vitrinde yan yana
+    // kartlar farklı boyda görünüyordu (kullanıcı geri bildirimi).
+    const h = pad + imgAreaH + gapImgTitle + SHOWCASE_TITLE_LINES * titleLineH + gapTitleBar + barH + bottomPad;
     return { x, y, w, h, pad, imgAreaH, titleLines, titleFont, titleLineH, chipFont, oldFont, newFont, barH, cornerR, borderW, big };
 }
 
@@ -1208,10 +1213,11 @@ function drawShowcaseCard(
     ctx.shadowColor = 'rgba(0,0,0,0.25)';
     ctx.shadowBlur = 6;
     titleLines.forEach(line => { ctx.fillText(line, x + w / 2, ty); ty += titleLineH; });
-    // Başlık tek satır sürdüyse, aşağıdaki her şeyin (fiyat şeridi dahil)
-    // yine de 2 satırlık sabit yükseklikten sonra başlaması için eksik
-    // satırın boşluğu telafi ediliyor (bkz. computeCardGeometry notu).
-    ty += (2 - titleLines.length) * titleLineH;
+    // Başlık daha az satır sürdüyse, aşağıdaki her şeyin (fiyat şeridi dahil)
+    // yine de SHOWCASE_TITLE_LINES satırlık sabit yükseklikten sonra
+    // başlaması için eksik satırların boşluğu telafi ediliyor (bkz.
+    // computeCardGeometry notu).
+    ty += (SHOWCASE_TITLE_LINES - titleLines.length) * titleLineH;
     ctx.shadowBlur = 0;
 
     // Fiyat şeridi — Trendyol/Hepsiburada tarzı: BEYAZ, kartın tam
@@ -2455,11 +2461,18 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     const [multiPromoSec, setMultiPromoSec] = useState(Math.round(PROMO_DURATION_MS_DEFAULT / 1000));
     // Admin ElevenLabs'te ürettiği seslendirmeyi (mp3) video oluşturulmadan
     // ÖNCE yükleyebilir — arka fon müziğinin üstüne karıştırılıp videoya gömülür.
+    // Yükleme alanı İÇERİK METNİ AŞAMASINDA gösteriliyor (bkz. multiContentStageOpen) —
+    // önceden video oluşturma ekranının üstünde duruyordu, kullanıcı geri
+    // bildirimi: yanlış yerdeydi.
     const [multiNarrationFile, setMultiNarrationFile] = useState<File | null>(null);
-    // Video oluşturulduğunda (1 VEYA 3 ürün seçilmiş olsun) otomatik üretilen
-    // ürün açıklaması + seslendirme metni — önceden sadece "AI ile Öner"
-    // listesinde tek tek tıklanınca görülebiliyordu, artık video oluşturma
-    // akışının kendisinde de üretiliyor (kullanıcı geri bildirimi).
+    // Aşamalı akış (kullanıcı geri bildirimi — geliştirme sırasında her
+    // seferinde AI token'ı harcamamak için içerik üretimi artık isteğe bağlı):
+    // 1) Ürün(ler) seçilir. 2) "İçerik metni üret" işaretlenirse önce SADECE
+    // metin (caption+seslendirme) üretilir, o ekranda mp3 yüklenebilir, en
+    // altta "Video Oluştur" ile devam edilir. İşaretlenmezse doğrudan video
+    // oluşturulur (metin üretimi/API çağrısı hiç yapılmaz).
+    const [multiGenerateContentFirst, setMultiGenerateContentFirst] = useState(false);
+    const [multiContentStageOpen, setMultiContentStageOpen] = useState(false);
     const [multiGeneratedContent, setMultiGeneratedContent] = useState<{ caption: string; voiceover: string } | null>(null);
     const [multiContentLoading, setMultiContentLoading] = useState(false);
     const [multiContentError, setMultiContentError] = useState<string | null>(null);
@@ -2612,6 +2625,8 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         if (multiVideoUrl) URL.revokeObjectURL(multiVideoUrl);
         setMultiVideoUrl(null);
         setMultiNarrationFile(null);
+        setMultiGenerateContentFirst(false);
+        setMultiContentStageOpen(false);
         setMultiGeneratedContent(null);
         setMultiContentError(null);
         setMultiContentLoading(false);
@@ -2632,10 +2647,37 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         });
     };
 
+    // Sadece ürün açıklaması + seslendirme metnini üretir (video KAYDETMEZ) —
+    // "İçerik metni üret" işaretliyken ana buton bunu çağırır. Kullanıcı geri
+    // bildirimi: geliştirme sırasında her video denemesinde AI çağrısı
+    // yapmak gereksiz token harcatıyordu, bu yüzden isteğe bağlı ayrı bir adım.
+    const handleGenerateMultiContentOnly = async () => {
+        const selected = aiCandidates.filter(c => multiSelectIds.has(c.candidate.productId));
+        if (selected.length !== 1 && selected.length !== 3) return;
+
+        setMultiContentStageOpen(true);
+        setMultiGeneratedContent(null);
+        setMultiContentError(null);
+        setMultiContentLoading(true);
+        try {
+            const content = selected.length === 1
+                ? await generateSocialContentForProduct(selected[0].product)
+                : await generateSocialContentForMultipleProducts(selected.map(c => c.product));
+            setMultiGeneratedContent({ caption: content.caption, voiceover: content.voiceover });
+        } catch (e: any) {
+            setMultiContentError(e?.message || 'İçerik üretilemedi.');
+        } finally {
+            setMultiContentLoading(false);
+        }
+    };
+
     // 1 ürün seçilirse ESKİ tekli şablonla (renderDealImage/recordSequenceVideo —
     // bu motor SİLİNMEDİ, hâlâ tekli ürün kartındaki ile birebir aynı), 3 ürün
     // seçilirse yeni "vitrin" şablonuyla (renderHeroScene) video üretir. Her
     // ürün için önce CORS-güvenli görseli hazırlar, sonra kayda başlar.
+    // Seslendirme metni İSTEĞE BAĞLI bir önceki adımda (handleGenerateMultiContentOnly)
+    // üretilmiş olabilir — burada TEKRAR üretilmez, sadece varsa yüklenen mp3
+    // (multiNarrationFile) videoya karıştırılır.
     const handleCreateMultiVideo = async () => {
         const selected = aiCandidates.filter(c => multiSelectIds.has(c.candidate.productId));
         if (selected.length !== 1 && selected.length !== 3) return;
@@ -2643,8 +2685,6 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         setMultiVideoMode(true);
         setMultiVideoState('recording');
         setMultiVideoProgress(0);
-        setMultiGeneratedContent(null);
-        setMultiContentError(null);
 
         const canvas = multiCanvasRef.current;
         if (!canvas) { setMultiVideoState('error'); return; }
@@ -2700,40 +2740,34 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
             multiVideoExtRef.current = blob.type.includes('mp4') ? 'mp4' : 'webm';
             setMultiVideoUrl(URL.createObjectURL(blob));
             setMultiVideoState('ready');
-
-            // Ürün açıklaması + seslendirme metni video ile PARALEL değil,
-            // video hazır olduktan HEMEN SONRA otomatik üretiliyor — İndir/
-            // Paylaş butonlarının altında gösterilecek (kullanıcı geri
-            // bildirimi: önceden bu metinler sadece "AI ile Öner" listesinde
-            // tek tek tıklanınca görülebiliyordu).
-            setMultiContentLoading(true);
-            try {
-                const content = renderItems.length === 1
-                    ? await generateSocialContentForProduct(selected[0].product)
-                    : await generateSocialContentForMultipleProducts(selected.map(c => c.product));
-                setMultiGeneratedContent({ caption: content.caption, voiceover: content.voiceover });
-            } catch (e: any) {
-                setMultiContentError(e?.message || 'İçerik üretilemedi.');
-            } finally {
-                setMultiContentLoading(false);
-            }
         } catch (e) {
             console.error('Video oluşturulamadı:', e);
             setMultiVideoState('error');
         }
     };
 
+    // İçerik metni aşamasına dönmeden (varsa üretilmiş caption/seslendirme ve
+    // yüklenmiş mp3 KORUNARAK) video ekranından geri çıkar — kullanıcı aynı
+    // metin/mp3 ile videoyu tekrar oluşturabilir.
     const handleBackFromMultiVideo = () => {
         setMultiVideoMode(false);
         setMultiVideoState('idle');
         if (multiVideoUrl) URL.revokeObjectURL(multiVideoUrl);
         setMultiVideoUrl(null);
         multiVideoBlobRef.current = null;
+    };
+
+    // İçerik metni ekranından ürün listesine dönüş — seçili ürünler kalır,
+    // sadece üretilmiş metin/mp3 temizlenir (kullanıcı yeniden seçip yeniden
+    // üretebilsin diye).
+    const handleBackFromContentStage = () => {
+        setMultiContentStageOpen(false);
         setMultiGeneratedContent(null);
         setMultiContentError(null);
         setMultiContentLoading(false);
         setMultiCaptionCopied(false);
         setMultiVoiceoverCopied(false);
+        setMultiNarrationFile(null);
     };
 
     const handleDownloadMultiVideo = async () => {
@@ -3018,40 +3052,85 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                                 📤 Paylaş
                                             </button>
                                         </div>
+                                    </div>
+                                )}
+                            </>
+                        ) : multiContentStageOpen ? (
+                            <>
+                                <div className="flex items-center justify-between mb-1">
+                                    <button onClick={handleBackFromContentStage} className="text-gray-400 hover:text-white text-xs flex items-center gap-1">
+                                        ← Listeye dön
+                                    </button>
+                                    <button onClick={closeAiModal} className="text-gray-400 hover:text-white text-xl leading-none">×</button>
+                                </div>
+                                <h3 className="text-white font-bold text-base mb-3">📝 İçerik Metni</h3>
 
-                                        {multiContentLoading && (
-                                            <p className="text-gray-400 text-xs text-center flex items-center justify-center gap-1.5">
-                                                <span className="inline-block w-3 h-3 border-2 border-gray-500 border-t-gray-200 rounded-full animate-spin" />
-                                                Ürün açıklaması ve seslendirme metni üretiliyor…
-                                            </p>
-                                        )}
-                                        {multiContentError && (
-                                            <p className="text-red-400 text-xs text-center">❌ {multiContentError}</p>
-                                        )}
-                                        {multiGeneratedContent && (
-                                            <div className="space-y-2.5">
-                                                <div className="bg-gray-900/60 border border-gray-700 rounded-xl p-3">
-                                                    <div className="flex items-center justify-between mb-1.5">
-                                                        <p className="text-gray-400 text-[11px] font-semibold">📝 Ürün Açıklaması (caption)</p>
-                                                        <button onClick={handleCopyMultiCaption} className="text-purple-300 hover:text-purple-200 text-[11px] font-semibold">
-                                                            {multiCaptionCopied ? '✓ Kopyalandı' : '📋 Kopyala'}
-                                                        </button>
-                                                    </div>
-                                                    <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-line">{multiGeneratedContent.caption}</p>
+                                {multiContentLoading && (
+                                    <p className="text-gray-400 text-xs flex items-center gap-1.5 mb-3">
+                                        <span className="inline-block w-3 h-3 border-2 border-gray-500 border-t-gray-200 rounded-full animate-spin" />
+                                        Ürün açıklaması ve seslendirme metni üretiliyor…
+                                    </p>
+                                )}
+                                {multiContentError && (
+                                    <div className="space-y-2 mb-3">
+                                        <p className="text-red-400 text-xs">❌ {multiContentError}</p>
+                                        <button
+                                            onClick={handleGenerateMultiContentOnly}
+                                            className="w-full py-2 text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors"
+                                        >
+                                            🔄 Tekrar Dene
+                                        </button>
+                                    </div>
+                                )}
+                                {multiGeneratedContent && (
+                                    <div className="space-y-2.5 mb-3">
+                                        <div className="bg-gray-900/60 border border-gray-700 rounded-xl p-3">
+                                            <div className="flex items-center justify-between mb-1.5">
+                                                <p className="text-gray-400 text-[11px] font-semibold">📝 Ürün Açıklaması (caption)</p>
+                                                <button onClick={handleCopyMultiCaption} className="text-purple-300 hover:text-purple-200 text-[11px] font-semibold">
+                                                    {multiCaptionCopied ? '✓ Kopyalandı' : '📋 Kopyala'}
+                                                </button>
+                                            </div>
+                                            <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-line">{multiGeneratedContent.caption}</p>
+                                        </div>
+                                        {multiGeneratedContent.voiceover && (
+                                            <div className="bg-gray-900/60 border border-gray-700 rounded-xl p-3">
+                                                <div className="flex items-center justify-between mb-1.5">
+                                                    <p className="text-gray-400 text-[11px] font-semibold">🎙️ Seslendirme Metni (ElevenLabs için)</p>
+                                                    <button onClick={handleCopyMultiVoiceover} className="text-purple-300 hover:text-purple-200 text-[11px] font-semibold">
+                                                        {multiVoiceoverCopied ? '✓ Kopyalandı' : '📋 Kopyala'}
+                                                    </button>
                                                 </div>
-                                                {multiGeneratedContent.voiceover && (
-                                                    <div className="bg-gray-900/60 border border-gray-700 rounded-xl p-3">
-                                                        <div className="flex items-center justify-between mb-1.5">
-                                                            <p className="text-gray-400 text-[11px] font-semibold">🎙️ Seslendirme Metni (ElevenLabs için)</p>
-                                                            <button onClick={handleCopyMultiVoiceover} className="text-purple-300 hover:text-purple-200 text-[11px] font-semibold">
-                                                                {multiVoiceoverCopied ? '✓ Kopyalandı' : '📋 Kopyala'}
-                                                            </button>
-                                                        </div>
-                                                        <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-line">{multiGeneratedContent.voiceover}</p>
-                                                    </div>
-                                                )}
+                                                <p className="text-gray-300 text-xs leading-relaxed whitespace-pre-line">{multiGeneratedContent.voiceover}</p>
                                             </div>
                                         )}
+
+                                        <label className="w-full flex items-center gap-2 bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2 text-[11px] text-gray-400 cursor-pointer">
+                                            <span className="shrink-0">🎙️ Seslendirme (mp3, opsiyonel)</span>
+                                            <span className="flex-1 truncate text-gray-300">{multiNarrationFile ? multiNarrationFile.name : 'Yukarıdaki metni ElevenLabs\'te seslendirip mp3\'ü buradan yükle'}</span>
+                                            {multiNarrationFile && (
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => { e.preventDefault(); setMultiNarrationFile(null); }}
+                                                    className="shrink-0 text-red-400 hover:text-red-300"
+                                                >
+                                                    ✕
+                                                </button>
+                                            )}
+                                            <input
+                                                type="file"
+                                                accept="audio/mpeg,audio/mp3,.mp3"
+                                                onChange={e => setMultiNarrationFile(e.target.files?.[0] || null)}
+                                                className="hidden"
+                                            />
+                                        </label>
+
+                                        <button
+                                            onClick={handleCreateMultiVideo}
+                                            className="w-full py-2.5 text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors"
+                                        >
+                                            🎬 Video Oluştur
+                                        </button>
                                     </div>
                                 )}
                             </>
@@ -3153,24 +3232,14 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                             </div>
                                         )}
                                         {(multiSelectIds.size === 1 || multiSelectIds.size === 3) && (
-                                            <label className="w-full flex items-center gap-2 bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2 text-[11px] text-gray-400 cursor-pointer">
-                                                <span className="shrink-0">🎙️ Seslendirme (mp3, opsiyonel)</span>
-                                                <span className="flex-1 truncate text-gray-300">{multiNarrationFile ? multiNarrationFile.name : 'Dosya seçilmedi — arka fon müziği tek başına çalar'}</span>
-                                                {multiNarrationFile && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={(e) => { e.preventDefault(); setMultiNarrationFile(null); }}
-                                                        className="shrink-0 text-red-400 hover:text-red-300"
-                                                    >
-                                                        ✕
-                                                    </button>
-                                                )}
+                                            <label className="w-full flex items-center gap-2 bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2 text-[11px] text-gray-300 cursor-pointer">
                                                 <input
-                                                    type="file"
-                                                    accept="audio/mpeg,audio/mp3,.mp3"
-                                                    onChange={e => setMultiNarrationFile(e.target.files?.[0] || null)}
-                                                    className="hidden"
+                                                    type="checkbox"
+                                                    checked={multiGenerateContentFirst}
+                                                    onChange={e => setMultiGenerateContentFirst(e.target.checked)}
+                                                    className="shrink-0"
                                                 />
+                                                <span>İçerik metni üret (açıklama + seslendirme metni — AI/token kullanır)</span>
                                             </label>
                                         )}
                                         <div className="flex items-center justify-between gap-3">
@@ -3178,11 +3247,13 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                                 {multiSelectIds.size} ürün seçildi{multiSelectIds.size === 2 ? ' (1 veya 3 olmalı)' : ''}
                                             </p>
                                             <button
-                                                onClick={handleCreateMultiVideo}
+                                                onClick={multiGenerateContentFirst ? handleGenerateMultiContentOnly : handleCreateMultiVideo}
                                                 disabled={multiSelectIds.size !== 1 && multiSelectIds.size !== 3}
                                                 className="shrink-0 px-4 py-2 text-xs font-semibold bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
                                             >
-                                                {multiSelectIds.size === 1 ? '🎬 Video Oluştur' : "🎬 3'lü Vitrin Videosu Oluştur"}
+                                                {multiGenerateContentFirst
+                                                    ? '📝 İçerik Metni Üret'
+                                                    : multiSelectIds.size === 1 ? '🎬 Video Oluştur' : "🎬 3'lü Vitrin Videosu Oluştur"}
                                             </button>
                                         </div>
                                     </div>
