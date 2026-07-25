@@ -790,30 +790,49 @@ export const generateSocialContentForProduct = async (
 export const generateSocialContentForMultipleProducts = async (
     products: Array<Pick<Discount, 'title' | 'brand' | 'category' | 'oldPrice' | 'newPrice'>>
 ): Promise<{ caption: string; voiceover: string }> => {
-    const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            products: products.map(p => ({
-                title: p.title,
-                brand: p.brand,
-                category: p.category,
-                oldPrice: p.oldPrice,
-                newPrice: p.newPrice,
-            })),
-        }),
-        signal: AbortSignal.timeout(35000),
-    });
+    const attempt = async (): Promise<{ caption: string; voiceover: string }> => {
+        const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                products: products.map(p => ({
+                    title: p.title,
+                    brand: p.brand,
+                    category: p.category,
+                    oldPrice: p.oldPrice,
+                    newPrice: p.newPrice,
+                })),
+            }),
+            // 3 ürünü tek metinde birleştirmek modele daha uzun sürüyor —
+            // önceki 35sn sık sık zaman aşımına yol açıyordu (kullanıcı geri
+            // bildirimi: admin elle 2-3 kez tekrar denemek zorunda kalıyordu).
+            signal: AbortSignal.timeout(60000),
+        });
 
-    const raw = await res.text();
-    let data: any;
-    try {
-        data = JSON.parse(raw);
-    } catch {
-        throw new Error(res.ok ? 'AI sunucudan geçersiz yanıt geldi' : `Sunucu hatası (${res.status}) — tekrar deneyin`);
+        const raw = await res.text();
+        let data: any;
+        try {
+            data = JSON.parse(raw);
+        } catch {
+            throw new Error(res.ok ? 'AI sunucudan geçersiz yanıt geldi' : `Sunucu hatası (${res.status}) — tekrar deneyin`);
+        }
+        if (!data.success) throw new Error(data.error || 'İçerik üretilemedi');
+        return { caption: `${data.caption}\n\n#işbirliği`, voiceover: data.voiceover || '' };
+    };
+
+    // Tek ürünlük aday puanlamasında (suggestSocialCandidates) olduğu gibi,
+    // geçici zaman aşımı/sağlayıcı hatalarında admin'in elle tekrar tıklamasına
+    // gerek kalmasın diye otomatik olarak 3 kez deneniyor.
+    let lastErr: unknown;
+    for (let i = 0; i < 3; i++) {
+        try {
+            return await attempt();
+        } catch (e) {
+            lastErr = e;
+            if (i < 2) await new Promise(r => setTimeout(r, 1200));
+        }
     }
-    if (!data.success) throw new Error(data.error || 'İçerik üretilemedi');
-    return { caption: `${data.caption}\n\n#işbirliği`, voiceover: data.voiceover || '' };
+    throw lastErr;
 };
 
 /** Seçilen ürün + üretilen içerik doğrudan kuyruğa eklenir. */
