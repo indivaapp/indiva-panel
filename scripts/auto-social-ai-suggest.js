@@ -137,10 +137,11 @@ ${JSON.stringify(compact)}
 SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma. Her "index" MUTLAKA
 yukarıdaki listeden seçtiğin ilanın "index" alanındaki TAM SAYI olmalı (1 ile ${compact.length} arası),
 "score" 1-10 arası tam sayı olmalı, "candidates" en yüksek puandan en düşüğe sıralı olmalı ve
-en fazla 20 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
+en fazla 20 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı. "reasoning" ÇOK KISA olsun
+(en fazla 6-8 kelime, 50 karakteri GEÇME) — 20 eleman üretilecek, uzun gerekçe yazma:
 {
   "candidates": [
-    {"index": 1, "score": 9, "reasoning": "neden bu puanı verdiğin, kısa Türkçe (max 100 karakter)"},
+    {"index": 1, "score": 9, "reasoning": "kısa Türkçe gerekçe, max 50 karakter"},
     {"index": 2, "score": 8, "reasoning": "..."}
   ]
 }`;
@@ -157,6 +158,10 @@ en fazla 20 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
             model: MODEL,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.4,
+            // vercel-proxy/api/social-content.ts ile aynı sebep: max_tokens
+            // olmadan 20 aday isteği bazen yanıtı yarıda kesip geçersiz JSON'a
+            // yol açıyordu.
+            max_tokens: 2000,
             usage: { include: true },
         }),
         // NOT: Bu script vercel-proxy'nin aksine Vercel'in 60sn sunucusuz

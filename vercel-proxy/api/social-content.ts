@@ -99,10 +99,11 @@ ${JSON.stringify(compact)}
 SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma. Her "index" MUTLAKA
 yukarıdaki listeden seçtiğin ilanın "index" alanındaki TAM SAYI olmalı (1 ile ${compact.length} arası),
 "score" 1-10 arası tam sayı olmalı, "candidates" en yüksek puandan en düşüğe sıralı olmalı ve
-en fazla 20 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
+en fazla 20 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı. "reasoning" ÇOK KISA olsun
+(en fazla 6-8 kelime, 50 karakteri GEÇME) — 20 eleman üretilecek, uzun gerekçe yazma:
 {
   "candidates": [
-    {"index": 1, "score": 9, "reasoning": "neden bu puanı verdiğin, kısa Türkçe (max 100 karakter)"},
+    {"index": 1, "score": 9, "reasoning": "kısa Türkçe gerekçe, max 50 karakter"},
     {"index": 2, "score": 8, "reasoning": "..."}
   ]
 }`;
@@ -119,13 +120,20 @@ en fazla 20 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
             model: MODEL,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.4,
+            // NOT (canlı testte bulundu): max_tokens verilmeden 20 aday isteği
+            // bazen yanıtı yarıda keserek geçersiz JSON'a ("AI JSON döndürmedi")
+            // yol açtı, bazen de üretim süresi zaman aşımına çok yaklaştı. Kısa
+            // gerekçe kuralıyla birlikte üretimi hem hızlandırmak hem de asla
+            // yarıda kesilmemesini garantilemek için sınır konuldu (20 eleman ×
+            // ~50 karakterlik gerekçe + JSON overhead için bolca pay bırakıyor).
+            max_tokens: 2000,
             usage: { include: true },
         }),
         // 20 aday (önceden 10) modele daha fazla çıktı ürettiriyor — canlı
-        // veriyle test edildiğinde gerçek süre 50sn sınırına çok yaklaştı
-        // (~51.5sn), bu da gereksiz "Zaman aşımı" hatalarına yol açabilirdi.
-        // Vercel Hobby'nin 60sn sınırına hâlâ ~5sn pay bırakacak şekilde 55sn'e
-        // çıkarıldı.
+        // veriyle test edildiğinde gerçek süre 50-55sn sınırına ulaşıp zaman
+        // aşımına yol açtı. Kısa gerekçe + max_tokens ile üretim hızlandırıldı,
+        // yine de Vercel Hobby'nin 60sn sınırına ~5sn pay bırakacak şekilde
+        // 55sn'de tutuluyor.
         signal: AbortSignal.timeout(55000),
     });
 
