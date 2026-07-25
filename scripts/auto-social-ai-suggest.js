@@ -76,8 +76,32 @@ async function fetchRecentDiscounts(db) {
         .filter(d => !d.isAd);
 }
 
+// Aynı ürün, scraper tarafından neredeyse birebir aynı başlıkla (farklı "id"
+// ile) birden çok kez kaydedilebiliyor — canlı veriyle test edildiğinde bu,
+// AI'nın top-20 listesinin birkaç slotunu aynı ürünün varyantlarıyla
+// (örn. aynı vücut kreminin 3 farklı kokusu) doldurmasına yol açtığı
+// görüldü. Modele gitmeden ÖNCE normalize edilmiş başlığa göre tekilleştirip
+// (aynı başlıktan en yüksek indirimli olanı tutarak) havuzu temizliyoruz —
+// modelin talimata uyup uymamasına bağlı kalmadan garanti bir çözüm. (Bkz.
+// vercel-proxy/api/social-content.ts — aynı mantık orada da var.)
+function normalizeTitleForDedup(title) {
+    return String(title || '').toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+function dedupeByTitle(discounts) {
+    const bestByTitle = new Map();
+    for (const d of discounts) {
+        const key = normalizeTitleForDedup(d.title);
+        const pct = d.oldPrice > d.newPrice && d.oldPrice > 0 ? (d.oldPrice - d.newPrice) / d.oldPrice : 0;
+        const existing = bestByTitle.get(key);
+        if (!existing || pct > existing.pct) bestByTitle.set(key, { discount: d, pct });
+    }
+    return Array.from(bestByTitle.values()).map(v => v.discount);
+}
+
 async function suggestCandidates(discounts, db) {
-    const compact = discounts.map((d, i) => ({
+    const deduped = dedupeByTitle(discounts);
+    const compact = deduped.map((d, i) => ({
         index: i + 1,
         id: d.id,
         title: d.title,
@@ -96,8 +120,13 @@ GÖREV — EN İYİ 20 ADAYI PUANLA VE SIRALA:
 Her ürünü sosyal medyada (Instagram story/post) paylaşılmaya UYGUNLUK açısından 1-10 arası puanla.
 Puanlarken şu kriterleri birlikte değerlendir:
 - Satış/popülerlik potansiyeli (reviewCount, marka tanınırlığı, kategori popülerliği ipucu olarak kullanılabilir)
-- İndirim oranı (discountPercent) — yüksek indirim daha çekici
+- İndirim oranı (discountPercent) — yüksek indirim daha çekici; discountPercent 0 ise (veriye eski
+  fiyat girilmemiş) bu ürünü GERÇEK bir indirim olarak SAYMA, sadece marka/ürün ilgi çekiciliğine
+  göre değerlendir, asla sırf tanınmış marka diye yüksek puan verme
 - İlgi çekicilik — geniş kitleye hitap eden, mainstream bir ürün/kategori/marka (çok nadir/niş bir ürün düşük puan almalı)
+- ÇEŞİTLİLİK — aynı ürün ailesinden (aynı marka + aynı ürün tipi, sadece renk/beden/koku/desen
+  farklı — örn. aynı vücut kreminin farklı kokuları, aynı tişörtün farklı renkleri) BİRDEN FAZLA
+  ürünü seçme; bu tarz bir kümede sadece EN İYİ tekini seç, gerisini listeye alma
 
 En yüksek puanlı 20 FARKLI ürünü seç (mümkünse farklı kategorilerden çeşitlilik olsun, aynı ürünü iki kez seçme).
 Bu aşamada başlık veya sosyal medya metni YAZMA — sadece puanla ve kısa bir gerekçe ver.
@@ -163,7 +192,10 @@ en fazla 20 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
             const chosen = compact[idx - 1];
             if (!chosen) return null;
             seen.add(idx);
-            const fullProduct = discounts[idx - 1];
+            // NOT: "discounts" DEĞİL "deduped" — dedupeByTitle() sonrası index'ler
+            // deduped diziye göre; discounts[idx-1] tekilleştirmeden ÖNCEKİ (farklı
+            // sıralı/uzunluklu) diziye göre olduğu için yanlış ürünü döndürürdü.
+            const fullProduct = deduped[idx - 1];
             return {
                 productId: chosen.id,
                 score: Math.min(10, Math.max(1, Math.round(Number(c.score)) || 5)),
