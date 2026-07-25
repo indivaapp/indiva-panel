@@ -120,13 +120,12 @@ en fazla 20 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı. "reason
             model: MODEL,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.4,
-            // NOT (canlı testte bulundu): max_tokens verilmeden 20 aday isteği
-            // bazen yanıtı yarıda keserek geçersiz JSON'a ("AI JSON döndürmedi")
-            // yol açtı, bazen de üretim süresi zaman aşımına çok yaklaştı. Kısa
-            // gerekçe kuralıyla birlikte üretimi hem hızlandırmak hem de asla
-            // yarıda kesilmemesini garantilemek için sınır konuldu (20 eleman ×
-            // ~50 karakterlik gerekçe + JSON overhead için bolca pay bırakıyor).
-            max_tokens: 2000,
+            // NOT (canlı testte bulundu): önce 2000 denendi, YETERSİZ kaldı —
+            // model görünen JSON'dan önce/sırasında beklenenden çok daha fazla
+            // token tüketiyor, yanıt yarıda kesilip geçersiz JSON'a yol açtı.
+            // 6000'e çıkarıldı — hâlâ sınırsız değil ama 20 elemanlı çıktıyı
+            // asla kesmeyecek kadar geniş.
+            max_tokens: 6000,
             usage: { include: true },
         }),
         // 20 aday (önceden 10) modele daha fazla çıktı ürettiriyor — canlı

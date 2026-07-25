@@ -158,10 +158,9 @@ en fazla 20 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı. "reason
             model: MODEL,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.4,
-            // vercel-proxy/api/social-content.ts ile aynı sebep: max_tokens
-            // olmadan 20 aday isteği bazen yanıtı yarıda kesip geçersiz JSON'a
-            // yol açıyordu.
-            max_tokens: 2000,
+            // vercel-proxy/api/social-content.ts ile aynı sebep — canlı testte
+            // 2000 bile yetersiz kaldı, 6000'e çıkarıldı.
+            max_tokens: 6000,
             usage: { include: true },
         }),
         // NOT: Bu script vercel-proxy'nin aksine Vercel'in 60sn sunucusuz
