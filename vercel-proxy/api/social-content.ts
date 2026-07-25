@@ -8,7 +8,7 @@ import { trackOpenRouterUsage } from './_aiUsageTracker';
  * gözlemlendi, bu yüzden birleştirildi):
  *
  * 1) ADAY PUANLAMA — POST { discounts: [...] } (son ~60 ilan)
- *    → { success, candidates: [{ productId, score, reasoning }, ...] } (en fazla 10)
+ *    → { success, candidates: [{ productId, score, reasoning }, ...] } (en fazla 20)
  *    Henüz başlık/caption ÜRETİLMEZ, sadece puanlanır.
  *
  * 2) TEK ÜRÜN İÇERİK ÜRETİMİ — POST { discount: {...} } (adaylardan seçilen TEK ürün)
@@ -56,14 +56,14 @@ async function handleCandidates(req: VercelRequest, res: VercelResponse) {
 
     const prompt = `Sen İNDİVA uygulamasının sosyal medya içerik editörüsün. Aşağıda son ${compact.length} indirim ilanı JSON olarak veriliyor.
 
-GÖREV — EN İYİ 10 ADAYI PUANLA VE SIRALA:
+GÖREV — EN İYİ 20 ADAYI PUANLA VE SIRALA:
 Her ürünü sosyal medyada (Instagram story/post) paylaşılmaya UYGUNLUK açısından 1-10 arası puanla.
 Puanlarken şu kriterleri birlikte değerlendir:
 - Satış/popülerlik potansiyeli (reviewCount, marka tanınırlığı, kategori popülerliği ipucu olarak kullanılabilir)
 - İndirim oranı (discountPercent) — yüksek indirim daha çekici
 - İlgi çekicilik — geniş kitleye hitap eden, mainstream bir ürün/kategori/marka (çok nadir/niş bir ürün düşük puan almalı)
 
-En yüksek puanlı 10 FARKLI ürünü seç (mümkünse farklı kategorilerden çeşitlilik olsun, aynı ürünü iki kez seçme).
+En yüksek puanlı 20 FARKLI ürünü seç (mümkünse farklı kategorilerden çeşitlilik olsun, aynı ürünü iki kez seçme).
 Bu aşamada başlık veya sosyal medya metni YAZMA — sadece puanla ve kısa bir gerekçe ver.
 
 İLANLAR (her ilanın başındaki "index" numarasıyla referans ver, "id" alanını YAZMA/KOPYALAMA):
@@ -72,7 +72,7 @@ ${JSON.stringify(compact)}
 SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma. Her "index" MUTLAKA
 yukarıdaki listeden seçtiğin ilanın "index" alanındaki TAM SAYI olmalı (1 ile ${compact.length} arası),
 "score" 1-10 arası tam sayı olmalı, "candidates" en yüksek puandan en düşüğe sıralı olmalı ve
-en fazla 10 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
+en fazla 20 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
 {
   "candidates": [
     {"index": 1, "score": 9, "reasoning": "neden bu puanı verdiğin, kısa Türkçe (max 100 karakter)"},
@@ -134,7 +134,7 @@ en fazla 10 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
         })
         .filter(Boolean)
         .sort((a: any, b: any) => b.score - a.score)
-        .slice(0, 10);
+        .slice(0, 20);
 
     if (candidates.length === 0) {
         return res.status(502).json({ success: false, error: 'AI geçerli aday seçemedi' });
