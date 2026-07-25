@@ -1232,7 +1232,9 @@ function drawShowcaseCard(
     const chipTextW = ctx.measureText(chipText).width;
     const chipH = barH - innerPad * 1.1;
     const chipW = chipTextW + chipPadX * 2;
-    const chipX = barX + innerPad, chipY = barY + (barH - chipH) / 2;
+    // Rozet artık SAĞDA (kullanıcı geri bildirimi: solda çok boşluk
+    // bırakıyordu, fiyat grubu ortalanınca rozet doğal olarak sağa taşındı).
+    const chipX = barX + barW - innerPad - chipW, chipY = barY + (barH - chipH) / 2;
     ctx.fillStyle = '#E11D3C';
     drawRoundedRect(ctx, chipX, chipY, chipW, chipH, chipH / 2);
     ctx.textAlign = 'center';
@@ -1241,31 +1243,41 @@ function drawShowcaseCard(
     ctx.fillText(chipText, chipX + chipW / 2, chipY + chipH / 2 + 1);
     ctx.textBaseline = 'alphabetic';
 
+    // Fiyat grubu: YENİ fiyat şeridin tam ortasında, solunda "eski fiyat →
+    // yerine → yeni fiyat" sırasıyla diziliyor (kullanıcı geri bildirimi).
+    // "yerine" metni üstü çizili DEĞİL, eski fiyatla aynı boyut/renkte.
     ctx.font = `900 ${newFont}px Arial`;
     const newW = ctx.measureText(newPriceText).width;
-    let oldW = 0;
-    const priceGap = big ? 12 : 8;
-    if (oldPriceText) { ctx.font = `700 ${oldFont}px Arial`; oldW = ctx.measureText(oldPriceText).width; }
-    const priceGroupW = oldW + (oldPriceText ? priceGap : 0) + newW;
-    let curX = barX + barW - innerPad - priceGroupW;
     const priceBaselineY = barY + barH / 2 + newFont * 0.32;
+    const barCenterX = barX + barW / 2;
+    const newX = barCenterX - newW / 2;
+
     ctx.textAlign = 'left';
+    ctx.font = `900 ${newFont}px Arial`;
+    ctx.fillStyle = '#161221';
+    ctx.fillText(newPriceText, newX, priceBaselineY);
+
     if (oldPriceText) {
+        const yerineText = 'yerine';
+        const priceGap = big ? 12 : 8;
         const oldY = barY + barH / 2 + oldFont * 0.3;
         ctx.font = `700 ${oldFont}px Arial`;
+        const yerineW = ctx.measureText(yerineText).width;
+        const oldW = ctx.measureText(oldPriceText).width;
+
+        const yerineX = newX - priceGap - yerineW;
         ctx.fillStyle = '#9CA3AF';
-        ctx.fillText(oldPriceText, curX, oldY);
+        ctx.fillText(yerineText, yerineX, oldY);
+
+        const oldX = yerineX - priceGap - oldW;
+        ctx.fillText(oldPriceText, oldX, oldY);
         ctx.strokeStyle = '#9CA3AF';
         ctx.lineWidth = big ? 2 : 1.5;
         ctx.beginPath();
-        ctx.moveTo(curX, oldY - oldFont * 0.34);
-        ctx.lineTo(curX + oldW, oldY - oldFont * 0.34);
+        ctx.moveTo(oldX, oldY - oldFont * 0.34);
+        ctx.lineTo(oldX + oldW, oldY - oldFont * 0.34);
         ctx.stroke();
-        curX += oldW + priceGap;
     }
-    ctx.font = `900 ${newFont}px Arial`;
-    ctx.fillStyle = '#161221';
-    ctx.fillText(newPriceText, curX, priceBaselineY);
     ctx.textAlign = 'left';
 }
 
