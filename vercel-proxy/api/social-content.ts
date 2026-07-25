@@ -172,17 +172,27 @@ ${JSON.stringify(compact)}
   Bu metin doğrudan bir metinden-sese (ElevenLabs) aracına yapıştırılıp seslendirilecek — SADECE
   konuşulacak metni yaz, sahne yönergesi/parantez/emoji/hashtag YAZMA, doğal konuşma diliyle Türkçe yaz.
 
-  UZUNLUK — SIKI KURAL: TOPLAM 45-70 KELİME (kesinlikle 80 kelimeyi geçme). ${compact.length} ürünü
-  sırayla, HER BİRİ İÇİN TEK KISA CÜMLE ile tanıt (fiyat/indirim dahil) — uzun açıklamalara girme.
+  UZUNLUK — SIKI KURAL: TOPLAM 50-80 KELİME (kesinlikle 90 kelimeyi geçme). ${compact.length} ürünü
+  sırayla, HER BİRİ İÇİN TEK KISA CÜMLE ile tanıt — uzun açıklamalara girme.
 
   TON — profesyonel bir reklam seslendirme sanatçısı gibi yaz: sıcak, kendinden emin, doğrudan,
   bir üründen diğerine akıcı şekilde geçsin. Yapay zekâ tarafından üretilmiş gibi HİSSETTİRMEMELİ —
   klişe açılış/kapanışları TEKRARLAMA ("Müjde!", "Dikkat!", "Bu fırsatı kaçırmayın" gibi kalıplardan kaçın).
 
+  SESLENDİRME DOSTU YAZIM — ElevenLabs bu metni hiç zorlanmadan, doğal bir tonlamayla okuyabilmeli:
+  "%", kısaltma, parantez, tire, üç nokta, birden fazla ünlem/soru işareti KULLANMA — sadece tek
+  nokta/virgül/ünlem; BÜYÜK HARFLE vurgu YAPMA.
+
   İÇERMESİ GEREKENLER:
   - Kısa, doğal bir açılış (İNDİVA'da bugünün öne çıkan fırsatları gibi, klişe olmayan).
-  - Her ürün için: ne olduğu + eski/yeni fiyat + indirim yüzdesi NET (örn. "739 lira yerine 199 lira").
-  - Kısa, enerjik bir kapanış çağrısı (İNDİVA'yı indirmeye teşvik).
+  - Her ürün için SADECE ürünün ne olduğunu ve YENİ fiyatını doğal bir cümlede söyle — eski
+    fiyatı veya indirim yüzdesini SÖYLEME (görselde zaten ayrıca gösteriliyor, seslendirmede
+    tekrarlanınca kulağa formülsel/yapay geliyor).
+  - Kapanış — SIKI KURAL: "indirimi kaçırmayın, İNDİVA'yı hemen indirin" tarzı kısa, kaba, tek
+    cümlelik bir çağrıyla YETİNME. En az 2 cümlelik, eğlenceli, sıcak ve gerçekten ikna edici bir
+    kapanış yaz: dinleyiciyle sohbet eder gibi, İNDİVA'da bunun gibi onlarca fırsat daha olduğunu
+    hissettir, uygulamayı indirip bu fırsatları kaçırmamaya davet et — enerjik ama samimi olsun,
+    reklam spikeri gibi bağırarak değil.
 
 SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma:
 {"caption": "...", "voiceover": "..."}`;
@@ -201,7 +211,13 @@ SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma:
             temperature: 0.85,
             usage: { include: true },
         }),
-        signal: AbortSignal.timeout(30000),
+        // 30sn çok az kalıyordu — 3 ürünü tek metinde birleştirmek modele daha
+        // uzun sürüyor, bu yüzden admin sık sık "Zaman aşımı" alıp elle 2-3 kez
+        // tekrar denemek zorunda kalıyordu (kullanıcı geri bildirimi). Vercel
+        // Hobby'nin 60sn sınırına karşı pay bırakmak için 45sn'e çıkarıldı —
+        // aday-puanlama modundaki (50sn) kadar geniş değil çünkü bu istek daha
+        // küçük/basit, ama önceki 30sn'den belirgin şekilde daha toleranslı.
+        signal: AbortSignal.timeout(45000),
     });
 
     if (!response.ok) {
@@ -289,9 +305,14 @@ ${JSON.stringify({
     lira"), ama asla "199₺" gibi sembol+rakam bitişik yazma.
 
   İÇERMESİ GEREKENLER (bu sırayla değil, doğal bir akışa yedirilmiş şekilde):
-  - Ürün ne, kime/ne işe yarıyor — tek doğal cümlede.
-  - Eski ve yeni fiyat + indirim yüzdesi NET söylenmeli (örn. "739 lira yerine şimdi 199 lira,
-    yüzde 73 indirimli").
+  - Ürünü GENEL olarak tanıt: ne olduğu, kime/hangi ihtiyaca hitap ettiği, öne çıkan 1-2
+    özelliği/faydası — sadece fiyata atlama, önce dinleyiciye ürün hakkında gerçek bir fikir ver.
+  - Fiyatı doğal bir cümle akışında MUTLAKA belirt, ama HER SEFERİNDE "eski fiyat X, şimdi Y,
+    yüzde Z indirimli" kalıbını TEKRARLAMA — bu formülsel ve yapay duruyor, kulağa hoş gelmiyor.
+    Ürüne göre çeşitlendir: bazen sadece yeni fiyatı vurgula ("sadece 380 liraya sahip ol"),
+    bazen indirim oranını farklı bir cümle yapısıyla ver, bazen tasarruf miktarını söyle, bazen
+    eski/yeni fiyatı doğal bir karşılaştırmaya göm — ama HİÇBİR ZAMAN aynı kalıp cümleyi kelimesi
+    kelimesine tekrar etme.
   - Öne çıkan TEK bir fayda (özellik değil, faydası — varsa reviewCount/kategori ipucu olabilir).
   - Coşkulu, enerjik, indirimli alışverişe teşvik eden bir İNDİVA çağrısıyla kapat — ama klişe
     değil, doğal ve inandırıcı olsun.
