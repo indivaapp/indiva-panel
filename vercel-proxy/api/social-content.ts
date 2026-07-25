@@ -32,6 +32,28 @@ function corsHeaders(res: VercelResponse) {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
+// Aynı ürün, scraper tarafından neredeyse birebir aynı başlıkla (farklı "id"
+// ile) birden çok kez kaydedilebiliyor — canlı veriyle test edildiğinde bu,
+// AI'nın top-20 listesinin birkaç slotunu aynı ürünün varyantlarıyla
+// (örn. aynı vücut kreminin 3 farklı kokusu) doldurmasına yol açtığı
+// görüldü. Modele gitmeden ÖNCE normalize edilmiş başlığa göre tekilleştirip
+// (aynı başlıktan en yüksek indirimli olanı tutarak) havuzu temizliyoruz —
+// modelin talimata uyup uymamasına bağlı kalmadan garanti bir çözüm.
+function normalizeTitleForDedup(title: string): string {
+    return String(title || '').toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+function dedupeByTitle(discounts: any[]): any[] {
+    const bestByTitle = new Map<string, { discount: any; pct: number }>();
+    for (const d of discounts) {
+        const key = normalizeTitleForDedup(d.title);
+        const pct = d.oldPrice > d.newPrice && d.oldPrice > 0 ? (d.oldPrice - d.newPrice) / d.oldPrice : 0;
+        const existing = bestByTitle.get(key);
+        if (!existing || pct > existing.pct) bestByTitle.set(key, { discount: d, pct });
+    }
+    return Array.from(bestByTitle.values()).map(v => v.discount);
+}
+
 async function handleCandidates(req: VercelRequest, res: VercelResponse) {
     const { discounts } = req.body || {};
     if (!Array.isArray(discounts) || discounts.length === 0) {
@@ -41,7 +63,7 @@ async function handleCandidates(req: VercelRequest, res: VercelResponse) {
     // NOT: 100 ürünle canlı testte gerçek (uzun) başlıklarla bazen Vercel
     // Hobby planının 60sn sunucusuz fonksiyon sınırını aşıp zaman aşımına
     // yol açtı — 60'a düşürüldü, hâlâ eski 3'lü sistemin (50) üzerinde.
-    const compact = discounts.slice(0, 60).map((d: any, i: number) => ({
+    const compact = dedupeByTitle(discounts).slice(0, 60).map((d: any, i: number) => ({
         index: i + 1,
         id: d.id,
         title: d.title,
@@ -60,8 +82,13 @@ GÖREV — EN İYİ 20 ADAYI PUANLA VE SIRALA:
 Her ürünü sosyal medyada (Instagram story/post) paylaşılmaya UYGUNLUK açısından 1-10 arası puanla.
 Puanlarken şu kriterleri birlikte değerlendir:
 - Satış/popülerlik potansiyeli (reviewCount, marka tanınırlığı, kategori popülerliği ipucu olarak kullanılabilir)
-- İndirim oranı (discountPercent) — yüksek indirim daha çekici
+- İndirim oranı (discountPercent) — yüksek indirim daha çekici; discountPercent 0 ise (veriye eski
+  fiyat girilmemiş) bu ürünü GERÇEK bir indirim olarak SAYMA, sadece marka/ürün ilgi çekiciliğine
+  göre değerlendir, asla sırf tanınmış marka diye yüksek puan verme
 - İlgi çekicilik — geniş kitleye hitap eden, mainstream bir ürün/kategori/marka (çok nadir/niş bir ürün düşük puan almalı)
+- ÇEŞİTLİLİK — aynı ürün ailesinden (aynı marka + aynı ürün tipi, sadece renk/beden/koku/desen
+  farklı — örn. aynı vücut kreminin farklı kokuları, aynı tişörtün farklı renkleri) BİRDEN FAZLA
+  ürünü seçme; bu tarz bir kümede sadece EN İYİ tekini seç, gerisini listeye alma
 
 En yüksek puanlı 20 FARKLI ürünü seç (mümkünse farklı kategorilerden çeşitlilik olsun, aynı ürünü iki kez seçme).
 Bu aşamada başlık veya sosyal medya metni YAZMA — sadece puanla ve kısa bir gerekçe ver.
@@ -94,10 +121,12 @@ en fazla 20 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı:
             temperature: 0.4,
             usage: { include: true },
         }),
-        // Vercel Hobby planının 60sn sunucusuz fonksiyon sınırına karşı pay
-        // bırakmak için 50sn'de kes — bu sayede fonksiyon zorla kesilmeden
-        // önce kontrollü bir "Zaman aşımı" hatası dönebiliyoruz.
-        signal: AbortSignal.timeout(50000),
+        // 20 aday (önceden 10) modele daha fazla çıktı ürettiriyor — canlı
+        // veriyle test edildiğinde gerçek süre 50sn sınırına çok yaklaştı
+        // (~51.5sn), bu da gereksiz "Zaman aşımı" hatalarına yol açabilirdi.
+        // Vercel Hobby'nin 60sn sınırına hâlâ ~5sn pay bırakacak şekilde 55sn'e
+        // çıkarıldı.
+        signal: AbortSignal.timeout(55000),
     });
 
     if (!response.ok) {
