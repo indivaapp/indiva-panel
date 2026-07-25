@@ -1132,7 +1132,13 @@ function computeCardGeometry(ctx: CanvasRenderingContext2D, x: number, y: number
     // boşluk artışı yetersiz kaldı, şerit hâlâ alt kenara yapışık görünüyordu
     // (kullanıcı geri bildirimi). Boşluk artık üsttekinin ~2 katı.
     const bottomPad = pad + (big ? 54 : 34);
-    const h = pad + imgAreaH + gapImgTitle + titleLines.length * titleLineH + gapTitleBar + barH + bottomPad;
+    // Başlık alanı DAİMA 2 satırlık sabit yükseklikte ayrılıyor (gerçek satır
+    // sayısı 1 veya 2 olsa da) — yoksa kısa başlıklı kartlar tek satırda kalıp
+    // fiyat şeridi yukarı kayıyor, uzun başlıklılar iki satıra taşıp kart
+    // boyu büyüyordu; 3'lü vitrinde yan yana kartlar farklı boyda görünüyordu
+    // (kullanıcı geri bildirimi).
+    const TITLE_AREA_LINES = 2;
+    const h = pad + imgAreaH + gapImgTitle + TITLE_AREA_LINES * titleLineH + gapTitleBar + barH + bottomPad;
     return { x, y, w, h, pad, imgAreaH, titleLines, titleFont, titleLineH, chipFont, oldFont, newFont, barH, cornerR, borderW, big };
 }
 
@@ -1202,6 +1208,10 @@ function drawShowcaseCard(
     ctx.shadowColor = 'rgba(0,0,0,0.25)';
     ctx.shadowBlur = 6;
     titleLines.forEach(line => { ctx.fillText(line, x + w / 2, ty); ty += titleLineH; });
+    // Başlık tek satır sürdüyse, aşağıdaki her şeyin (fiyat şeridi dahil)
+    // yine de 2 satırlık sabit yükseklikten sonra başlaması için eksik
+    // satırın boşluğu telafi ediliyor (bkz. computeCardGeometry notu).
+    ty += (2 - titleLines.length) * titleLineH;
     ctx.shadowBlur = 0;
 
     // Fiyat şeridi — Trendyol/Hepsiburada tarzı: BEYAZ, kartın tam
@@ -1243,9 +1253,9 @@ function drawShowcaseCard(
     ctx.fillText(chipText, chipX + chipW / 2, chipY + chipH / 2 + 1);
     ctx.textBaseline = 'alphabetic';
 
-    // Fiyat grubu: YENİ fiyat şeridin tam ortasında, solunda "eski fiyat →
-    // yerine → yeni fiyat" sırasıyla diziliyor (kullanıcı geri bildirimi).
-    // "yerine" metni üstü çizili DEĞİL, eski fiyatla aynı boyut/renkte.
+    // Fiyat grubu: YENİ fiyat şeridin tam ortasında, solunda eski fiyat
+    // (üstü çizili) diziliyor (kullanıcı geri bildirimi — "yerine" metni
+    // satırda taşmaya neden oluyordu, kaldırıldı).
     ctx.font = `900 ${newFont}px Arial`;
     const newW = ctx.measureText(newPriceText).width;
     const priceBaselineY = barY + barH / 2 + newFont * 0.32;
@@ -1258,18 +1268,13 @@ function drawShowcaseCard(
     ctx.fillText(newPriceText, newX, priceBaselineY);
 
     if (oldPriceText) {
-        const yerineText = 'yerine';
-        const priceGap = big ? 12 : 8;
+        const priceGap = big ? 14 : 10;
         const oldY = barY + barH / 2 + oldFont * 0.3;
         ctx.font = `700 ${oldFont}px Arial`;
-        const yerineW = ctx.measureText(yerineText).width;
         const oldW = ctx.measureText(oldPriceText).width;
 
-        const yerineX = newX - priceGap - yerineW;
+        const oldX = newX - priceGap - oldW;
         ctx.fillStyle = '#9CA3AF';
-        ctx.fillText(yerineText, yerineX, oldY);
-
-        const oldX = yerineX - priceGap - oldW;
         ctx.fillText(oldPriceText, oldX, oldY);
         ctx.strokeStyle = '#9CA3AF';
         ctx.lineWidth = big ? 2 : 1.5;
@@ -1343,8 +1348,11 @@ async function renderHeroScene(
 
     // ── Yan kartlar (küçük ürünler) — hero kartıyla BİREBİR AYNI çizim
     // fonksiyonunu paylaşır (drawShowcaseCard), sadece küçük ölçekte.
-    const cardW = 360, cardY = 380;
-    const leftX = 50, rightX = CANVAS_W - 50 - cardW;
+    // cardW 360'tan 430'a büyütüldü, kenar boşluğu 50'den 55'e çıktı —
+    // ikisi arasındaki boşluk ~260px'ten ~110px'e indi (kullanıcı geri
+    // bildirimi: ortada çok fazla boşluk kalıyordu).
+    const cardW = 430, cardY = 380;
+    const leftX = 55, rightX = CANVAS_W - 55 - cardW;
     const leftG = sideItems[0] ? computeCardGeometry(ctx, leftX, cardY, cardW, sideItems[0], false) : null;
     const rightG = sideItems[1] ? computeCardGeometry(ctx, rightX, cardY, cardW, sideItems[1], false) : null;
     const drawSideCard = (g: CardGeometry | null, item: DealRenderItem | undefined, img: HTMLImageElement | null | undefined, p: number, fromLeft: boolean) => {
@@ -1449,6 +1457,86 @@ function pickSupportedMimeType(): string {
     return 'video/webm';
 }
 
+// ── Arka fon müziği ──────────────────────────────────────────────────────
+// Tekli ürün videosu ve 3'lü vitrin videosu farklı parçalar kullanır — admin
+// kendi seslendirmesini (ElevenLabs) ayrıca manuel ekleyeceği için müzik
+// bilinçli olarak kısık (varsayılan %20 ses seviyesi).
+const MUSIC_URL_SINGLE = '/audio/social-single.mp3';
+const MUSIC_URL_VITRIN = '/audio/social-vitrin.mp3';
+const MUSIC_VOLUME = 0.2;
+const MUSIC_FADE_OUT_MS = 2000;
+
+let sharedAudioCtx: AudioContext | null = null;
+function getSharedAudioContext(): AudioContext | null {
+    const Ctor = window.AudioContext || (window as any).webkitAudioContext;
+    if (!Ctor) return null;
+    if (!sharedAudioCtx) sharedAudioCtx = new Ctor();
+    return sharedAudioCtx;
+}
+
+const audioBufferCache = new Map<string, Promise<AudioBuffer>>();
+function loadAudioBufferCached(ctx: AudioContext, url: string): Promise<AudioBuffer> {
+    if (!audioBufferCache.has(url)) {
+        audioBufferCache.set(url, fetch(url)
+            .then(r => r.arrayBuffer())
+            .then(data => ctx.decodeAudioData(data)));
+    }
+    return audioBufferCache.get(url)!;
+}
+
+// Video kaydı süresince (videoDurationMs) çalacak bir müzik parçası MediaStream'e
+// eklenir — kısa kalırsa döngüye girer (loop), uzun kalırsa videonun sonunda
+// kesilir; son MUSIC_FADE_OUT_MS içinde ses yumuşakça sıfıra iniyor. Herhangi
+// bir adımda (izin, ağ, decode) hata olursa sessizce vazgeçilir — müziksiz
+// video, kayıt hiç başlamamasından her zaman daha iyidir.
+async function attachBackgroundMusic(
+    stream: MediaStream,
+    musicUrl: string,
+    videoDurationMs: number,
+): Promise<{ stop: () => void } | null> {
+    try {
+        const audioCtx = getSharedAudioContext();
+        if (!audioCtx) return null;
+        if (audioCtx.state === 'suspended') {
+            try { await audioCtx.resume(); } catch { /* kullanıcı jesti olmadan devam edemeyebilir, müziksiz devam */ }
+        }
+        const buffer = await loadAudioBufferCached(audioCtx, musicUrl);
+
+        const destination = audioCtx.createMediaStreamDestination();
+        const gainNode = audioCtx.createGain();
+        gainNode.gain.value = MUSIC_VOLUME;
+        gainNode.connect(destination);
+
+        const source = audioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.loop = true;
+        source.connect(gainNode);
+
+        const durationSec = videoDurationMs / 1000;
+        const now = audioCtx.currentTime;
+        source.start(now);
+        source.stop(now + durationSec);
+
+        if (MUSIC_FADE_OUT_MS > 0 && MUSIC_FADE_OUT_MS < videoDurationMs) {
+            const fadeStartSec = now + durationSec - MUSIC_FADE_OUT_MS / 1000;
+            gainNode.gain.setValueAtTime(MUSIC_VOLUME, fadeStartSec);
+            gainNode.gain.linearRampToValueAtTime(0, now + durationSec);
+        }
+
+        destination.stream.getAudioTracks().forEach(t => stream.addTrack(t));
+
+        return {
+            stop: () => {
+                try { source.stop(); } catch { /* zaten durmuş olabilir */ }
+                try { source.disconnect(); gainNode.disconnect(); destination.disconnect(); } catch { /* no-op */ }
+            },
+        };
+    } catch (e) {
+        console.warn('Arka fon müziği eklenemedi, müziksiz devam ediliyor:', e);
+        return null;
+    }
+}
+
 interface VideoSegment {
     item: DealRenderItem;
     cachedImg: HTMLImageElement | null;
@@ -1514,6 +1602,11 @@ async function recordSequenceVideo(
     // otomatik yakalamanın daha DÜZENLİ kareler görmesini sağlıyor, riskli
     // manuel-frame API'sine ihtiyaç duymadan.
     const stream: MediaStream = (canvas as any).captureStream(VIDEO_FPS);
+    // Arka fon müziği — video kaydı ile birebir aynı sürede çalıp (kısaysa
+    // döngüye girip, uzunsa kesilip) stream'e ses parçası olarak ekleniyor.
+    // MediaRecorder'ın audio track'i de yakalaması için recorder OLUŞTURULMADAN
+    // ÖNCE eklenmesi gerekiyor.
+    const musicHandle = await attachBackgroundMusic(stream, MUSIC_URL_SINGLE, videoDurationMs);
     const mimeType = pickSupportedMimeType();
     // 12Mbps -> 8Mbps: sosyal medya zaten agresif sıkıştırıyor, fark
     // neredeyse görünmez ama kodlayıcı (encoder) yükü belirgin azalıyor —
@@ -1580,6 +1673,7 @@ async function recordSequenceVideo(
         recorder.ondataavailable = (e: BlobEvent) => { if (e.data.size > 0) chunks.push(e.data); };
         recorder.onerror = () => reject(new Error('Video kaydı başarısız oldu.'));
         recorder.onstop = () => {
+            musicHandle?.stop();
             stream.getTracks().forEach(t => t.stop());
             resolve(new Blob(chunks, { type: mimeType }));
         };
@@ -1732,6 +1826,9 @@ async function recordHeroCompilationVideo(
     buffer.height = CANVAS_H;
 
     const stream: MediaStream = (canvas as any).captureStream(VIDEO_FPS);
+    // 3'lü vitrin videosu tekli şablondan FARKLI bir müzik kullanıyor
+    // (kullanıcı talebi) — recorder oluşturulmadan önce eklenmesi gerekiyor.
+    const musicHandle = await attachBackgroundMusic(stream, MUSIC_URL_VITRIN, videoDurationMs);
     const mimeType = pickSupportedMimeType();
     const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 8_000_000 });
     const chunks: Blob[] = [];
@@ -1817,6 +1914,7 @@ async function recordHeroCompilationVideo(
         recorder.ondataavailable = (e: BlobEvent) => { if (e.data.size > 0) chunks.push(e.data); };
         recorder.onerror = () => reject(new Error('Video kaydı başarısız oldu.'));
         recorder.onstop = () => {
+            musicHandle?.stop();
             stream.getTracks().forEach(t => t.stop());
             resolve(new Blob(chunks, { type: mimeType }));
         };
