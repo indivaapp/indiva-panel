@@ -265,21 +265,36 @@ ${JSON.stringify({
   UZUNLUK — SIKI KURAL: TOPLAM 35-50 KELİME (kesinlikle 55 kelimeyi geçme). Bu bir video altyazı
   metni değil, kısa ve vurucu bir reklam spotu — gereksiz cümle EKLEME, her kelimeyi say.
 
-  TON — profesyonel bir reklam seslendirme sanatçısı gibi yaz: sıcak, kendinden emin, doğrudan.
+  TON — profesyonel bir reklam seslendirme sanatçısı gibi yaz, ama AMATÖR/YAVAN değil: sıcak,
+  coşkulu, indirim heyecanı hissettiren, alışverişe gerçekten teşvik eden bir enerjisi olsun —
+  bir radyo/TV alışveriş reklamı dinliyormuş gibi hissettirmeli, düz bir bilgilendirme metni gibi
+  DEĞİL. Bunu abartılı bağırarak değil, kendinden emin ve akıcı bir coşkuyla yap.
   Yapay zekâ tarafından üretilmiş gibi HİSSETTİRMEMELİ — kalıp cümlelerden kaçın:
   - "...seviyorsanız tam size göre", "Dikkat!", "Müjde!", "Müthiş fırsat" gibi klişe açılışlarla
-    BAŞLAMA. Doğrudan ürünle veya faydayla aç.
+    BAŞLAMA. Doğrudan ürünle, faydayla veya heyecanla aç.
   - Kapanışı her seferinde aynı kalıpla ("bu fırsatı kaçırmayın") YAZMA — çeşitlendir: bazen
-    aciliyet, bazen merak, bazen doğrudan davet kullan.
+    aciliyet, bazen merak, bazen doğrudan davet kullan; ama her seferinde satın almaya/indirmeye
+    net bir çağrıyla bitir.
   - Ürün özelliklerini teknik bir liste okur gibi sıralama (örn. "IP67 sertifikası sayesinde"
     değil, faydasını günlük dille anlat: "suya, toza aldırmadan her yere götür" gibi).
+
+  SESLENDİRME DOSTU YAZIM — ElevenLabs bu metni HİÇ ZORLANMADAN, doğal bir tonlamayla okuyabilmeli:
+  - Sadece düz, tam cümleler kur; kısa cümle/virgülle doğal nefes payı bırak — TEK bir cümleyi
+    bağlaçlarla uzatıp sarmalama.
+  - "%", kısaltma, parantez, tire, üç nokta, birden fazla ünlem/soru işareti (!!!, ???) KULLANMA —
+    sadece tek nokta/virgül/ünlem; yüzdeyi ve fiyatı HER ZAMAN yazıyla söylenecek şekilde yaz
+    (örn. "yüzde yetmiş üç indirim", "yüz doksan dokuz lira").
+  - BÜYÜK HARFLE vurgu YAPMA (TTS'i garip okutur) — vurguyu kelime seçimiyle/cümle yapısıyla ver.
+  - Sayıları TTS'in doğru telaffuz edeceği şekilde yaz: rakamla da yazsan sorun değil (örn. "199
+    lira"), ama asla "199₺" gibi sembol+rakam bitişik yazma.
 
   İÇERMESİ GEREKENLER (bu sırayla değil, doğal bir akışa yedirilmiş şekilde):
   - Ürün ne, kime/ne işe yarıyor — tek doğal cümlede.
   - Eski ve yeni fiyat + indirim yüzdesi NET söylenmeli (örn. "739 lira yerine şimdi 199 lira,
     yüzde 73 indirimli").
   - Öne çıkan TEK bir fayda (özellik değil, faydası — varsa reviewCount/kategori ipucu olabilir).
-  - Kısa, enerjik bir İNDİVA çağrısı — ama klişe değil, doğal.
+  - Coşkulu, enerjik, indirimli alışverişe teşvik eden bir İNDİVA çağrısıyla kapat — ama klişe
+    değil, doğal ve inandırıcı olsun.
 
 SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma:
 {"title": "...", "caption": "...", "voiceover": "..."}`;
