@@ -1139,7 +1139,7 @@ export const toggleScraperSource = async (sourceId: string): Promise<void> => {
 };
 
 // Telefon/panel "Veri Çek" → PC'deki dinleyici bunu görüp taramayı başlatır.
-// site verilirse yalnızca o site taranır ('trendyol' | 'cimri'); yoksa tümü.
+// site verilirse yalnızca o site taranır ('trendyol' | 'n11'); yoksa tümü.
 export const triggerScrape = async (site?: string): Promise<void> => {
     await setDoc(
         doc(db, 'scraper_control', 'trigger'),

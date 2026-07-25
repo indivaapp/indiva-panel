@@ -269,7 +269,7 @@ const Dashboard: React.FC<DashboardProps> = ({ setActiveView, pendingAffiliateCo
                     </div>
                     <div className="flex-1">
                         <p className="text-white font-bold text-sm">Veri Çekici</p>
-                        <p className="text-orange-300/70 text-xs mt-0.5">Trendyol & Cimri'den indirim çek, seç, yayınla</p>
+                        <p className="text-orange-300/70 text-xs mt-0.5">Trendyol & N11'den indirim çek, seç, yayınla</p>
                     </div>
                     <svg className="w-5 h-5 text-gray-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
