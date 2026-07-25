@@ -167,17 +167,21 @@ const TrendyolScraper: React.FC = () => {
   const recentActivity = Math.max(listenerMs || 0, lastRunMs || 0);
   const listenerOnline = recentActivity > 0 && (Date.now() - recentActivity) < 6 * 60 * 60 * 1000;
 
-  // Site listesi — config.sites varsa kullan; yoksa sources'tan türet; ikisi de yoksa her iki site göster
-  const FALLBACK_SITES = [{ id: 'trendyol', label: 'Trendyol' }, { id: 'cimri', label: 'Cimri' }];
-  const sites: { id: string; label: string }[] = config?.sites?.length
+  // Site listesi — config.sites varsa kullan; yoksa sources'tan türet; ikisi de yoksa varsayılanlar.
+  // Cimri kaldırıldı, yerine N11 geldi (scraper tarafında da Cimri kod
+  // seviyesinde kapalı — bkz. indiva-scraper/scrape.js CIMRI_DISABLED).
+  const SITE_LABELS: Record<string, string> = { trendyol: 'Trendyol', n11: 'N11', cimri: 'Cimri' };
+  const FALLBACK_SITES = [{ id: 'trendyol', label: 'Trendyol' }, { id: 'n11', label: 'N11' }];
+  const sites: { id: string; label: string }[] = (config?.sites?.length
     ? config.sites
     : config?.sources?.length
       ? [...new Map(config.sources.map(s => {
           const id = s.site || 'trendyol';
-          const label = id === 'cimri' ? 'Cimri' : id.charAt(0).toUpperCase() + id.slice(1);
+          const label = SITE_LABELS[id] || id.charAt(0).toUpperCase() + id.slice(1);
           return [id, { id, label }] as [string, { id: string; label: string }];
         })).values()]
-      : FALLBACK_SITES;
+      : FALLBACK_SITES
+  ).filter(s => s.id !== 'cimri');
   const siteSources = (config?.sources || []).filter(s => (s.site || 'trendyol') === selectedSite);
   const siteLabel = sites.find(s => s.id === selectedSite)?.label || 'Trendyol';
 
@@ -196,7 +200,7 @@ const TrendyolScraper: React.FC = () => {
         </div>
       </div>
 
-      {/* Site seçici (Trendyol / Cimri) */}
+      {/* Site seçici (Trendyol / N11) */}
       <div className="flex gap-2 bg-gray-800 rounded-xl p-1">
         {sites.map(s => (
           <button
