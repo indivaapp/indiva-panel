@@ -61,6 +61,10 @@ service cloud.firestore {
     // Sosyal medya içerik kuyruğu: otomatik üretilen Instagram içerikleri (yalnızca yönetici)
     match /social_content_queue/{id} { allow read, write: if isAdmin(); }
 
+    // Ürün değerlendirme (AI eğitim verisi) — yayınlanan ürünler için
+    // yöneticinin verdiği 👍/👎 + opsiyonel sebep. Sadece yönetici okur/yazar.
+    match /product_feedback/{id} { allow read, write: if isAdmin(); }
+
     // AI kullanım/maliyet istatistikleri — sadece Admin SDK (scripts, Cloud
     // Functions, Vercel proxy) yazar; o yazmalar zaten rules'u atlar.
     // Client SDK üzerinden asla yazılmamalı; panel sadece okur.
