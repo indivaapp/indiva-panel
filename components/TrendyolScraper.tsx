@@ -3,8 +3,8 @@ import type { StagingProduct } from '../types';
 import {
   getStagingProductsByIds,
   getScraperStatus, getScraperConfig, toggleScraperSource, triggerScrape,
-  getAutoPublishQueue,
-  type ScraperStatusDoc, type ScraperConfigDoc, type AutoPublishQueueStatus,
+  getAutoPublishQueue, getRunHistory,
+  type ScraperStatusDoc, type ScraperConfigDoc, type AutoPublishQueueStatus, type ScraperRunHistoryEntry,
 } from '../services/firebase';
 
 const QUEUE_PAGE_SIZE = 6;
@@ -23,6 +23,11 @@ const TrendyolScraper: React.FC = () => {
   const [loadingStaging, setLoadingStaging] = useState(false);
   const [queueExpanded, setQueueExpanded] = useState(false);
   const [visibleCount, setVisibleCount] = useState(QUEUE_PAGE_SIZE);
+
+  // ── Çalışma geçmişi (son 24 saat) ─────────────────────────────────────────
+  const [history, setHistory] = useState<ScraperRunHistoryEntry[]>([]);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   // ── Durum + config (Firestore) ────────────────────────────────────────────
   const fetchStatus = useCallback(async () => {
@@ -83,6 +88,20 @@ const TrendyolScraper: React.FC = () => {
     return () => clearInterval(t);
   }, [loadQueue, queue?.ids?.length]);
 
+  // ── Çalışma geçmişi (son 24 saat) — özet kartları için her zaman yüklenir,
+  // liste sadece açıldığında gösterilir. Tarama sürmüyorken seyrek yenilenir. ─
+  const loadHistory = useCallback(async () => {
+    setLoadingHistory(true);
+    try { setHistory(await getRunHistory()); } catch {}
+    finally { setLoadingHistory(false); }
+  }, []);
+
+  useEffect(() => {
+    loadHistory();
+    const t = setInterval(loadHistory, 60000);
+    return () => clearInterval(t);
+  }, [loadHistory]);
+
   // Sayaçların her saniye ilerlemesi için — Firestore okuması YOK, sadece
   // ekrandaki "kaç saniye kaldı" hesabını tazeler.
   useEffect(() => {
@@ -113,6 +132,8 @@ const TrendyolScraper: React.FC = () => {
     if (prevRunning && !status?.isRunning) {
       loadQueue();
       setTimeout(loadQueue, 8000);
+      loadHistory();
+      setTimeout(loadHistory, 8000);
     }
     setPrevRunning(status?.isRunning ?? false);
   }, [status?.isRunning]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -187,6 +208,17 @@ const TrendyolScraper: React.FC = () => {
 
   const queueDone = queue?.done ?? 0;
   const queueTotal = queue?.total ?? 0;
+
+  // ── Çalışma geçmişi özet (son 24 saat) ────────────────────────────────────
+  const HISTORY_TRIGGER_LABELS: Record<string, string> = { panel: 'Telefon', cron: 'Otomatik', cli: 'Komut satırı', manual: 'Manuel' };
+  const last24hMs = Date.now() - 24 * 60 * 60 * 1000;
+  const recentHistory = history.filter(h => (tsToMs(h.timestamp) ?? 0) > last24hMs);
+  const historyTotals = recentHistory.reduce((acc, h) => ({
+    scraped: acc.scraped + (h.totalScraped || 0),
+    alreadyPublished: acc.alreadyPublished + (h.alreadyPublished || 0),
+    newlyStaged: acc.newlyStaged + (h.newlyStaged || 0),
+    approved: acc.approved + (h.qualityApproved || 0),
+  }), { scraped: 0, alreadyPublished: 0, newlyStaged: 0, approved: 0 });
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 pb-24">
@@ -401,6 +433,81 @@ const TrendyolScraper: React.FC = () => {
                 >
                   {loadingStaging ? 'Yükleniyor...' : `Daha Fazla Göster (+${QUEUE_PAGE_SIZE})`}
                 </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Çalışma Geçmişi (son 24 saat) — açılır/kapanır özet + liste ────── */}
+      <div className="border-t border-gray-700 pt-6">
+        <button
+          onClick={() => setHistoryExpanded(v => !v)}
+          className="w-full flex items-center justify-between gap-2 flex-wrap text-left"
+        >
+          <div>
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <span>📊</span> Son 24 Saat
+            </h2>
+            <p className="text-sm text-gray-400">Her taramanın çektiği, atladığı ve yayına kuyrukladığı ürün sayıları</p>
+          </div>
+          <svg
+            className={`w-5 h-5 text-gray-400 transition-transform duration-200 shrink-0 ${historyExpanded ? 'rotate-180' : ''}`}
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+          <div className="bg-gray-700/50 rounded-lg p-3">
+            <p className="text-xs text-gray-400 mb-1">Çekilen</p>
+            <p className="font-semibold text-white text-xl">{historyTotals.scraped}</p>
+          </div>
+          <div className="bg-gray-700/50 rounded-lg p-3">
+            <p className="text-xs text-gray-400 mb-1">Zaten Yayında</p>
+            <p className="font-semibold text-white text-xl">{historyTotals.alreadyPublished}</p>
+          </div>
+          <div className="bg-gray-700/50 rounded-lg p-3">
+            <p className="text-xs text-gray-400 mb-1">Yeni Eklenen</p>
+            <p className="font-semibold text-white text-xl">{historyTotals.newlyStaged}</p>
+          </div>
+          <div className="bg-gray-700/50 rounded-lg p-3">
+            <p className="text-xs text-gray-400 mb-1">Yayına Kuyruklanan</p>
+            <p className="font-semibold text-green-400 text-xl">{historyTotals.approved}</p>
+          </div>
+        </div>
+
+        {historyExpanded && (
+          <div className="mt-4">
+            {loadingHistory && recentHistory.length === 0 ? (
+              <div className="flex items-center gap-3 py-8 justify-center">
+                <div className="w-5 h-5 border-2 border-gray-600 border-t-blue-400 rounded-full animate-spin" />
+                <span className="text-gray-400">Yükleniyor...</span>
+              </div>
+            ) : recentHistory.length === 0 ? (
+              <div className="text-center py-10 text-gray-500">
+                <p className="text-4xl mb-3">📭</p>
+                <p>Son 24 saatte kayıtlı bir tarama yok.</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {recentHistory.map(h => (
+                  <div key={h.id} className="bg-gray-800 rounded-lg p-3 flex items-center justify-between gap-3 flex-wrap">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-white">
+                        {SITE_LABELS[h.site] || h.site} <span className="text-gray-500 font-normal">· {HISTORY_TRIGGER_LABELS[h.trigger] || h.trigger}</span>
+                      </p>
+                      <p className="text-xs text-gray-500">{fmt(h.timestamp)}</p>
+                    </div>
+                    <div className="flex items-center gap-3 text-xs">
+                      <span className="text-gray-300">{h.totalScraped} çekildi</span>
+                      <span className="text-gray-500">{h.alreadyPublished} atlandı</span>
+                      <span className="text-blue-300">{h.newlyStaged} yeni</span>
+                      <span className="text-green-400 font-semibold">{h.qualityApproved} kuyruklandı</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

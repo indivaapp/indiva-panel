@@ -54,6 +54,10 @@ service cloud.firestore {
     match /scraper_control/{id}  { allow read, write: if isAdmin(); }
     match /trendyol_staging/{id} { allow read, write: if isAdmin(); }
 
+    // Scraper çalışma geçmişi (son 24 saat istatistikleri) — sadece
+    // scrape.js (Admin SDK, rules'u atlar) yazar; panel sadece okur.
+    match /scraper_run_history/{id} { allow read: if isAdmin(); allow write: if false; }
+
     // Sosyal medya içerik kuyruğu: otomatik üretilen Instagram içerikleri (yalnızca yönetici)
     match /social_content_queue/{id} { allow read, write: if isAdmin(); }
 
