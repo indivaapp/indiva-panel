@@ -361,6 +361,15 @@ async function checkPrices() {
             .filter(d => {
                 if (autoExpiredIds.has(d.id)) return false;
                 const deal = d.data();
+                // IndirimRadar kaynaklı ilanların linki gerçek ürün sayfası DEĞİL —
+                // API asin/url vermediği için başlıktan oluşturulmuş bir Amazon ARAMA
+                // sayfası (bkz. auto-indirimradar.js: buildAmazonSearchLink). AI/HTML
+                // doğrulaması burada güvenilir çalışamaz: arama sonucundaki alakasız
+                // ürünleri görüp yanlışlıkla "ürün değişti/tükendi" diyebiliyor —
+                // kullanıcı geri bildirimi: "satış potansiyeli olan ürünler de
+                // atlanıyor". Bu kaynak için canlı doğrulamayı tamamen atlıyoruz,
+                // sadece yukarıda zaten uygulanan 24 saatlik TTL'e güveniyoruz.
+                if ((deal.originalSource || '') === 'indirimradar') return false;
                 let createdAtMs = 0;
                 if (deal.createdAt?.toMillis) createdAtMs = deal.createdAt.toMillis();
                 else if (deal.createdAt?._seconds) createdAtMs = deal.createdAt._seconds * 1000;
