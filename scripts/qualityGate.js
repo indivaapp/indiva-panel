@@ -1,12 +1,13 @@
 /**
- * qualityGate.js — Yayın öncesi AI kalite kapısı
+ * qualityGate.js — Yayın öncesi temel doğrulama kapısı
  *
  * auto-onual.js ve panel'in manuel onay akışının yerini alacak otomatik
- * yayın yolları için ortak karar mantığı. Amaç: "bu aday yayınlanmaya değer mi?"
+ * yayın yolları için ortak karar mantığı.
  *
- * Felsefe (price-checker.js ile tutarlı): emin olamadığın durumda SIKI davranma.
- * Ucuz/kesin kontrol (fiyat mantığı) önce çalışır ve AI'ya hiç gitmeyen adayları
- * eler — token tasarrufu. Hayatta kalanlar TEK istekte (batch) AI'dan puan alır.
+ * NOT: AI zevk/beğeni puanlaması (satisPotansiyeli/ilgiCekicilik + eşik)
+ * kullanıcı talebiyle kaldırıldı — "kafasına göre derecelendirip yayınlamayı
+ * engellemesin" istendi. Artık yalnızca temel veri bütünlüğü (fiyat/link
+ * geçerliliği) ve kaynaklar arası mükerrer kontrolü yapılır.
  *
  * NOT: Burada HTTP tabanlı bir "ölü link" kontrolü YOKTUR — kasıtlı olarak.
  * Trendyol/Amazon gibi siteler bot korumasından dolayı çıplak fetch() isteklerine
@@ -16,15 +17,9 @@
  *
  * Kullanım:
  *   const { runQualityGate } = require('./qualityGate.js') veya import (ESM)
- *   const results = await runQualityGate(candidates, { apiKey, threshold: 6 });
- *   // results: [{ id, publish: bool, score?, reason }]
+ *   const results = await runQualityGate(candidates, { db });
+ *   // results: [{ id, publish: bool, reason }]
  */
-
-import { GoogleGenAI } from '@google/genai';
-import { trackGeminiUsage } from './aiUsageTracker.js';
-
-const DEFAULT_THRESHOLD = 6;
-const DEFAULT_SCORE_ON_SKIP = 6; // AI atlanırsa/hata verirse nötr geç (pipeline'ı tıkamaz)
 
 /**
  * Fiyat mantık kontrolü — imkansız/şişirilmiş indirimleri eler.
@@ -131,79 +126,9 @@ export async function checkExistingLinks(db, normalizedLinks) {
 }
 
 /**
- * Adayları TEK Gemini isteğinde toplu puanla (1-10). Token tasarrufu için
- * her aday için ayrı istek ATILMAZ.
- */
-export async function scoreDealsBatch(apiKey, items, db, source = 'quality-gate') {
-    if (!apiKey || items.length === 0) {
-        return items.map(it => ({ id: it.id, score: DEFAULT_SCORE_ON_SKIP, reason: 'AI atlandı (anahtar yok), varsayılan geç' }));
-    }
-
-    const genAI = new GoogleGenAI({ apiKey });
-    const list = items.map((it, i) =>
-        `${i + 1}. id=${it.id} | "${it.title}" | ${it.oldPrice || '?'} TL -> ${it.newPrice} TL | kategori: ${it.category || '?'}`
-    ).join('\n');
-
-    const prompt = `Sen İNDİVA uygulamasının kıdemli fırsat editörüsün. Aşağıdaki ${items.length} adayı
-iki ayrı boyutta 1-10 puanla:
-
-1) satisPotansiyeli — bu ürün gerçekten SATIN ALINIR mı?
-   - Kategori talebi: elektronik, kişisel bakım, ev/mutfak gibi kanıtlanmış yüksek talepli
-     kategoriler yüksek puan; niş/nadir ihtiyaç ürünleri düşük puan
-   - Fiyat aralığı: dürtüsel satın alma bandında mı (~0-500 TL) yoksa yüksek düşünme
-     gerektiren pahalı bir ürün mü (pahalı ürün otomatik düşük puan almaz ama net
-     indirim ve marka güveniyle desteklenmeli)
-   - Marka tanınırlığı: bilinen/güvenilir marka güven arttırır, bilinmeyen marka düşürür
-   - Evrensellik: geniş kitleye mi hitap ediyor, yoksa çok spesifik/dar bir kesime mi
-
-2) ilgiCekicilik — kullanıcı bu kartı görünce durur, tıklar mı?
-   - İndirim yüzdesinin görsel çarpıcılığı (%50+ dikkat çeker, tek haneli % çekmez)
-   - Başlıktaki "wow" faktörü: tanınan marka adı, ilgi çekici/popüler ürün tipi
-   - Fiyat eşiği psikolojisi (yuvarlak/caydırıcı eşiklerin altında kalması artı puan)
-   - Trend/mevsimsellik: şu anki mevsim ve gündemle örtüşen ürünler artı puan
-
-Ayrıca genel filtre olarak:
-- İndirim oranı gerçekçi mi (mantıksız yüksekse şüpheli, düşürücü)
-- Ürün/başlık anlamlı mı, spam veya bozuk veri değil mi (öyleyse ikisine de 1 ver)
-
-Adaylar:
-${list}
-
-SADECE JSON array döndür, her id için sırayla:
-[{"id":"...","satisPotansiyeli":1-10,"ilgiCekicilik":1-10,"reason":"kısa neden (max 12 kelime)"}]`;
-
-    try {
-        const response = await genAI.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            config: { temperature: 0.2 },
-        });
-        await trackGeminiUsage(db, response, 'gemini-2.5-flash', source);
-        const text = response.text ||
-            (response.candidates?.[0]?.content?.parts || []).filter(p => p.text).map(p => p.text).join('');
-        const match = text.match(/\[[\s\S]*\]/);
-        if (!match) {
-            return items.map(it => ({ id: it.id, score: DEFAULT_SCORE_ON_SKIP, reason: 'AI JSON döndürmedi, varsayılan geç' }));
-        }
-        const parsed = JSON.parse(match[0]);
-        return items.map(it => {
-            const found = parsed.find(p => String(p.id) === String(it.id));
-            if (!found) return { id: it.id, score: DEFAULT_SCORE_ON_SKIP, reason: 'AI bu id için cevap vermedi, varsayılan geç' };
-            const satisPotansiyeli = Number(found.satisPotansiyeli) || DEFAULT_SCORE_ON_SKIP;
-            const ilgiCekicilik = Number(found.ilgiCekicilik) || DEFAULT_SCORE_ON_SKIP;
-            const score = Math.round((satisPotansiyeli + ilgiCekicilik) / 2);
-            return { id: it.id, score, satisPotansiyeli, ilgiCekicilik, reason: String(found.reason || '').slice(0, 100) };
-        });
-    } catch (err) {
-        console.warn(`   ⚠️ [QualityGate] AI puanlama hatası: ${err.message}`);
-        return items.map(it => ({ id: it.id, score: DEFAULT_SCORE_ON_SKIP, reason: `AI hata: ${err.message}, varsayılan geç` }));
-    }
-}
-
-/**
- * Ana orkestratör. Ucuz kontroller önce (fiyat mantığı, link biçimi, kaynaklar
- * arası mükerrer) — bunlardan geçemeyenler AI'ya hiç gitmez. Hayatta kalanlar
- * TEK istekte AI'dan puan alır.
+ * Ana orkestratör. Yalnızca temel veri bütünlüğü (fiyat/link geçerliliği) ve
+ * kaynaklar arası mükerrer kontrolü yapar — AI zevk/beğeni puanlaması
+ * kaldırıldı, bunları geçen her aday yayınlanır.
  *
  * NOT (Cimri): Cimri adayları bu aşamada henüz cimri.com linkine sahiptir
  * (gerçek mağaza linki sadece yayın anında resolveCimriStoreLink ile çözülür).
@@ -212,14 +137,19 @@ SADECE JSON array döndür, her id için sırayla:
  * ile İKİNCİ bir kontrol yapar (bkz. scrape.js).
  *
  * @param {Array<{id, title, oldPrice, newPrice, category, link}>} candidates
- * @param {{apiKey?: string, threshold?: number, db?: object}} options
- * @returns {Promise<Array<{id, publish: boolean, score?, reason, normalizedLink?: string}>>}
+ * @param {{db?: object}} options
+ * @returns {Promise<Array<{id, publish: boolean, reason, normalizedLink?: string}>>}
  */
 export async function runQualityGate(candidates, options = {}) {
-    const { apiKey, threshold = DEFAULT_THRESHOLD, db, source = 'quality-gate' } = options;
+    const { db } = options;
     const results = [];
     const survivors = [];
 
+    // NOT: AI zevk/beğeni puanlaması (satisPotansiyeli/ilgiCekicilik + eşik)
+    // kullanıcı talebiyle KALDIRILDI — "kafasına göre derecelendirip
+    // yayınlamayı engellemesin" istendi. Bundan sonra yalnızca temel veri
+    // bütünlüğü (fiyat/link geçerliliği) ve kaynaklar arası mükerrer kontrolü
+    // yapılır; bunları geçen HER aday yayınlanır.
     for (const c of candidates) {
         const priceCheck = checkPriceSanity(c.oldPrice, c.newPrice);
         if (!priceCheck.ok) {
@@ -240,29 +170,12 @@ export async function runQualityGate(candidates, options = {}) {
     if (db) {
         dupSet = await checkExistingLinks(db, survivors.map(c => c.normalizedLink));
     }
-    const afterDedup = [];
     survivors.forEach(c => {
         if (dupSet.has(c.normalizedLink)) {
             results.push({ id: c.id, publish: false, reason: 'Mükerrer: bu ürün başka bir kaynaktan zaten yayında' });
             return;
         }
-        afterDedup.push(c);
-    });
-
-    if (afterDedup.length === 0) return results;
-
-    const scores = await scoreDealsBatch(apiKey, afterDedup, db, source);
-    afterDedup.forEach(c => {
-        const s = scores.find(x => x.id === c.id) || { score: DEFAULT_SCORE_ON_SKIP, reason: 'skor bulunamadı' };
-        results.push({
-            id: c.id,
-            publish: s.score >= threshold,
-            score: s.score,
-            satisPotansiyeli: s.satisPotansiyeli,
-            ilgiCekicilik: s.ilgiCekicilik,
-            reason: s.reason,
-            normalizedLink: c.normalizedLink,
-        });
+        results.push({ id: c.id, publish: true, reason: 'Otomatik onay (kalite/beğeni filtresi kaldırıldı)', normalizedLink: c.normalizedLink });
     });
 
     return results;

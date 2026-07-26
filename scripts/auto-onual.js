@@ -711,7 +711,7 @@ async function main() {
         console.log('✅ Servisler hazır. (AI açıklama üretimi: KAPALI — keyword tabanlı kategori kullanılıyor)');
     }
     if (!qualityGateKey) {
-        console.warn('⚠️  GEMINI_API_KEY yok — kalite kapısı/bildirim/sosyal içerik puanlaması devre dışı (varsayılan 6/10 ile geçecek).');
+        console.warn('⚠️  GEMINI_API_KEY yok — bildirim/sosyal içerik puanlaması devre dışı (varsayılan 6/10 ile geçecek).');
     }
     // 1. Ürün listesini çek (onual.com/fiyat/)
     const allProducts = await fetchProductList(db);
@@ -838,7 +838,7 @@ async function main() {
         }
     }
 
-    // ── FAZ B: AI kalite kapısı — TEK istekte toplu puanlama ───────────────
+    // ── FAZ B: Temel doğrulama kapısı (fiyat/link geçerliliği + mükerrer) ──
     let rejectedCount = 0;
     if (prepared.length > 0) {
         const gateCandidates = prepared.map(p => ({
@@ -849,7 +849,7 @@ async function main() {
             category: detectCategory(p.details.title || p.product.title),
             link: p.storeLink,
         }));
-        const gateResults = await runQualityGate(gateCandidates, { apiKey: qualityGateKey, threshold: 6, db, source: 'auto-onual:quality-gate' });
+        const gateResults = await runQualityGate(gateCandidates, { db });
         const gateMap = new Map(gateResults.map(r => [r.id, r]));
 
         console.log(`\n🛡️  Kalite kapısı: ${gateResults.filter(r => r.publish).length}/${gateResults.length} onaylandı\n`);
