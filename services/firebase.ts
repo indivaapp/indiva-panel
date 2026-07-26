@@ -1148,3 +1148,25 @@ export const triggerScrape = async (site?: string): Promise<void> => {
     );
 };
 
+// Her taramadan sonra scrape.js'in yazdığı özet kayıt (bkz. recordRunHistory).
+// Koleksiyon kendi kendini temizler (24 saatten eskiler her yeni kayıtta
+// silinir) — panel sadece son 24 saati okur, ekstra filtreye gerek yok.
+export interface ScraperRunHistoryEntry {
+    id: string;
+    timestamp: Timestamp;
+    trigger: string;
+    site: string;
+    totalScraped: number;
+    alreadyPublished: number;
+    filteredOut: number;
+    newlyStaged: number;
+    qualityApproved: number;
+    qualityRejected: number;
+}
+
+export const getRunHistory = async (max: number = 50): Promise<ScraperRunHistoryEntry[]> => {
+    const q = query(collection(db, 'scraper_run_history'), orderBy('timestamp', 'desc'), limit(max));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as ScraperRunHistoryEntry));
+};
+
