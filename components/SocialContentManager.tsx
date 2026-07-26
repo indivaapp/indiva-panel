@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-    getSocialContentQueue, markSocialContentPosted, getDiscountsForPicker, addManualSocialContent,
+    getSocialContentQueue, markSocialContentPosted, getDiscountsForPicker,
     getRecentDiscountsForSocialAi, suggestSocialCandidates, generateSocialContentForProduct, addSocialContentFromAiSuggestion,
     getLatestAiSocialSuggestion, markAiSocialSuggestionOpened, generateSocialContentForMultipleProducts,
     type SocialContentCandidate,
@@ -2430,7 +2430,6 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     const [allDiscounts, setAllDiscounts] = useState<Discount[]>([]);
     const [discountsLoading, setDiscountsLoading] = useState(false);
     const [pickerQuery, setPickerQuery] = useState('');
-    const [creatingId, setCreatingId] = useState<string | null>(null);
     // Sonsuz kaydırma: liste ilk açıldığında 10 ürün gösterir, aşağı kaydırdıkça
     // 10'ar ürün daha açılır (kullanıcı geri bildirimi: ~30 ürün tek seferde
     // gösterilmesi kalabalık duruyordu). Arama yapıldığında sıfırlanır.
@@ -2682,8 +2681,14 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     // "İçerik metni üret" işaretliyken ana buton bunu çağırır. Kullanıcı geri
     // bildirimi: geliştirme sırasında her video denemesinde AI çağrısı
     // yapmak gereksiz token harcatıyordu, bu yüzden isteğe bağlı ayrı bir adım.
-    const handleGenerateMultiContentOnly = async () => {
-        const selected = aiCandidates.filter(c => multiSelectIds.has(c.candidate.productId));
+    // selectedOverride: "İstediğim Fırsatı Seçip İçerik Üret" (handleManualCreate)
+    // bu fonksiyonu, henüz state'e yazılmış (dolayısıyla bu closure'da güncel
+    // olmayan) aiCandidates/multiSelectIds state'ine güvenmeden, doğrudan tek
+    // ürünle çağırabilsin diye. Verilmezse (normal AI-öner akışı) mevcut state'ten türetilir.
+    const handleGenerateMultiContentOnly = async (
+        selectedOverride?: { candidate: SocialContentCandidate; product: AiPickProduct }[]
+    ) => {
+        const selected = selectedOverride ?? aiCandidates.filter(c => multiSelectIds.has(c.candidate.productId));
         if (selected.length !== 1 && selected.length !== 3) return;
 
         setMultiContentStageOpen(true);
@@ -2877,18 +2882,20 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         }
     };
 
-    const handleManualCreate = async (discount: Discount) => {
-        setCreatingId(discount.id);
-        try {
-            await addManualSocialContent(discount);
-            await fetchItems();
-            setPickerOpen(false);
-            setPickerQuery('');
-        } catch {
-            // hata olursa sessizce bırak — kullanıcı tekrar deneyebilir
-        } finally {
-            setCreatingId(null);
-        }
+    // Kullanıcı isteği: "İstediğim Fırsatı Seçip İçerik Üret" artık şablon bir
+    // caption ile anında kuyruğa eklemek yerine, "🤖 AI ile Öner" akışıyla
+    // BİREBİR AYNI deneyimi izliyor — önce AI ürün açıklaması + seslendirme
+    // metni üretir, sonra 1./2. ekran süresi sorulur, ardından video üretme
+    // aşamasına geçilir (bkz. handleGenerateMultiContentOnly / multiContentStageOpen).
+    const handleManualCreate = (discount: Discount) => {
+        setPickerOpen(false);
+        setPickerQuery('');
+        const item = { candidate: { productId: discount.id, score: 0, reasoning: '' }, product: discount as AiPickProduct };
+        setAiCandidates([item]);
+        setMultiSelectIds(new Set([discount.id]));
+        setMultiGenerateContentFirst(true);
+        setShowAiModal(true);
+        handleGenerateMultiContentOnly([item]);
     };
 
     return (
