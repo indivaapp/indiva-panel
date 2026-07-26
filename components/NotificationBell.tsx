@@ -152,12 +152,25 @@ const NotificationBell: React.FC = () => {
                     {expandedId === e.id && expandedSection === 'approved' && (
                       <div className="mt-2 space-y-1.5 bg-gray-900/50 rounded-lg p-2">
                         {(e.approvedItems || []).map(it => (
-                          <div key={it.id} className="text-[11px]">
-                            <p className="text-gray-200 line-clamp-1">
-                              {it.title || it.id}
-                              {typeof it.score === 'number' && <span className="text-green-400 font-semibold ml-1">⭐{it.score}/10</span>}
-                            </p>
-                            {it.reason && <p className="text-gray-500 italic line-clamp-1">"{it.reason}"</p>}
+                          <div key={it.id} className="text-[11px] flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-gray-200 line-clamp-1">
+                                {it.title || it.id}
+                                {typeof it.score === 'number' && <span className="text-green-400 font-semibold ml-1">⭐{it.score}/10</span>}
+                              </p>
+                              {it.reason && <p className="text-gray-500 italic line-clamp-1">"{it.reason}"</p>}
+                            </div>
+                            {it.link && (
+                              <a
+                                href={it.link}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={ev => ev.stopPropagation()}
+                                className="shrink-0 text-[10px] font-semibold px-2 py-1 rounded-lg bg-blue-900/40 border border-blue-700/40 text-blue-300 hover:bg-blue-900/60 whitespace-nowrap"
+                              >
+                                🔗 Ürüne Git
+                              </a>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -165,9 +178,22 @@ const NotificationBell: React.FC = () => {
                     {expandedId === e.id && expandedSection === 'rejected' && (
                       <div className="mt-2 space-y-1.5 bg-gray-900/50 rounded-lg p-2">
                         {(e.rejectedItems || []).map(it => (
-                          <div key={it.id} className="text-[11px]">
-                            <p className="text-gray-200 line-clamp-1">{it.title || it.id}</p>
-                            {it.reason && <p className="text-gray-500 italic line-clamp-1">"{it.reason}"</p>}
+                          <div key={it.id} className="text-[11px] flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-gray-200 line-clamp-1">{it.title || it.id}</p>
+                              {it.reason && <p className="text-gray-500 italic line-clamp-1">"{it.reason}"</p>}
+                            </div>
+                            {it.link && (
+                              <a
+                                href={it.link}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={ev => ev.stopPropagation()}
+                                className="shrink-0 text-[10px] font-semibold px-2 py-1 rounded-lg bg-blue-900/40 border border-blue-700/40 text-blue-300 hover:bg-blue-900/60 whitespace-nowrap"
+                              >
+                                🔗 Ürüne Git
+                              </a>
+                            )}
                           </div>
                         ))}
                       </div>
