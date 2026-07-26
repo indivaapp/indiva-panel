@@ -1159,6 +1159,7 @@ export interface ScraperQualityItem {
     newPrice: number | null;
     oldPrice: number | null;
     site: string | null;
+    link?: string | null;
     score?: number | null;
     reason: string;
 }
