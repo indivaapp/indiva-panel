@@ -49,6 +49,7 @@ const AddDiscountForm = lazy(() => import('./components/AddDiscountForm'));
 const StoryManager = lazy(() => import('./components/StoryManager'));
 const SocialContentManager = lazy(() => import('./components/SocialContentManager'));
 const AiAnalystReports = lazy(() => import('./components/AiAnalystReports'));
+const ProductFeedback = lazy(() => import('./components/ProductFeedback'));
 const ShareTarget = lazy(() => import('./components/ShareTarget'));
 const ShareUrlTarget = lazy(() => import('./components/ShareUrlTarget'));
 
@@ -429,6 +430,8 @@ const App: React.FC = () => {
                 );
             case 'socialContent':
                 return <SocialContentManager isAdmin={isAdmin} />;
+            case 'productFeedback':
+                return <ProductFeedback />;
             case 'aiAnalyst':
                 return (
                     <AiAnalystReports

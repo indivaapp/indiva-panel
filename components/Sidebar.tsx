@@ -24,6 +24,7 @@ const navItems: { id: ViewType; label: string }[] = [
     { id: 'ads',            label: 'Reklam Yönetimi' },
     { id: 'notifications',  label: 'Bildirimler' },
     { id: 'socialContent',  label: '📱 Sosyal İçerik' },
+    { id: 'productFeedback', label: '👍 Ürün Değerlendirme' },
 ];
 
 const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, pendingAffiliateCount = 0, pendingSocialContentCount = 0, systemEnabled, onToggleSystem }) => {

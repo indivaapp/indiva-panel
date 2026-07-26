@@ -22,7 +22,7 @@ import {
     QueryDocumentSnapshot,
     DocumentData
 } from 'firebase/firestore';
-import type { Discount, Brochure, Advertisement, PendingDiscount, AdRequest, ScheduledNotification, StagingProduct, SocialContentItem } from '../types';
+import type { Discount, Brochure, Advertisement, PendingDiscount, AdRequest, ScheduledNotification, StagingProduct, SocialContentItem, ProductFeedback } from '../types';
 import { deleteFromImgbb } from './imgbb';
 
 // Gerçek affiliate link üretimi şu an sadece Trendyol/Hepsiburada için
@@ -1178,5 +1178,59 @@ export const getNotificationsLastSeen = async (): Promise<number> => {
 
 export const markNotificationsSeen = async (): Promise<void> => {
     await setDoc(doc(db, 'scraper_control', 'notifications_state'), { lastSeenAt: serverTimestamp() }, { merge: true });
+};
+
+// --- Ürün Değerlendirme (AI eğitim verisi) ---
+// Bir ürüne bir değerlendirme olsun diye doküman ID'si = discountId.
+// discount dokümanı 24 saat sonra silinse bile bu kayıt kalıcı kalır —
+// ileride AI'nın benzer ürünleri değerlendirirken bakabileceği geçmiş.
+
+export const saveProductFeedback = async (
+    discount: Pick<Discount, 'id' | 'title' | 'brand' | 'category' | 'storeName' | 'oldPrice' | 'newPrice' | 'imageUrl' | 'link'>,
+    rating: 'positive' | 'negative',
+    reason?: string,
+): Promise<void> => {
+    const ref = doc(db, 'product_feedback', discount.id);
+    const existing = await getDoc(ref);
+    await setDoc(ref, {
+        discountId: discount.id,
+        rating,
+        reason: reason?.trim() || '',
+        title: discount.title,
+        brand: discount.brand,
+        category: discount.category,
+        storeName: discount.storeName || '',
+        oldPrice: discount.oldPrice,
+        newPrice: discount.newPrice,
+        imageUrl: discount.imageUrl,
+        link: discount.link,
+        ratedAt: existing.exists() ? existing.data()?.ratedAt || serverTimestamp() : serverTimestamp(),
+        updatedAt: serverTimestamp(),
+    }, { merge: true });
+};
+
+export const deleteProductFeedback = async (discountId: string): Promise<void> => {
+    await deleteDoc(doc(db, 'product_feedback', discountId));
+};
+
+/** Verilen discount ID'leri için mevcut değerlendirmeleri toplu okur (30'luk gruplar halinde). */
+export const getProductFeedbackMap = async (discountIds: string[]): Promise<Map<string, ProductFeedback>> => {
+    const result = new Map<string, ProductFeedback>();
+    const unique = [...new Set(discountIds.filter(Boolean))];
+    for (let i = 0; i < unique.length; i += 30) {
+        const chunk = unique.slice(i, i + 30);
+        if (chunk.length === 0) continue;
+        const q = query(collection(db, 'product_feedback'), where(documentId(), 'in', chunk));
+        const snap = await getDocs(q);
+        snap.docs.forEach(d => result.set(d.id, { id: d.id, ...d.data() } as ProductFeedback));
+    }
+    return result;
+};
+
+/** Değerlendirme sayfası (geçmişe bakış) için — en son yapılan değerlendirmeler. */
+export const getRecentProductFeedback = async (max: number = 200): Promise<ProductFeedback[]> => {
+    const q = query(collection(db, 'product_feedback'), orderBy('ratedAt', 'desc'), limit(max));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as ProductFeedback));
 };
 

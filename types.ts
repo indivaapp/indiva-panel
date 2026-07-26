@@ -21,7 +21,8 @@ export type ViewType =
     | 'addDiscount'       // Yeni indirim ekleme formu
     | 'stories'           // Story yönetimi
     | 'socialContent'     // Otomatik sosyal medya içeriği kuyruğu
-    | 'aiAnalyst';        // AI Analist raporları (günlük/haftalık)
+    | 'aiAnalyst'         // AI Analist raporları (günlük/haftalık)
+    | 'productFeedback';  // Yayınlanan ürünleri değerlendirme (AI eğitim verisi)
 
 // Using the actual Firestore Timestamp type for better integration
 export type FirestoreTimestamp = Timestamp;
@@ -62,6 +63,27 @@ export interface Discount {
     telegramMessageId?: string;           // Kaynak Telegram mesaj ID'si
     storeName?: string;                   // Mağaza adı (Hepsiburada, Trendyol vb.)
     reviewCount?: string;                 // Yorum sayısı (400+ gibi)
+}
+
+// Yöneticinin yayınlanan bir ürüne verdiği 👍/👎 değerlendirme — ileride AI'nın
+// "bu ürünü/benzerlerini yayınlamalı mıyım?" kararında referans alması için.
+export interface ProductFeedback {
+    id: string;              // = discountId (bir ürüne bir değerlendirme)
+    discountId: string;
+    rating: 'positive' | 'negative';
+    reason?: string;         // Opsiyonel: neden beğendi/beğenmedi
+    // Değerlendirme anındaki ürün bilgisinin anlık görüntüsü — discount
+    // dokümanı 24 saat sonra silinse bile eğitim verisi kalıcı kalır.
+    title: string;
+    brand: string;
+    category: string;
+    storeName?: string;
+    oldPrice: number;
+    newPrice: number;
+    imageUrl: string;
+    link: string;
+    ratedAt: FirestoreTimestamp;
+    updatedAt?: FirestoreTimestamp;
 }
 
 export interface Brochure {
