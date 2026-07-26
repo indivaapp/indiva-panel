@@ -32,6 +32,7 @@ import Dashboard from './components/Dashboard';
 import Login from './components/Login';
 import QuickShareOverlay from './components/QuickShareOverlay';
 import QuickProductShareOverlay from './components/QuickProductShareOverlay';
+import NotificationBell from './components/NotificationBell';
 
 const DiscountManager = lazy(() => import('./components/DiscountManager'));
 const BrochureManager = lazy(() => import('./components/BrochureManager'));
@@ -471,6 +472,11 @@ const App: React.FC = () => {
                 />
 
                 <div className="flex-1 flex flex-col overflow-hidden">
+                    {/* Üst bar: sağ üstte bildirim zili (scraper sonuçları) */}
+                    <div className="flex justify-end items-center px-4 pt-3 md:px-8 md:pt-4 shrink-0">
+                        <NotificationBell />
+                    </div>
+
                     {/* Sistem Kapalı Uyarısı */}
                     {!systemEnabled && (
                         <div className="mx-4 mt-3 flex items-center justify-between gap-2 rounded-md bg-red-950 border border-red-800 px-3 py-2 text-sm text-red-300 shrink-0">

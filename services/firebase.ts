@@ -1151,6 +1151,18 @@ export const triggerScrape = async (site?: string): Promise<void> => {
 // Her taramadan sonra scrape.js'in yazdığı özet kayıt (bkz. recordRunHistory).
 // Koleksiyon kendi kendini temizler (24 saatten eskiler her yeni kayıtta
 // silinir) — panel sadece son 24 saati okur, ekstra filtreye gerek yok.
+// approvedItems/rejectedItems: AI kalite kapısının ürün bazlı kararı —
+// bildirim zilinde "hangi ürünü seçti/eledi, neden" göstermek için.
+export interface ScraperQualityItem {
+    id: string;
+    title: string;
+    newPrice: number | null;
+    oldPrice: number | null;
+    site: string | null;
+    score?: number | null;
+    reason: string;
+}
+
 export interface ScraperRunHistoryEntry {
     id: string;
     timestamp: Timestamp;
@@ -1162,11 +1174,27 @@ export interface ScraperRunHistoryEntry {
     newlyStaged: number;
     qualityApproved: number;
     qualityRejected: number;
+    approvedItems?: ScraperQualityItem[];
+    rejectedItems?: ScraperQualityItem[];
 }
 
 export const getRunHistory = async (max: number = 50): Promise<ScraperRunHistoryEntry[]> => {
     const q = query(collection(db, 'scraper_run_history'), orderBy('timestamp', 'desc'), limit(max));
     const snap = await getDocs(q);
     return snap.docs.map(d => ({ id: d.id, ...d.data() } as ScraperRunHistoryEntry));
+};
+
+// Bildirim zili için "en son ne zaman baktı" — çoklu cihaz/tarayıcıda
+// tutarlı olsun diye Firestore'da (localStorage yerine). scraper_control
+// zaten admin-only olduğu için ayrı bir rules girişi gerekmiyor.
+export const getNotificationsLastSeen = async (): Promise<number> => {
+    const snap = await getDoc(doc(db, 'scraper_control', 'notifications_state'));
+    if (!snap.exists()) return 0;
+    const d = snap.data() as any;
+    return typeof d.lastSeenAt?.toMillis === 'function' ? d.lastSeenAt.toMillis() : 0;
+};
+
+export const markNotificationsSeen = async (): Promise<void> => {
+    await setDoc(doc(db, 'scraper_control', 'notifications_state'), { lastSeenAt: serverTimestamp() }, { merge: true });
 };
 
