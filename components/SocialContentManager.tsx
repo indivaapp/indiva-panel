@@ -2691,9 +2691,14 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         setMultiContentError(null);
         setMultiContentLoading(true);
         try {
+            // Seslendirme metninin uzunluğu videonun GERÇEK süresine göre
+            // hesaplansın diye (bkz. vercel-proxy/api/social-content.ts) toplam
+            // ekran süresini de gönderiyoruz — kullanıcı isteği: "video içeriği
+            // kısa ama seslendirme uzun" sorunu.
+            const totalDurationSec = multiSceneSec + multiPromoSec;
             const content = selected.length === 1
-                ? await generateSocialContentForProduct(selected[0].product)
-                : await generateSocialContentForMultipleProducts(selected.map(c => c.product));
+                ? await generateSocialContentForProduct(selected[0].product, totalDurationSec)
+                : await generateSocialContentForMultipleProducts(selected.map(c => c.product), totalDurationSec);
             setMultiGeneratedContent({ caption: content.caption, voiceover: content.voiceover });
         } catch (e: any) {
             setMultiContentError(e?.message || 'İçerik üretilemedi.');
@@ -3159,6 +3164,34 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                             />
                                         </label>
 
+                                        {/* bkz. yukarıdaki liste sayfasındaki aynı ayarın yorumu — "İçerik
+                                            metni üret" işaretliyken ekran süreleri buraya, videonun asıl
+                                            oluşturulacağı adıma taşındı. */}
+                                        <div className="w-full flex items-center gap-3 bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2">
+                                            <label className="flex items-center gap-1.5 text-[11px] text-gray-400 flex-1">
+                                                1. Ekran (sn)
+                                                <input
+                                                    type="number"
+                                                    min={3}
+                                                    max={60}
+                                                    value={multiSceneSec}
+                                                    onChange={e => setMultiSceneSec(Number(e.target.value) || 0)}
+                                                    className="w-14 bg-gray-800 border border-gray-600 rounded-lg px-1.5 py-1 text-white text-xs text-center"
+                                                />
+                                            </label>
+                                            <label className="flex items-center gap-1.5 text-[11px] text-gray-400 flex-1">
+                                                2. Ekran (sn)
+                                                <input
+                                                    type="number"
+                                                    min={3}
+                                                    max={60}
+                                                    value={multiPromoSec}
+                                                    onChange={e => setMultiPromoSec(Number(e.target.value) || 0)}
+                                                    className="w-14 bg-gray-800 border border-gray-600 rounded-lg px-1.5 py-1 text-white text-xs text-center"
+                                                />
+                                            </label>
+                                        </div>
+
                                         <button
                                             onClick={handleCreateMultiVideo}
                                             className="w-full py-2.5 text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors"
@@ -3239,7 +3272,13 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
 
                                 {multiSelectIds.size > 0 && (
                                     <div className="sticky bottom-0 -mx-5 -mb-5 mt-3 px-5 py-3 bg-gray-800/95 border-t border-purple-600/30 space-y-2.5">
-                                        {(multiSelectIds.size === 1 || multiSelectIds.size === 3) && (
+                                        {/* Ekran süreleri SADECE "İçerik metni üret" işaretli DEĞİLKEN burada
+                                            sorulur — işaretliyse aynı ayar, metin üretildikten sonraki
+                                            "İçerik Metni" sayfasında (multiContentStageOpen), Video Oluştur
+                                            butonunun hemen üstünde sorulacak (bkz. aşağıdaki ilgili blok).
+                                            Kullanıcı isteği: süre ayarı, videonun asıl oluşturulacağı adıma
+                                            en yakın yerde olsun. */}
+                                        {!multiGenerateContentFirst && (multiSelectIds.size === 1 || multiSelectIds.size === 3) && (
                                             <div className="w-full flex items-center gap-3 bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2">
                                                 <label className="flex items-center gap-1.5 text-[11px] text-gray-400 flex-1">
                                                     1. Ekran (sn)

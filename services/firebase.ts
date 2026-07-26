@@ -747,48 +747,74 @@ export const suggestSocialCandidates = async (discounts: Discount[]): Promise<So
  *  "voiceover": ElevenLabs gibi bir metinden-sese aracına doğrudan yapıştırılacak,
  *  ürünü/fiyatı/indirimi anlatıp İNDİVA'yı indirmeye teşvik eden konuşma script'i. */
 export const generateSocialContentForProduct = async (
-    discount: Pick<Discount, 'id' | 'title' | 'brand' | 'category' | 'oldPrice' | 'newPrice' | 'reviewCount'>
+    discount: Pick<Discount, 'id' | 'title' | 'brand' | 'category' | 'oldPrice' | 'newPrice' | 'reviewCount'>,
+    durationSec?: number
 ): Promise<{ title: string; caption: string; voiceover: string }> => {
-    const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            discount: {
-                id: discount.id,
-                title: discount.title,
-                brand: discount.brand,
-                category: discount.category,
-                oldPrice: discount.oldPrice,
-                newPrice: discount.newPrice,
-                reviewCount: discount.reviewCount,
-            },
-        }),
-        signal: AbortSignal.timeout(35000),
-    });
+    const attempt = async (): Promise<{ title: string; caption: string; voiceover: string }> => {
+        const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                discount: {
+                    id: discount.id,
+                    title: discount.title,
+                    brand: discount.brand,
+                    category: discount.category,
+                    oldPrice: discount.oldPrice,
+                    newPrice: discount.newPrice,
+                    reviewCount: discount.reviewCount,
+                },
+                // Videonun GERÇEK süresi (ekran süreleri toplamı) — sunucu bu
+                // sayıyı seslendirme metninin kelime bütçesini hesaplamak için
+                // kullanıyor, verilmezse eski sabit varsayılana düşer (bkz.
+                // vercel-proxy/api/social-content.ts: computeVoiceoverWordBudget).
+                ...(durationSec ? { durationSec } : {}),
+            }),
+            // bkz. generateSocialContentForMultipleProducts'taki aynı düzeltme —
+            // eskiden 35sn'de otomatik tekrar denemesi olmadan hata veriyordu,
+            // kullanıcı geri bildirimi: tekli üründe de "bazen zaman aşımı" oluyordu.
+            signal: AbortSignal.timeout(60000),
+        });
 
-    // Fonksiyon zaman aşımına uğrarsa Vercel JSON olmayan bir hata sayfası
-    // döndürebilir — res.json() burada anlaşılmaz bir "Unexpected token" hatası
-    // fırlatmasın diye önce metin olarak okuyup kendimiz parse ediyoruz.
-    const raw = await res.text();
-    let data: any;
-    try {
-        data = JSON.parse(raw);
-    } catch {
-        throw new Error(res.ok ? 'AI sunucudan geçersiz yanıt geldi' : `Sunucu hatası (${res.status}) — tekrar deneyin`);
+        // Fonksiyon zaman aşımına uğrarsa Vercel JSON olmayan bir hata sayfası
+        // döndürebilir — res.json() burada anlaşılmaz bir "Unexpected token" hatası
+        // fırlatmasın diye önce metin olarak okuyup kendimiz parse ediyoruz.
+        const raw = await res.text();
+        let data: any;
+        try {
+            data = JSON.parse(raw);
+        } catch {
+            throw new Error(res.ok ? 'AI sunucudan geçersiz yanıt geldi' : `Sunucu hatası (${res.status}) — tekrar deneyin`);
+        }
+        if (!data.success) throw new Error(data.error || 'İçerik üretilemedi');
+        // Şeffaflık/uyum için: henüz bir marka ile ücretli reklam anlaşmamız yok, ama
+        // affiliate linkler zaten kullanılıyor — ticari ilişkiyi belirtmek için her
+        // paylaşıma sabit bir #işbirliği etiketi ekleniyor (AI'nın ürettiği metne
+        // dokunmadan, sona eklenir). Önizlemede de aynı hâliyle görünsün diye burada.
+        return { title: data.title, caption: `${data.caption}\n\n#işbirliği`, voiceover: data.voiceover || '' };
+    };
+
+    // generateSocialContentForMultipleProducts'taki gibi geçici zaman aşımı/
+    // sağlayıcı hatalarında admin'in elle tekrar tıklamasına gerek kalmasın
+    // diye otomatik olarak 3 kez deneniyor.
+    let lastErr: unknown;
+    for (let i = 0; i < 3; i++) {
+        try {
+            return await attempt();
+        } catch (e) {
+            lastErr = e;
+            if (i < 2) await new Promise(r => setTimeout(r, 1200));
+        }
     }
-    if (!data.success) throw new Error(data.error || 'İçerik üretilemedi');
-    // Şeffaflık/uyum için: henüz bir marka ile ücretli reklam anlaşmamız yok, ama
-    // affiliate linkler zaten kullanılıyor — ticari ilişkiyi belirtmek için her
-    // paylaşıma sabit bir #işbirliği etiketi ekleniyor (AI'nın ürettiği metne
-    // dokunmadan, sona eklenir). Önizlemede de aynı hâliyle görünsün diye burada.
-    return { title: data.title, caption: `${data.caption}\n\n#işbirliği`, voiceover: data.voiceover || '' };
+    throw lastErr;
 };
 
 /** 3'lü vitrin videosu için — AYNI VİDEODA gösterilecek 2-3 ürünün TAMAMINI
  *  tanıtan TEK bir ortak caption + seslendirme metni üretir (ürün başına ayrı
  *  değil — video zaten üçünü birlikte gösteriyor). */
 export const generateSocialContentForMultipleProducts = async (
-    products: Array<Pick<Discount, 'title' | 'brand' | 'category' | 'oldPrice' | 'newPrice'>>
+    products: Array<Pick<Discount, 'title' | 'brand' | 'category' | 'oldPrice' | 'newPrice'>>,
+    durationSec?: number
 ): Promise<{ caption: string; voiceover: string }> => {
     const attempt = async (): Promise<{ caption: string; voiceover: string }> => {
         const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
@@ -802,6 +828,8 @@ export const generateSocialContentForMultipleProducts = async (
                     oldPrice: p.oldPrice,
                     newPrice: p.newPrice,
                 })),
+                // bkz. generateSocialContentForProduct'taki aynı düzeltme.
+                ...(durationSec ? { durationSec } : {}),
             }),
             // 3 ürünü tek metinde birleştirmek modele daha uzun sürüyor —
             // önceki 35sn sık sık zaman aşımına yol açıyordu (kullanıcı geri
