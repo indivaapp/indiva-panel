@@ -474,6 +474,19 @@ async function checkPrices() {
                     // mevcut alanlara dokunmaz).
                     if (verdict.currentPrice > 0) {
                         updates.priceHistory = FieldValue.arrayUnion({ price: verdict.currentPrice, at: Timestamp.now() });
+
+                        // ÖNEMLİ: Buraya kadar sadece lastCheckedPrice/priceHistory
+                        // güncelleniyordu — panel/uygulama ise HER ZAMAN newPrice'ı
+                        // gösteriyor (discount% de client tarafında oldPrice/newPrice'tan
+                        // hesaplanıyor). Sonuç: gerçek fiyat doğrulanıp doğru tespit
+                        // edilse bile kullanıcıya gösterilen fiyat oluşturulduğu andaki
+                        // (artık bayat) değerde donuk kalıyordu — canlı şikayette
+                        // "uygulamada 2789 TL yazıyor ama linke tıklayınca 2778 TL
+                        // çıkıyor" olarak bildirildi. Artık doğrulanan gerçek fiyat
+                        // newPrice'a da yazılıyor, gösterilen fiyat sapmasın diye.
+                        if (Math.round(verdict.currentPrice) !== Math.round(deal.newPrice || 0)) {
+                            updates.newPrice = verdict.currentPrice;
+                        }
                     }
                     await doc.ref.update(updates);
                 }
@@ -519,7 +532,7 @@ async function checkPrices() {
                     if (!html) return;
                     const verdict = hasKey ? await verifyWithAI(deal, html, db) : verifyWithHTML(deal, html);
                     if (verdict.decision === 'active') {
-                        await doc.ref.update({
+                        const updates = {
                             status: 'aktif',
                             expireStrike: 0,
                             deleteAt: FieldValue.delete(),
@@ -527,7 +540,13 @@ async function checkPrices() {
                             errorReason: FieldValue.delete(),
                             lastPriceCheck: FieldValue.serverTimestamp(),
                             lastCheckedPrice: verdict.currentPrice || deal.newPrice || 0,
-                        });
+                        };
+                        // bkz. yukarıdaki processDeal'daki aynı düzeltme — gösterilen
+                        // fiyat (newPrice) gerçek doğrulanmış fiyatla senkron kalsın.
+                        if (verdict.currentPrice > 0 && Math.round(verdict.currentPrice) !== Math.round(deal.newPrice || 0)) {
+                            updates.newPrice = verdict.currentPrice;
+                        }
+                        await doc.ref.update(updates);
                         console.log(`   💚 GERİ CANLANDIRILDI (yanlış-pozitif): ${(deal.title || '').substring(0, 30)}...`);
                     }
                 } catch { /* sessiz */ }
