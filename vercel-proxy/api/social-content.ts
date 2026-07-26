@@ -54,6 +54,26 @@ function dedupeByTitle(discounts: any[]): any[] {
     return Array.from(bestByTitle.values()).map(v => v.discount);
 }
 
+// Seslendirme metninin süresi VİDEONUN gerçek süresine göre değil, sabit bir
+// kelime aralığına göre üretiliyordu (35-50 / 50-80 kelime) — bu, admin'in
+// panelde seçtiği ekran süresinden (varsayılan ~11sn) bağımsız, genelde ondan
+// çok daha uzun bir metin (~15-25sn konuşma) çıkmasına yol açıyordu (kullanıcı
+// geri bildirimi: "video içeriği kısa ama seslendirme uzun"). Artık client
+// videonun toplam süresini (durationSec) gönderiyor, buradan bir kelime
+// bütçesi hesaplanıp prompt'a gömülüyor. 2.3 kelime/sn, ElevenLabs'in tipik
+// doğal okuma temposuna yakın bir tahmin — durationSec gelmezse (ör. eski
+// istemci sürümü) önceki sabit değerlere düşülür.
+const WORDS_PER_SECOND = 2.3;
+function computeVoiceoverWordBudget(durationSec: number | undefined, fallbackTarget: number) {
+    const target = durationSec && durationSec > 0
+        ? Math.max(12, Math.round(durationSec * WORDS_PER_SECOND))
+        : fallbackTarget;
+    const low = Math.max(10, target - 8);
+    const high = Math.max(low + 5, target);
+    const hardCap = high + 8;
+    return { low, high, hardCap };
+}
+
 async function handleCandidates(req: VercelRequest, res: VercelResponse) {
     const { discounts } = req.body || {};
     if (!Array.isArray(discounts) || discounts.length === 0) {
@@ -180,10 +200,11 @@ en fazla 20 eleman içermeli, tüm index'ler birbirinden FARKLI olmalı. "reason
 }
 
 async function handleMultiContent(req: VercelRequest, res: VercelResponse) {
-    const { products } = req.body || {};
+    const { products, durationSec } = req.body || {};
     if (!Array.isArray(products) || products.length < 2 || products.length > 3) {
         return res.status(400).json({ success: false, error: 'products dizisi 2 veya 3 ürün içermeli' });
     }
+    const { low: voLow, high: voHigh, hardCap: voHardCap } = computeVoiceoverWordBudget(durationSec, 65);
 
     const compact = products.map((p: any) => ({
         title: p.title,
@@ -208,7 +229,8 @@ ${JSON.stringify(compact)}
   Bu metin doğrudan bir metinden-sese (ElevenLabs) aracına yapıştırılıp seslendirilecek — SADECE
   konuşulacak metni yaz, sahne yönergesi/parantez/emoji/hashtag YAZMA, doğal konuşma diliyle Türkçe yaz.
 
-  UZUNLUK — SIKI KURAL: TOPLAM 50-80 KELİME (kesinlikle 90 kelimeyi geçme). ${compact.length} ürünü
+  UZUNLUK — SIKI KURAL: TOPLAM ${voLow}-${voHigh} KELİME (kesinlikle ${voHardCap} kelimeyi geçme) —
+  bu metin videonun GERÇEK süresine göre hesaplandı, fazlası videodan taşar. ${compact.length} ürünü
   sırayla, HER BİRİ İÇİN TEK KISA CÜMLE ile tanıt — uzun açıklamalara girme.
 
   TON — profesyonel bir reklam seslendirme sanatçısı gibi yaz: sıcak, kendinden emin, doğrudan,
@@ -280,7 +302,7 @@ SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma:
 }
 
 async function handleSingleContent(req: VercelRequest, res: VercelResponse) {
-    const { discount } = req.body || {};
+    const { discount, durationSec } = req.body || {};
     if (!discount || !discount.title) {
         return res.status(400).json({ success: false, error: 'discount alanı (title dahil) zorunlu' });
     }
@@ -288,6 +310,7 @@ async function handleSingleContent(req: VercelRequest, res: VercelResponse) {
     const discountPercent = discount.oldPrice > discount.newPrice && discount.oldPrice > 0
         ? Math.round(((discount.oldPrice - discount.newPrice) / discount.oldPrice) * 100)
         : 0;
+    const { low: voLow, high: voHigh, hardCap: voHardCap } = computeVoiceoverWordBudget(durationSec, 42);
 
     const prompt = `Sen İNDİVA uygulamasının sosyal medya içerik editörüsün. Aşağıdaki TEK ürün için
 Instagram story/post içeriği yaz.
@@ -314,7 +337,8 @@ ${JSON.stringify({
   metinden-sese (ElevenLabs) aracına yapıştırılıp seslendirilecek — SADECE konuşulacak metni
   yaz, sahne yönergesi/parantez/emoji/hashtag YAZMA, doğal konuşma diliyle Türkçe yaz.
 
-  UZUNLUK — SIKI KURAL: TOPLAM 35-50 KELİME (kesinlikle 55 kelimeyi geçme). Bu bir video altyazı
+  UZUNLUK — SIKI KURAL: TOPLAM ${voLow}-${voHigh} KELİME (kesinlikle ${voHardCap} kelimeyi geçme) —
+  bu metin videonun GERÇEK süresine göre hesaplandı, fazlası videodan taşar. Bu bir video altyazı
   metni değil, kısa ve vurucu bir reklam spotu — gereksiz cümle EKLEME, her kelimeyi say.
 
   TON — profesyonel bir reklam seslendirme sanatçısı gibi yaz, ama AMATÖR/YAVAN değil: sıcak,

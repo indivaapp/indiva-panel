@@ -747,7 +747,8 @@ export const suggestSocialCandidates = async (discounts: Discount[]): Promise<So
  *  "voiceover": ElevenLabs gibi bir metinden-sese aracına doğrudan yapıştırılacak,
  *  ürünü/fiyatı/indirimi anlatıp İNDİVA'yı indirmeye teşvik eden konuşma script'i. */
 export const generateSocialContentForProduct = async (
-    discount: Pick<Discount, 'id' | 'title' | 'brand' | 'category' | 'oldPrice' | 'newPrice' | 'reviewCount'>
+    discount: Pick<Discount, 'id' | 'title' | 'brand' | 'category' | 'oldPrice' | 'newPrice' | 'reviewCount'>,
+    durationSec?: number
 ): Promise<{ title: string; caption: string; voiceover: string }> => {
     const attempt = async (): Promise<{ title: string; caption: string; voiceover: string }> => {
         const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
@@ -763,6 +764,11 @@ export const generateSocialContentForProduct = async (
                     newPrice: discount.newPrice,
                     reviewCount: discount.reviewCount,
                 },
+                // Videonun GERÇEK süresi (ekran süreleri toplamı) — sunucu bu
+                // sayıyı seslendirme metninin kelime bütçesini hesaplamak için
+                // kullanıyor, verilmezse eski sabit varsayılana düşer (bkz.
+                // vercel-proxy/api/social-content.ts: computeVoiceoverWordBudget).
+                ...(durationSec ? { durationSec } : {}),
             }),
             // bkz. generateSocialContentForMultipleProducts'taki aynı düzeltme —
             // eskiden 35sn'de otomatik tekrar denemesi olmadan hata veriyordu,
@@ -807,7 +813,8 @@ export const generateSocialContentForProduct = async (
  *  tanıtan TEK bir ortak caption + seslendirme metni üretir (ürün başına ayrı
  *  değil — video zaten üçünü birlikte gösteriyor). */
 export const generateSocialContentForMultipleProducts = async (
-    products: Array<Pick<Discount, 'title' | 'brand' | 'category' | 'oldPrice' | 'newPrice'>>
+    products: Array<Pick<Discount, 'title' | 'brand' | 'category' | 'oldPrice' | 'newPrice'>>,
+    durationSec?: number
 ): Promise<{ caption: string; voiceover: string }> => {
     const attempt = async (): Promise<{ caption: string; voiceover: string }> => {
         const res = await fetch('https://indiva-proxy.vercel.app/api/social-content', {
@@ -821,6 +828,8 @@ export const generateSocialContentForMultipleProducts = async (
                     oldPrice: p.oldPrice,
                     newPrice: p.newPrice,
                 })),
+                // bkz. generateSocialContentForProduct'taki aynı düzeltme.
+                ...(durationSec ? { durationSec } : {}),
             }),
             // 3 ürünü tek metinde birleştirmek modele daha uzun sürüyor —
             // önceki 35sn sık sık zaman aşımına yol açıyordu (kullanıcı geri

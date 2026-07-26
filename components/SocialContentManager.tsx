@@ -2691,9 +2691,14 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         setMultiContentError(null);
         setMultiContentLoading(true);
         try {
+            // Seslendirme metninin uzunluğu videonun GERÇEK süresine göre
+            // hesaplansın diye (bkz. vercel-proxy/api/social-content.ts) toplam
+            // ekran süresini de gönderiyoruz — kullanıcı isteği: "video içeriği
+            // kısa ama seslendirme uzun" sorunu.
+            const totalDurationSec = multiSceneSec + multiPromoSec;
             const content = selected.length === 1
-                ? await generateSocialContentForProduct(selected[0].product)
-                : await generateSocialContentForMultipleProducts(selected.map(c => c.product));
+                ? await generateSocialContentForProduct(selected[0].product, totalDurationSec)
+                : await generateSocialContentForMultipleProducts(selected.map(c => c.product), totalDurationSec);
             setMultiGeneratedContent({ caption: content.caption, voiceover: content.voiceover });
         } catch (e: any) {
             setMultiContentError(e?.message || 'İçerik üretilemedi.');
