@@ -128,6 +128,12 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ discount, feedback, onAdvance }) 
                         {[discount.category, discount.brand, discount.storeName].filter(Boolean).join(' · ')}
                     </p>
                 )}
+                {discount.aiSimilarityJudgment && discount.aiSimilarityJudgment.decision !== 'unknown' && discount.aiSimilarityJudgment.matchCount > 0 && (
+                    <p className="text-[11px] text-gray-500">
+                        🤖 AI önerisi: {discount.aiSimilarityJudgment.decision === 'positive' ? '👍 benzerdi beğenmiştin' : '👎 benzerini beğenmemiştin'}
+                        {' '}({discount.aiSimilarityJudgment.matchCount} benzer üründen — sadece öneri, kararı sen veriyorsun)
+                    </p>
+                )}
                 <p className="text-base font-semibold text-white leading-snug">{discount.title}</p>
                 <div className="flex items-center gap-2 mt-1">
                     {discount.oldPrice > 0 && <span className="text-sm text-gray-500 line-through">{formatPrice(discount.oldPrice)}₺</span>}
