@@ -1,8 +1,11 @@
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { getRecentDiscounts, getProductFeedbackMap, saveProductFeedback, deleteProductFeedback } from '../services/firebase';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { getDiscountsPage, getProductFeedbackMap, saveProductFeedback, deleteProductFeedback } from '../services/firebase';
 import type { Discount, ProductFeedback as ProductFeedbackType } from '../types';
 import { useToast } from './ToastProvider';
+import type { QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
+
+const PAGE_SIZE = 6;
 
 type RatingFilter = 'all' | 'rated' | 'unrated' | 'positive' | 'negative';
 
@@ -188,24 +191,60 @@ const ProductFeedback: React.FC = () => {
     const [discounts, setDiscounts] = useState<Discount[]>([]);
     const [feedbackMap, setFeedbackMap] = useState<Map<string, ProductFeedbackType>>(new Map());
     const [isLoading, setIsLoading] = useState(true);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [hasMore, setHasMore] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [ratingFilter, setRatingFilter] = useState<RatingFilter>('all');
+    const cursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
+
+    // Reklamlar (isAd) yayın sırasına serpiştirilmiş olabilir — bir sayfada
+    // hepsi reklamsa görünürde 0 kart kalmasın diye, boş çıkan sayfayı otomatik
+    // olarak bir sonrakiyle tamamlıyoruz (en fazla 5 tur, sonsuz döngü olmasın).
+    const fetchPage = useCallback(async (): Promise<void> => {
+        let addedAny = false;
+        for (let attempt = 0; attempt < 5 && !addedAny; attempt++) {
+            const { discounts: items, lastDoc, hasMore: more } = await getDiscountsPage(PAGE_SIZE, cursorRef.current);
+            cursorRef.current = lastDoc;
+            setHasMore(more);
+            const nonAd = items.filter(d => !d.isAd);
+            if (nonAd.length > 0) {
+                addedAny = true;
+                setDiscounts(prev => [...prev, ...nonAd]);
+                const map = await getProductFeedbackMap(nonAd.map(d => d.id));
+                setFeedbackMap(prev => new Map([...prev, ...map]));
+            }
+            if (!more) break;
+        }
+    }, []);
 
     const load = useCallback(async () => {
         setIsLoading(true);
         setError(null);
+        setDiscounts([]);
+        setFeedbackMap(new Map());
+        cursorRef.current = null;
+        setHasMore(true);
         try {
-            const list = (await getRecentDiscounts(3)).filter(d => !d.isAd);
-            setDiscounts(list);
-            const map = await getProductFeedbackMap(list.map(d => d.id));
-            setFeedbackMap(map);
+            await fetchPage();
         } catch {
             setError('Ürünler yüklenemedi.');
         } finally {
             setIsLoading(false);
         }
-    }, []);
+    }, [fetchPage]);
+
+    const handleLoadMore = useCallback(async () => {
+        if (isLoadingMore || !hasMore) return;
+        setIsLoadingMore(true);
+        try {
+            await fetchPage();
+        } catch {
+            /* sessizce yut — "Daha Fazla Yükle" butonu tekrar denenebilir */
+        } finally {
+            setIsLoadingMore(false);
+        }
+    }, [fetchPage, isLoadingMore, hasMore]);
 
     useEffect(() => { load(); }, [load]);
 
@@ -257,6 +296,9 @@ const ProductFeedback: React.FC = () => {
                     Yayınlanan ürünleri beğen/beğenme — bu değerlendirmeler, gelecekte AI'nın benzer ürünleri
                     değerlendirmesi için eğitim verisi olarak kullanılacak.
                 </p>
+                <p className="text-xs text-gray-500 mt-1">
+                    En yeniden eskiye, {PAGE_SIZE}'lı gruplar halinde yükleniyor. Filtreler/sayaçlar sadece o ana kadar yüklenmiş ürünleri kapsar.
+                </p>
             </div>
 
             <div className="flex flex-wrap gap-2 mb-4">
@@ -290,11 +332,26 @@ const ProductFeedback: React.FC = () => {
             ) : filtered.length === 0 ? (
                 <p className="text-gray-500 text-center py-12">Bu filtreye uyan ürün yok.</p>
             ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-                    {filtered.map(d => (
-                        <FeedbackCard key={d.id} discount={d} feedback={feedbackMap.get(d.id)} onSaved={handleSaved} />
-                    ))}
-                </div>
+                <>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                        {filtered.map(d => (
+                            <FeedbackCard key={d.id} discount={d} feedback={feedbackMap.get(d.id)} onSaved={handleSaved} />
+                        ))}
+                    </div>
+
+                    {hasMore && (
+                        <div className="flex justify-center mt-6">
+                            <button
+                                type="button"
+                                onClick={handleLoadMore}
+                                disabled={isLoadingMore}
+                                className="px-5 py-2.5 rounded-lg text-sm font-bold bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-50 transition-colors"
+                            >
+                                {isLoadingMore ? 'Yükleniyor…' : `Daha Fazla Yükle (${PAGE_SIZE})`}
+                            </button>
+                        </div>
+                    )}
+                </>
             )}
         </div>
     );
