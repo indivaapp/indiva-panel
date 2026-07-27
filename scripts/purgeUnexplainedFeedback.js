@@ -46,14 +46,17 @@ async function main() {
         return;
     }
 
+    // NOT: db.batch() (tek transaction içinde toplu silme) "Transaction too
+    // big" hatası veriyordu — hem 400 hem 100'lük gruplarda aynı hata
+    // tekrarlandı, yani sorun grup boyutu değil, bu ortamın transaction
+    // kısıtıyla ilgili. Bunun yerine her belgeyi ayrı, bağımsız bir istek
+    // olarak (sınırlı eşzamanlılıkla) siliyoruz — bu kısıta hiç takılmıyor.
     console.log('🗑️  Siliniyor...');
     let deleted = 0;
-    const BATCH_SIZE = 100;
-    for (let i = 0; i < withoutReason.length; i += BATCH_SIZE) {
-        const chunk = withoutReason.slice(i, i + BATCH_SIZE);
-        const batch = db.batch();
-        chunk.forEach(d => batch.delete(d.ref));
-        await batch.commit();
+    const CONCURRENCY = 20;
+    for (let i = 0; i < withoutReason.length; i += CONCURRENCY) {
+        const chunk = withoutReason.slice(i, i + CONCURRENCY);
+        await Promise.all(chunk.map(d => d.ref.delete()));
         deleted += chunk.length;
         console.log(`   ... ${deleted}/${withoutReason.length} silindi`);
     }
