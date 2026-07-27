@@ -17,7 +17,7 @@ const GEMINI_PRICING_PER_1M_USD = {
     // Ürün Değerlendirme'nin AI "emsal edinme" kararı için embedding üretimi
     // (bkz. embeddingUtil.js) — karar mekanizması (cosine similarity) ücretsiz,
     // tek maliyet bu embedding çağrısı, generation modellerinden çok ucuz.
-    'text-embedding-004': { input: 0.00625, output: 0 },
+    'gemini-embedding-001': { input: 0.00625, output: 0 },
 };
 const DEFAULT_GEMINI_PRICING = { input: 0.30, output: 2.50 };
 

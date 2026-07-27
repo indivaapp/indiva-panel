@@ -6,7 +6,7 @@
  * kendisi LLM'e HİÇ SORMAZ — sadece embedding (vektör) üretimi + cosine
  * similarity + ağırlıklı oy sayımı gibi ucuz/matematiksel işlemlerden oluşur.
  * Gemini'nin embedding modeli generation modellerinden çok daha ucuzdur ve
- * tek maliyet noktası budur (bkz. aiUsageTracker.js:'text-embedding-004').
+ * tek maliyet noktası budur (bkz. aiUsageTracker.js:'gemini-embedding-001').
  *
  * NOT: Bu bir öneri/danışma sistemidir — sonucu (aiSimilarityJudgment) ilgili
  * ürün dokümanına yazılır ama YAYIN KARARINI ETKİLEMEZ (auto-publish hâlâ
@@ -14,7 +14,7 @@
  * Yeterli veri birikince (kullanıcı kararı) tam otomasyona geçirilebilir.
  */
 
-const EMBED_MODEL = 'text-embedding-004';
+const EMBED_MODEL = 'gemini-embedding-001';
 const TOP_K = 10;
 
 /** Ürünü embedding'e uygun kısa bir metne indirger — feedback kaydı ve aday için AYNI formatta olmalı. */
