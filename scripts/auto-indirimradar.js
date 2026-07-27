@@ -48,10 +48,9 @@ if (fs.existsSync(envPath)) {
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const API_URL = 'https://www.indirimradarapp.com/api/products';
-const MAX_NEW_PRODUCTS = 50;
-// En az bu oranda gerçek indirim yoksa (list_price yoksa/newPrice'tan düşükse)
-// ürünü atla — düz katalog fiyatı, indirim değil.
-const MIN_DISCOUNT_PERCENT = 8;
+// Artık çok sayfalı çekiliyor (bkz. fetchIndirimRadarProducts, en fazla 300
+// ham ürün/tarama) — bu, tek taramada işlenecek/yayınlanacak üst sınır.
+const MAX_NEW_PRODUCTS = 150;
 
 const CATEGORY_MAP = [
     { keywords: ['klavye', 'mouse', 'fare', 'monitör', 'bilgisayar', 'laptop', 'notebook', 'tablet', 'telefon', 'iphone', 'samsung', 'xiaomi', 'kulaklık', 'hoparlör', 'kamera', 'ssd', 'harddisk', 'şarj', 'powerbank', 'kablo', 'adaptör', 'akıllı saat', 'watch', 'scooter', 'drone', 'playstation', 'xbox', 'nintendo', 'router', 'modem', 'yazıcı', 'tv ', 'televizyon', 'stick'], category: 'Teknoloji' },
@@ -135,23 +134,39 @@ async function filterExistingIds(db, docIds) {
 }
 
 // ─── IndirimRadar API'den ürün listesi çek ──────────────────────────────────
+// NOT (2026-07): Canlı testte doğrulandı — indirimradarapp.com'un ?mode=live
+// akışında ~14 dakikalık bir pencerede 500+ yeni ürün akıyordu, ama bu script
+// taramada tavan olan 50 ürünü (offset kullanmadan) çekip duruyordu; siteye
+// göre yayınlanan ürünlerin büyük çoğunluğu bu pipeline'a hiç girmiyordu.
+// API `offset` parametresini destekliyor (test edildi) — birden fazla sayfayı
+// art arda çekip birleştiriyoruz. Bir sayfa 50'den az dönerse ("son sayfa")
+// ya da PAGE_CAP'e ulaşılırsa duruyoruz.
+const PAGE_SIZE = 50;
+const PAGE_CAP = 6; // 6 x 50 = en fazla 300 ürün/tarama
+
 async function fetchIndirimRadarProducts() {
-    const response = await fetch(API_URL, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        },
-        // API'nin bulduğumuz sunucu tavanı: 50/istek (varsayılan 20). En son
-        // güncellenen ürünleri döndürüyor (canlı akış, tam katalog değil) -
-        // limit'i tavana çekmek, her taramada daha geniş bir zaman penceresi
-        // kapsamamızı sağlıyor, ek maliyet yok.
-        body: JSON.stringify({ limit: 50 }),
-        signal: AbortSignal.timeout(20000),
-    });
-    if (!response.ok) throw new Error(`API HTTP ${response.status}`);
-    const data = await response.json();
-    return data.products || [];
+    const all = [];
+    for (let page = 0; page < PAGE_CAP; page++) {
+        const response = await fetch(API_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            },
+            body: JSON.stringify({ limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
+            signal: AbortSignal.timeout(20000),
+        });
+        if (!response.ok) {
+            if (page === 0) throw new Error(`API HTTP ${response.status}`);
+            console.warn(`   ⚠️ Sayfa ${page + 1} çekilemedi (HTTP ${response.status}), elde olanla devam ediliyor.`);
+            break;
+        }
+        const data = await response.json();
+        const products = data.products || [];
+        all.push(...products);
+        if (products.length < PAGE_SIZE) break; // son sayfa
+    }
+    return all;
 }
 
 // Self-chain zinciri ~5 dakikada bir sonraki çalışmayı tetikliyor (workflow
@@ -204,11 +219,10 @@ async function main() {
 
     console.log(`📡 ${rawProducts.length} ürün çekildi.`);
 
-    // ── 2. GEÇİCİ: filtre yok — çekilen her ürünü işliyoruz ─────────────────
-    // NOT: MIN_DISCOUNT_PERCENT eşiği ve AI kalite kapısı bilinçli olarak
-    // devre dışı bırakıldı (kullanıcı isteği: önce hacmi görelim, filtreyi
-    // sonra ekleriz). list_price olmayan ürünlerde oldPrice=0 olarak kalır -
-    // panel/uygulama bunu zaten "indirim yok, düz fiyat" olarak gösteriyor.
+    // ── 2. Filtre yok — çekilen her ürünü işliyoruz (kullanıcı isteği: AI
+    // kendi zevkine göre yayını engellemesin). list_price olmayan ürünlerde
+    // oldPrice=0 olarak kalır - panel/uygulama bunu zaten "indirim yok, düz
+    // fiyat" olarak gösteriyor.
     const withDiscount = rawProducts
         .filter(p => p.title && p.current_price > 0 && p.is_in_stock !== false)
         .map(p => {
