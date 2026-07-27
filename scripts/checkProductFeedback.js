@@ -21,23 +21,28 @@ function initFirebase() {
 
 async function main() {
     const db = initFirebase();
-    const snap = await db.collection('product_feedback').orderBy('ratedAt', 'desc').limit(50).get();
+    const col = db.collection('product_feedback');
 
-    console.log(`📊 product_feedback koleksiyonunda toplam (ilk 50 taranan): ${snap.size} belge\n`);
+    const [totalCount, positiveCount, negativeCount] = await Promise.all([
+        col.count().get(),
+        col.where('rating', '==', 'positive').count().get(),
+        col.where('rating', '==', 'negative').count().get(),
+    ]);
 
-    let positive = 0, negative = 0, withReason = 0;
+    console.log(`📊 product_feedback GERÇEK toplam: ${totalCount.data().count} belge (👍 ${positiveCount.data().count} · 👎 ${negativeCount.data().count})\n`);
+
+    const snap = await col.orderBy('ratedAt', 'desc').limit(50).get();
+    let withReason = 0;
     snap.docs.forEach(d => {
         const data = d.data();
-        if (data.rating === 'positive') positive++;
-        if (data.rating === 'negative') negative++;
         if (data.reason && data.reason.trim()) withReason++;
         const ratedAt = data.ratedAt?.toDate?.() ? data.ratedAt.toDate().toISOString() : String(data.ratedAt);
         console.log(`  [${data.rating === 'positive' ? '👍' : '👎'}] ${ratedAt} — ${data.title?.slice(0, 60) || d.id}${data.reason ? ` (sebep: "${data.reason.slice(0, 40)}")` : ''}`);
     });
 
-    console.log(`\n👍 ${positive}  👎 ${negative}  📝 sebepli: ${withReason}`);
+    console.log(`\n(Son ${snap.size} kayıttan sebepli: ${withReason})`);
 
-    if (snap.size === 0) {
+    if (totalCount.data().count === 0) {
         console.log('\n⚠️  Hiç belge bulunamadı — kayıtlar gerçekten Firestore\'a düşmüyor olabilir.');
         process.exit(1);
     }
