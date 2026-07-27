@@ -96,6 +96,17 @@ export interface ProductFeedback {
     updatedAt?: FirestoreTimestamp;
 }
 
+// Ürün Değerlendirme'de tekrar tekrar yazılan sebep metinlerinin "hızlı seçim
+// butonu" olarak yeniden kullanılması için — aynı sebep her yazıldığında elle
+// yazmak yerine tek dokunuşla seçilebilsin diye usageCount'a göre sıralanır.
+export interface FeedbackReason {
+    id: string;              // = `${rating}_${slug(text)}`, aynı metin tekrar yazılırsa aynı doküman güncellenir
+    rating: 'positive' | 'negative';
+    text: string;
+    usageCount: number;
+    updatedAt?: FirestoreTimestamp;
+}
+
 export interface Brochure {
     id: string;
     marketName?: string;  // Eski uyumluluk için
