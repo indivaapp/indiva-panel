@@ -9,6 +9,22 @@ const PAGE_SIZE = 6;
 // Kuyrukta bu kadar veya daha az ürün kalınca sessizce bir sayfa daha çekilir
 // — kullanıcı butona basmadan "Tinder" akışı asla durmasın.
 const PREFETCH_THRESHOLD = 2;
+// AI'nın "kararsız" saydığı (en yakın benzer ürünlerde görüş ayrılığı olan)
+// eşik — bu ürünler aktif öğrenme mantığıyla kuyrukta öne alınır, çünkü
+// senin vereceğin karar burada en çok bilgi değeri taşır.
+const UNCERTAIN_THRESHOLD = 0.15;
+
+/** Kuyrukta önceliklendirme: kararsız (|score| küçük) ürünler önce gelsin, öneri hiç yoksa en sona. */
+function queuePriority(d: Discount): number {
+    const j = d.aiSimilarityJudgment;
+    if (!j || !j.matchCount) return Infinity;
+    return Math.abs(j.score);
+}
+
+function isUncertain(d: Discount): boolean {
+    const j = d.aiSimilarityJudgment;
+    return !!j && j.matchCount > 0 && Math.abs(j.score) < UNCERTAIN_THRESHOLD;
+}
 
 const formatPrice = (price: number) =>
     Math.floor(price).toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -128,7 +144,11 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ discount, feedback, onAdvance }) 
                         {[discount.category, discount.brand, discount.storeName].filter(Boolean).join(' · ')}
                     </p>
                 )}
-                {discount.aiSimilarityJudgment && discount.aiSimilarityJudgment.decision !== 'unknown' && discount.aiSimilarityJudgment.matchCount > 0 && (
+                {isUncertain(discount) ? (
+                    <p className="text-[11px] text-amber-400 font-semibold">
+                        🤔 Bu ürünü sana özellikle soruyoruz — benzer geçmiş ürünlerde görüşün tutarsızdı, kararın burada çok değerli.
+                    </p>
+                ) : discount.aiSimilarityJudgment && discount.aiSimilarityJudgment.decision !== 'unknown' && discount.aiSimilarityJudgment.matchCount > 0 && (
                     <p className="text-[11px] text-gray-500">
                         🤖 AI önerisi: {discount.aiSimilarityJudgment.decision === 'positive' ? '👍 benzerdi beğenmiştin' : '👎 benzerini beğenmemiştin'}
                         {' '}({discount.aiSimilarityJudgment.matchCount} benzer üründen — sadece öneri, kararı sen veriyorsun)
@@ -220,6 +240,8 @@ const ProductFeedback: React.FC = () => {
     const cursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
     const [sessionPositive, setSessionPositive] = useState(0);
     const [sessionNegative, setSessionNegative] = useState(0);
+    // fetchPage'in bağımlılık listesi sabit kalsın diye currentIndex'i ref'te tutuyoruz.
+    const currentIndexRef = useRef(0);
 
     // Reklamlar (isAd) VE daha önce (bu oturumda veya geçmiş bir oturumda)
     // zaten değerlendirilmiş ürünler kuyruğa hiç girmiyor — kullanıcı isteği:
@@ -238,7 +260,16 @@ const ProductFeedback: React.FC = () => {
                 const unrated = nonAd.filter(d => !map.has(d.id));
                 if (unrated.length > 0) {
                     addedAny = true;
-                    setDiscounts(prev => [...prev, ...unrated]);
+                    // Henüz gösterilmemiş kısmı (kararsız/çelişkili ürünler önce
+                    // gelsin diye) yeniden sırala — zaten gösterilmiş kartlara
+                    // dokunulmaz.
+                    setDiscounts(prev => {
+                        const splitIdx = currentIndexRef.current;
+                        const shown = prev.slice(0, splitIdx);
+                        const pending = [...prev.slice(splitIdx), ...unrated]
+                            .sort((a, b) => queuePriority(a) - queuePriority(b));
+                        return [...shown, ...pending];
+                    });
                 }
             }
             if (!more) break;
@@ -251,6 +282,7 @@ const ProductFeedback: React.FC = () => {
         setDiscounts([]);
         setFeedbackMap(new Map());
         setCurrentIndex(0);
+        currentIndexRef.current = 0;
         setSessionPositive(0);
         setSessionNegative(0);
         cursorRef.current = null;
@@ -265,6 +297,8 @@ const ProductFeedback: React.FC = () => {
     }, [fetchPage]);
 
     useEffect(() => { load(); }, [load]);
+
+    useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
 
     // Kuyrukta az ürün kalınca sessizce arkadan yenisini çek — "Tinder" akışı
     // kullanıcı elle bir şey yapmadan devam etsin.
