@@ -28,6 +28,7 @@ import { maybeNotifyHighScoreDeal } from './notifyGate.js';
 import { maybeQueueSocialContent } from './socialContentGate.js';
 import { logPipelineRun } from './pipelineRunLogger.js';
 import { isDailyBudgetExceeded } from './aiUsageTracker.js';
+import { buildEmbeddingText, getEmbedding, judgeBySimilarity, loadFeedbackEmbeddings } from './embeddingUtil.js';
 
 // ─── .env Yükle (lokal geliştirme) ─────────────────────────────────────────
 const ROOT_DIR = process.cwd();
@@ -325,6 +326,12 @@ async function main() {
         : 0;
     console.log(`⏱️  ${approved.length} ürün, aralarında ~${Math.round(spacingMs / 1000)}sn boşlukla yayınlanacak\n`);
 
+    // AI "emsal edinme" önerisi (bkz. embeddingUtil.js) — YAYIN KARARINI
+    // ETKİLEMEZ, sadece dokümana danışma amaçlı bir alan olarak eklenir.
+    // Karar LLM'e sormadan cosine similarity ile çıkarıldığı için maliyeti
+    // (varsa) tek bir ucuz embedding çağrısıdır.
+    const feedbackEmbeddings = qualityGateKey ? await loadFeedbackEmbeddings(db).catch(() => []) : [];
+
     for (let i = 0; i < approved.length; i++) {
         const item = approved[i];
         const verdict = gateMap.get(item._docId);
@@ -345,6 +352,17 @@ async function main() {
                 console.warn(`   ⏭️  Görsel yok, atlandı (${item._docId}): ${title.substring(0, 50)}`);
                 skippedNoImage++;
                 continue;
+            }
+
+            let aiSimilarityJudgment = null;
+            if (qualityGateKey && feedbackEmbeddings.length > 0) {
+                const candidateEmbedding = await getEmbedding(
+                    buildEmbeddingText({ title, brand: item.raw.marketplace_display_name || 'Amazon', category, storeName: item.raw.marketplace_display_name || 'Amazon' }),
+                    qualityGateKey
+                );
+                if (candidateEmbedding) {
+                    aiSimilarityJudgment = judgeBySimilarity(candidateEmbedding, feedbackEmbeddings);
+                }
             }
 
             const discountData = {
@@ -377,6 +395,7 @@ async function main() {
                 expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
                 priceHistory: [{ price: item.newPrice, at: new Date() }],
                 qualityScore: verdict.score,
+                ...(aiSimilarityJudgment ? { aiSimilarityJudgment } : {}),
             };
 
             await db.collection('discounts').doc(item._docId).set(discountData);

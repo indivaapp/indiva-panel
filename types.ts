@@ -63,6 +63,16 @@ export interface Discount {
     telegramMessageId?: string;           // Kaynak Telegram mesaj ID'si
     storeName?: string;                   // Mağaza adı (Hepsiburada, Trendyol vb.)
     reviewCount?: string;                 // Yorum sayısı (400+ gibi)
+
+    // AI "emsal edinme" önerisi (bkz. scripts/embeddingUtil.js) — geçmiş
+    // product_feedback değerlendirmelerine en çok benzeyen ürünlere bakarak
+    // LLM'e SORMADAN (cosine similarity, ücretsiz) çıkarılan bir öneridir.
+    // YAYIN KARARINI ETKİLEMEZ, sadece panelde danışma amaçlı gösterilir.
+    aiSimilarityJudgment?: {
+        decision: 'positive' | 'negative' | 'unknown';
+        score: number;
+        matchCount: number;
+    };
 }
 
 // Yöneticinin yayınlanan bir ürüne verdiği 👍/👎 değerlendirme — ileride AI'nın

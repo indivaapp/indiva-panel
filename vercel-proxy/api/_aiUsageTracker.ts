@@ -16,6 +16,11 @@ const GEMINI_PRICING_PER_1M_USD: Record<string, { input: number; output: number 
     'gemini-2.5-flash-lite': { input: 0.10, output: 0.40 },
     'gemini-2.5-flash': { input: 0.30, output: 2.50 },
     'gemini-2.0-flash-001': { input: 0.10, output: 0.40 },
+    // Embedding modelleri generation modellerinden çok daha ucuz — sadece
+    // vektör üretiyor, çıktı token'ı yok. Ürün Değerlendirme'nin AI "emsal
+    // edinme" kararı bunu kullanıyor (bkz. embed-text.ts) — karar mekanizması
+    // (cosine similarity) ücretsiz, tek maliyet bu embedding çağrısı.
+    'text-embedding-004': { input: 0.00625, output: 0 },
 };
 const DEFAULT_GEMINI_PRICING = { input: 0.30, output: 2.50 };
 

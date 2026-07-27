@@ -1185,6 +1185,31 @@ export const markNotificationsSeen = async (): Promise<void> => {
 // discount dokümanı 24 saat sonra silinse bile bu kayıt kalıcı kalır —
 // ileride AI'nın benzer ürünleri değerlendirirken bakabileceği geçmiş.
 
+/**
+ * Değerlendirilen ürünün embedding'ini üretir — AI'nın "emsal edinme" kararı
+ * (bkz. scripts/embeddingUtil.js) bu vektörleri kullanır. Karar mekanizması
+ * LLM'e sormadan sadece cosine similarity ile çalıştığı için tek maliyet
+ * noktası bu ucuz embedding çağrısıdır. Embedding, ürünün başlık/marka/
+ * kategorisine bağlı olduğu için sadece İLK değerlendirmede üretilir —
+ * sonraki sebep düzenlemelerinde tekrar üretilmez.
+ */
+async function fetchEmbedding(text: string): Promise<number[] | null> {
+    try {
+        // Ayrı bir Vercel function olarak eklenmedi — Hobby planının 12
+        // fonksiyon sınırını aşıyordu; ai-scrape.ts'in mevcut Gemini
+        // anahtarı/altyapısı `action: 'embed'` ile paylaşılıyor.
+        const res = await fetch('https://indiva-proxy.vercel.app/api/ai-scrape', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'embed', text }),
+        });
+        const data = await res.json();
+        return data?.success && Array.isArray(data.embedding) ? data.embedding : null;
+    } catch {
+        return null;
+    }
+}
+
 export const saveProductFeedback = async (
     discount: Pick<Discount, 'id' | 'title' | 'brand' | 'category' | 'storeName' | 'oldPrice' | 'newPrice' | 'imageUrl' | 'link'>,
     rating: 'positive' | 'negative',
@@ -1192,6 +1217,14 @@ export const saveProductFeedback = async (
 ): Promise<void> => {
     const ref = doc(db, 'product_feedback', discount.id);
     const existing = await getDoc(ref);
+    const existingData = existing.data();
+
+    let embedding = existingData?.embedding as number[] | undefined;
+    if (!embedding) {
+        const text = [discount.title, discount.brand, discount.category, discount.storeName].filter(Boolean).join(' · ');
+        embedding = (await fetchEmbedding(text)) || undefined;
+    }
+
     await setDoc(ref, {
         discountId: discount.id,
         rating,
@@ -1204,7 +1237,8 @@ export const saveProductFeedback = async (
         newPrice: discount.newPrice,
         imageUrl: discount.imageUrl,
         link: discount.link,
-        ratedAt: existing.exists() ? existing.data()?.ratedAt || serverTimestamp() : serverTimestamp(),
+        ...(embedding ? { embedding } : {}),
+        ratedAt: existing.exists() ? existingData?.ratedAt || serverTimestamp() : serverTimestamp(),
         updatedAt: serverTimestamp(),
     }, { merge: true });
 };
