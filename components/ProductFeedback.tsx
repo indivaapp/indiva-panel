@@ -215,9 +215,11 @@ const ProductFeedback: React.FC = () => {
     const [sessionPositive, setSessionPositive] = useState(0);
     const [sessionNegative, setSessionNegative] = useState(0);
 
-    // Reklamlar (isAd) yayın sırasına serpiştirilmiş olabilir — bir sayfada
-    // hepsi reklamsa kuyruk boş görünmesin diye, boş çıkan sayfayı otomatik
-    // olarak bir sonrakiyle tamamlıyoruz (en fazla 5 tur, sonsuz döngü olmasın).
+    // Reklamlar (isAd) VE daha önce (bu oturumda veya geçmiş bir oturumda)
+    // zaten değerlendirilmiş ürünler kuyruğa hiç girmiyor — kullanıcı isteği:
+    // "değerlendirdiğim ürünler tekrar önüme çıkmamalı". Bir sayfa tamamen
+    // reklam/değerlendirilmişten oluşursa kuyruk boş görünmesin diye otomatik
+    // bir sonraki sayfayla tamamlanıyor (en fazla 5 tur, sonsuz döngü olmasın).
     const fetchPage = useCallback(async (): Promise<void> => {
         let addedAny = false;
         for (let attempt = 0; attempt < 5 && !addedAny; attempt++) {
@@ -226,10 +228,12 @@ const ProductFeedback: React.FC = () => {
             setHasMore(more);
             const nonAd = items.filter(d => !d.isAd);
             if (nonAd.length > 0) {
-                addedAny = true;
-                setDiscounts(prev => [...prev, ...nonAd]);
                 const map = await getProductFeedbackMap(nonAd.map(d => d.id));
-                setFeedbackMap(prev => new Map([...prev, ...map]));
+                const unrated = nonAd.filter(d => !map.has(d.id));
+                if (unrated.length > 0) {
+                    addedAny = true;
+                    setDiscounts(prev => [...prev, ...unrated]);
+                }
             }
             if (!more) break;
         }
