@@ -48,9 +48,11 @@ if (fs.existsSync(envPath)) {
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const API_URL = 'https://www.indirimradarapp.com/api/products';
-// Artık çok sayfalı çekiliyor (bkz. fetchIndirimRadarProducts, en fazla 500
-// ham ürün/tarama) — bu, dedup SONRASI tek taramada işlenecek/yayınlanacak üst sınır.
-const MAX_NEW_PRODUCTS = 150;
+// Artık çok sayfalı çekiliyor (bkz. fetchIndirimRadarProducts, en fazla 750
+// ham ürün/tarama) — bu, dedup SONRASI tek taramada işlenecek/yayınlanacak üst
+// sınır. TARGET_WINDOW_MS + MIN_SPACING_MS'e göre büyütüldükçe workflow
+// timeout-minutes'ı da artırılmalı (bkz. auto-indirimradar.yml).
+const MAX_NEW_PRODUCTS = 250;
 
 const CATEGORY_MAP = [
     { keywords: ['klavye', 'mouse', 'fare', 'monitör', 'bilgisayar', 'laptop', 'notebook', 'tablet', 'telefon', 'iphone', 'samsung', 'xiaomi', 'kulaklık', 'hoparlör', 'kamera', 'ssd', 'harddisk', 'şarj', 'powerbank', 'kablo', 'adaptör', 'akıllı saat', 'watch', 'scooter', 'drone', 'playstation', 'xbox', 'nintendo', 'router', 'modem', 'yazıcı', 'tv ', 'televizyon', 'stick'], category: 'Teknoloji' },
@@ -142,7 +144,7 @@ async function filterExistingIds(db, docIds) {
 // art arda çekip birleştiriyoruz. Bir sayfa 50'den az dönerse ("son sayfa")
 // ya da PAGE_CAP'e ulaşılırsa duruyoruz.
 const PAGE_SIZE = 50;
-const PAGE_CAP = 10; // 10 x 50 = en fazla 500 ürün/tarama
+const PAGE_CAP = 15; // 15 x 50 = en fazla 750 ürün/tarama
 
 async function fetchIndirimRadarProducts() {
     const all = [];
