@@ -1,0 +1,35 @@
+name: Deploy Firestore Rules
+
+# NOT (2026-07-27): firestore.rules dosyasındaki değişiklikler repoya commit
+# edilse bile Firebase'e OTOMATİK yayınlanmıyordu — bu yüzden örn.
+# product_feedback koleksiyonu için eklenen kural haftalarca canlıya hiç
+# çıkmadı ve panel'de "Ürünler yüklenemedi" (permission-denied) hatası
+# veriyordu. Bu workflow, main'e her firestore.rules değişikliğinde kuralları
+# gerçekten deploy eder.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'firestore.rules'
+  workflow_dispatch:
+
+jobs:
+  deploy-rules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write service account credentials
+        run: echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > /tmp/firebase-service-account.json
+
+      - name: Deploy Firestore rules
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/firebase-service-account.json
+        run: |
+          npx firebase-tools@latest deploy --only firestore:rules \
+            --project "${{ secrets.VITE_FIREBASE_PROJECT_ID }}" \
+            --non-interactive
