@@ -48,8 +48,9 @@ async function main() {
 
     console.log('🗑️  Siliniyor...');
     let deleted = 0;
-    for (let i = 0; i < withoutReason.length; i += 400) {
-        const chunk = withoutReason.slice(i, i + 400);
+    const BATCH_SIZE = 100;
+    for (let i = 0; i < withoutReason.length; i += BATCH_SIZE) {
+        const chunk = withoutReason.slice(i, i + BATCH_SIZE);
         const batch = db.batch();
         chunk.forEach(d => batch.delete(d.ref));
         await batch.commit();
