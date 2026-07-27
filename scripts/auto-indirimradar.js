@@ -48,8 +48,8 @@ if (fs.existsSync(envPath)) {
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const API_URL = 'https://www.indirimradarapp.com/api/products';
-// Artık çok sayfalı çekiliyor (bkz. fetchIndirimRadarProducts, en fazla 300
-// ham ürün/tarama) — bu, tek taramada işlenecek/yayınlanacak üst sınır.
+// Artık çok sayfalı çekiliyor (bkz. fetchIndirimRadarProducts, en fazla 500
+// ham ürün/tarama) — bu, dedup SONRASI tek taramada işlenecek/yayınlanacak üst sınır.
 const MAX_NEW_PRODUCTS = 150;
 
 const CATEGORY_MAP = [
@@ -142,7 +142,7 @@ async function filterExistingIds(db, docIds) {
 // art arda çekip birleştiriyoruz. Bir sayfa 50'den az dönerse ("son sayfa")
 // ya da PAGE_CAP'e ulaşılırsa duruyoruz.
 const PAGE_SIZE = 50;
-const PAGE_CAP = 6; // 6 x 50 = en fazla 300 ürün/tarama
+const PAGE_CAP = 10; // 10 x 50 = en fazla 500 ürün/tarama
 
 async function fetchIndirimRadarProducts() {
     const all = [];
@@ -232,8 +232,7 @@ async function main() {
                 ? Math.round(((oldPrice - newPrice) / oldPrice) * 100)
                 : 0;
             return { raw: p, newPrice, oldPrice, discountPct };
-        })
-        .slice(0, MAX_NEW_PRODUCTS);
+        });
 
     console.log(`📊 İşlenecek aday: ${withDiscount.length} ürün (filtre kapalı)\n`);
 
@@ -279,8 +278,12 @@ async function main() {
         existingInDb.forEach(id => { idCache.ids[id] = true; });
     }
 
-    const finalList = uncachedIds.filter(p => !existingInDb.has(p._docId));
-    console.log(`   🆕 İşlenecek net yeni ürün: ${finalList.length}\n`);
+    const dedupedList = uncachedIds.filter(p => !existingInDb.has(p._docId));
+    // Not: kapak (MAX_NEW_PRODUCTS) dedup'tan SONRA uygulanıyor — aksi halde
+    // ham listenin başındaki tekrarlar yüzünden listenin sonundaki gerçekten
+    // yeni ürünler hiç kontrol edilmeden elenirdi.
+    const finalList = dedupedList.slice(0, MAX_NEW_PRODUCTS);
+    console.log(`   🆕 İşlenecek net yeni ürün: ${finalList.length}${dedupedList.length > finalList.length ? ` (${dedupedList.length} yeni üründen ilk ${MAX_NEW_PRODUCTS} tanesi)` : ''}\n`);
 
     idCache.lastUpdate = new Date().toISOString();
     fs.writeFileSync(CACHE_FILE, JSON.stringify(idCache, null, 2));
