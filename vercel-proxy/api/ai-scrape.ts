@@ -147,10 +147,53 @@ async function fetchWithJina(url: string): Promise<string> {
     throw lastError || new Error('Jina başarısız');
 }
 
+const EMBED_MODEL = 'text-embedding-004';
+
+/**
+ * action: 'embed' — Ürün Değerlendirme'nin (product_feedback) AI "emsal
+ * edinme" kararı için kısa bir metni vektöre çevirir. Ayrı bir Vercel
+ * function olarak eklenmedi — Hobby planının 12 fonksiyon sınırını aşıyordu,
+ * bu yüzden aynı uçtaki mevcut Gemini anahtarı/altyapısı paylaşılıyor.
+ * POST { action: 'embed', text } → { success: true, embedding: number[] }
+ */
+async function handleEmbed(req: VercelRequest, res: VercelResponse) {
+    const { text } = req.body || {};
+    if (!text || typeof text !== 'string') {
+        return res.status(400).json({ success: false, error: 'text gerekli' });
+    }
+    if (!GEMINI_KEY_ENV) {
+        return res.status(200).json({ success: false, error: 'GEMINI_API_KEY tanımlı değil' });
+    }
+    try {
+        const aiRes = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:embedContent?key=${GEMINI_KEY_ENV}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: `models/${EMBED_MODEL}`, content: { parts: [{ text: text.slice(0, 2000) }] } }),
+                signal: AbortSignal.timeout(15000),
+            }
+        );
+        if (!aiRes.ok) return res.status(200).json({ success: false, error: `Gemini embed ${aiRes.status}` });
+        const data = await aiRes.json();
+        const embedding: number[] = data?.embedding?.values || [];
+        if (!embedding.length) return res.status(200).json({ success: false, error: 'Boş embedding döndü' });
+
+        const approxTokens = Math.ceil(text.length / 4);
+        trackGeminiUsage({ usageMetadata: { promptTokenCount: approxTokens, candidatesTokenCount: 0 } }, EMBED_MODEL, 'embed-text').catch(() => {});
+
+        return res.status(200).json({ success: true, embedding });
+    } catch (err: any) {
+        return res.status(200).json({ success: false, error: err?.message || 'Bilinmeyen hata' });
+    }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     corsHeaders(res);
     if (req.method === 'OPTIONS') return res.status(200).end();
     if (req.method !== 'POST') return res.status(405).json({ success: false, error: 'POST gerekli' });
+
+    if (req.body?.action === 'embed') return handleEmbed(req, res);
 
     const { url, geminiKey } = req.body || {};
     if (!url || !url.startsWith('http')) {

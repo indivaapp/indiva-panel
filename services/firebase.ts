@@ -1195,10 +1195,13 @@ export const markNotificationsSeen = async (): Promise<void> => {
  */
 async function fetchEmbedding(text: string): Promise<number[] | null> {
     try {
-        const res = await fetch('https://indiva-proxy.vercel.app/api/embed-text', {
+        // Ayrı bir Vercel function olarak eklenmedi — Hobby planının 12
+        // fonksiyon sınırını aşıyordu; ai-scrape.ts'in mevcut Gemini
+        // anahtarı/altyapısı `action: 'embed'` ile paylaşılıyor.
+        const res = await fetch('https://indiva-proxy.vercel.app/api/ai-scrape', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text }),
+            body: JSON.stringify({ action: 'embed', text }),
         });
         const data = await res.json();
         return data?.success && Array.isArray(data.embedding) ? data.embedding : null;
