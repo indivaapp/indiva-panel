@@ -1,0 +1,33 @@
+name: Evaluate Product Filter Report
+
+on:
+  workflow_dispatch:
+    inputs:
+      holdout_size:
+        description: 'Test için ayrılacak (en yeni) kayıt sayısı'
+        required: false
+        default: '50'
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Evaluate report
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          HOLDOUT_SIZE: ${{ github.event.inputs.holdout_size }}
+        run: node scripts/evaluateFilterReport.js
