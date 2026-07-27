@@ -21,6 +21,8 @@ const FeedbackCard: React.FC<FeedbackCardProps> = ({ discount, feedback, onSaved
     const [reason, setReason] = useState(feedback?.reason || '');
     const [isSaving, setIsSaving] = useState(false);
     const [showReasonBox, setShowReasonBox] = useState(!!feedback?.reason);
+    const [isSavingReason, setIsSavingReason] = useState(false);
+    const [reasonJustSaved, setReasonJustSaved] = useState(false);
 
     // Firestore'dan gelen feedback değişirse (ör. sayfa filtre değişince yeniden yüklendiğinde) senkronize et
     useEffect(() => {
@@ -28,6 +30,8 @@ const FeedbackCard: React.FC<FeedbackCardProps> = ({ discount, feedback, onSaved
         setReason(feedback?.reason || '');
         setShowReasonBox(!!feedback?.reason);
     }, [feedback]);
+
+    const reasonDirty = reason.trim() !== (feedback?.reason || '').trim();
 
     const handleRate = async (next: 'positive' | 'negative') => {
         if (isSaving) return;
@@ -68,9 +72,10 @@ const FeedbackCard: React.FC<FeedbackCardProps> = ({ discount, feedback, onSaved
         }
     };
 
-    const handleReasonBlur = async () => {
-        if (!rating) return;
+    const handleReasonSave = async () => {
+        if (!rating || isSavingReason) return;
         if (reason.trim() === (feedback?.reason || '').trim()) return;
+        setIsSavingReason(true);
         try {
             await saveProductFeedback(discount, rating, reason);
             onSaved(discount.id, {
@@ -80,8 +85,13 @@ const FeedbackCard: React.FC<FeedbackCardProps> = ({ discount, feedback, onSaved
                 imageUrl: discount.imageUrl, link: discount.link,
                 ratedAt: feedback?.ratedAt as any, updatedAt: undefined,
             });
+            showToast('Sebep kaydedildi.', 'success');
+            setReasonJustSaved(true);
+            setTimeout(() => setReasonJustSaved(false), 2500);
         } catch {
             showToast('Sebep kaydedilemedi.', 'error');
+        } finally {
+            setIsSavingReason(false);
         }
     };
 
@@ -145,14 +155,29 @@ const FeedbackCard: React.FC<FeedbackCardProps> = ({ discount, feedback, onSaved
                     </button>
                 )}
                 {rating && showReasonBox && (
-                    <textarea
-                        value={reason}
-                        onChange={(e) => setReason(e.target.value)}
-                        onBlur={handleReasonBlur}
-                        placeholder={rating === 'positive' ? 'Neden beğendin? (opsiyonel)' : 'Neden yayınlanmamalıydı? (opsiyonel)'}
-                        rows={2}
-                        className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200 resize-none focus:outline-none focus:border-blue-500"
-                    />
+                    <div className="flex flex-col gap-1">
+                        <textarea
+                            value={reason}
+                            onChange={(e) => { setReason(e.target.value); setReasonJustSaved(false); }}
+                            onBlur={handleReasonSave}
+                            placeholder={rating === 'positive' ? 'Neden beğendin? (opsiyonel)' : 'Neden yayınlanmamalıydı? (opsiyonel)'}
+                            rows={2}
+                            className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200 resize-none focus:outline-none focus:border-blue-500"
+                        />
+                        <div className="flex items-center justify-between gap-2">
+                            {reasonJustSaved ? (
+                                <span className="text-[11px] text-green-400 font-semibold">✓ Kaydedildi</span>
+                            ) : <span />}
+                            <button
+                                type="button"
+                                disabled={!reasonDirty || isSavingReason}
+                                onClick={handleReasonSave}
+                                className="text-[11px] font-bold px-2.5 py-1 rounded-md bg-blue-600 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-blue-500 transition-colors"
+                            >
+                                {isSavingReason ? 'Kaydediliyor…' : 'Kaydet'}
+                            </button>
+                        </div>
+                    </div>
                 )}
             </div>
         </div>
