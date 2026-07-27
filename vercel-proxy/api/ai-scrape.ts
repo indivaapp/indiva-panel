@@ -147,7 +147,7 @@ async function fetchWithJina(url: string): Promise<string> {
     throw lastError || new Error('Jina başarısız');
 }
 
-const EMBED_MODEL = 'text-embedding-004';
+const EMBED_MODEL = 'gemini-embedding-001';
 
 /**
  * action: 'embed' — Ürün Değerlendirme'nin (product_feedback) AI "emsal

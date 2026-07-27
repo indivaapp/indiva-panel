@@ -20,7 +20,7 @@ const GEMINI_PRICING_PER_1M_USD: Record<string, { input: number; output: number 
     // vektör üretiyor, çıktı token'ı yok. Ürün Değerlendirme'nin AI "emsal
     // edinme" kararı bunu kullanıyor (bkz. embed-text.ts) — karar mekanizması
     // (cosine similarity) ücretsiz, tek maliyet bu embedding çağrısı.
-    'text-embedding-004': { input: 0.00625, output: 0 },
+    'gemini-embedding-001': { input: 0.00625, output: 0 },
 };
 const DEFAULT_GEMINI_PRICING = { input: 0.30, output: 2.50 };
 
