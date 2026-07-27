@@ -35,11 +35,16 @@ export async function getEmbedding(text, apiKey) {
                 signal: AbortSignal.timeout(15000),
             }
         );
-        if (!res.ok) return null;
+        if (!res.ok) {
+            const body = await res.text().catch(() => '');
+            console.warn(`   [embedding HTTP ${res.status}] ${body.slice(0, 300)}`);
+            return null;
+        }
         const data = await res.json();
         const values = data?.embedding?.values;
         return Array.isArray(values) && values.length ? values : null;
-    } catch {
+    } catch (err) {
+        console.warn(`   [embedding hata] ${err?.message || err}`);
         return null;
     }
 }

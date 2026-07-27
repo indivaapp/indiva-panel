@@ -35,8 +35,12 @@ async function main() {
     const snap = await db.collection('product_feedback').get();
     console.log(`📊 Toplam ${snap.size} product_feedback kaydı bulundu.\n`);
 
-    const missing = snap.docs.filter(d => !Array.isArray(d.data().embedding) || d.data().embedding.length === 0);
+    let missing = snap.docs.filter(d => !Array.isArray(d.data().embedding) || d.data().embedding.length === 0);
     console.log(`🔍 Embedding'i eksik: ${missing.length} kayıt\n`);
+    // TANI MODU: önceki tam çalıştırma 511/511 başarısız oldu, sebep hiç
+    // loglanmıyordu — şimdi hatayı görmek için sadece birkaç kayıtla test
+    // ediyoruz. Kök neden bulununca bu satır kaldırılacak.
+    if (process.env.DEBUG_LIMIT) missing = missing.slice(0, Number(process.env.DEBUG_LIMIT));
 
     let done = 0, failed = 0;
     for (const doc of missing) {

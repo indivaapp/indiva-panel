@@ -2,6 +2,11 @@ name: Backfill Feedback Embeddings
 
 on:
   workflow_dispatch:
+    inputs:
+      debug_limit:
+        description: 'Tanı için sadece ilk N kaydı işle (boş = hepsi)'
+        required: false
+        default: ''
 
 jobs:
   backfill:
@@ -24,4 +29,5 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DEBUG_LIMIT: ${{ github.event.inputs.debug_limit }}
         run: node scripts/backfillFeedbackEmbeddings.js
