@@ -19,10 +19,11 @@ import {
     writeBatch,
     getCountFromServer,
     documentId,
+    increment,
     QueryDocumentSnapshot,
     DocumentData
 } from 'firebase/firestore';
-import type { Discount, Brochure, Advertisement, PendingDiscount, AdRequest, ScheduledNotification, StagingProduct, SocialContentItem, ProductFeedback } from '../types';
+import type { Discount, Brochure, Advertisement, PendingDiscount, AdRequest, ScheduledNotification, StagingProduct, SocialContentItem, ProductFeedback, FeedbackReason } from '../types';
 import { deleteFromImgbb } from './imgbb';
 
 // Gerçek affiliate link üretimi şu an sadece Trendyol/Hepsiburada için
@@ -1266,5 +1267,39 @@ export const getRecentProductFeedback = async (max: number = 200): Promise<Produ
     const q = query(collection(db, 'product_feedback'), orderBy('ratedAt', 'desc'), limit(max));
     const snap = await getDocs(q);
     return snap.docs.map(d => ({ id: d.id, ...d.data() } as ProductFeedback));
+};
+
+// --- Ürün Değerlendirme: hızlı sebep butonları ---
+
+const slugifyReason = (text: string): string =>
+    text.trim().toLowerCase()
+        .replace(/[^a-z0-9ığüşöç\s-]/gi, '')
+        .replace(/\s+/g, '-')
+        .slice(0, 60);
+
+/** Koleksiyon küçük olduğu için (yüzlerce değil, onlarca benzersiz sebep) tek seferde tamamı çekilir. */
+export const getFeedbackReasons = async (): Promise<FeedbackReason[]> => {
+    const snap = await getDocs(collection(db, 'feedbackReasons'));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() } as FeedbackReason));
+};
+
+/**
+ * Bir sebep metnini (evet ya da hayır için) hızlı seçim butonu havuzuna
+ * ekler/günceller. Aynı metin (küçük harf, boşluk farkı hariç) tekrar
+ * yazılırsa/seçilirse aynı doküman güncellenir ve usageCount artar —
+ * en sık kullanılan sebepler zamanla üste çıkar.
+ */
+export const recordFeedbackReason = async (rating: 'positive' | 'negative', text: string): Promise<void> => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const slug = slugifyReason(trimmed);
+    if (!slug) return;
+    const ref = doc(db, 'feedbackReasons', `${rating}_${slug}`);
+    await setDoc(ref, {
+        rating,
+        text: trimmed,
+        usageCount: increment(1),
+        updatedAt: serverTimestamp(),
+    }, { merge: true });
 };
 

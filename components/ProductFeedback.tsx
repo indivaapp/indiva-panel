@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { getDiscountsPage, getProductFeedbackMap, saveProductFeedback, deleteProductFeedback } from '../services/firebase';
-import type { Discount, ProductFeedback as ProductFeedbackType } from '../types';
+import { getDiscountsPage, getProductFeedbackMap, saveProductFeedback, deleteProductFeedback, getFeedbackReasons, recordFeedbackReason } from '../services/firebase';
+import type { Discount, ProductFeedback as ProductFeedbackType, FeedbackReason } from '../types';
 import { useToast } from './ToastProvider';
 import type { QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 
@@ -33,13 +33,21 @@ interface SwipeCardProps {
     discount: Discount;
     feedback: ProductFeedbackType | undefined;
     onAdvance: (discountId: string, feedback: ProductFeedbackType | null) => void;
+    reasons: FeedbackReason[];
+    onReasonUsed: (rating: 'positive' | 'negative', text: string) => void;
 }
 
-const SwipeCard: React.FC<SwipeCardProps> = ({ discount, feedback, onAdvance }) => {
+const SwipeCard: React.FC<SwipeCardProps> = ({ discount, feedback, onAdvance, reasons, onReasonUsed }) => {
     const { showToast } = useToast();
     const [rating, setRating] = useState<'positive' | 'negative' | null>(feedback?.rating ?? null);
     const [reason, setReason] = useState(feedback?.reason || '');
     const [isSaving, setIsSaving] = useState(false);
+
+    // Bu değerlendirme (evet/hayır) için daha önce yazılmış/seçilmiş sebepler —
+    // en sık kullanılanlar önce, tek dokunuşla seçilebilsin diye.
+    const quickReasons = rating
+        ? reasons.filter(r => r.rating === rating).sort((a, b) => (b.usageCount || 0) - (a.usageCount || 0)).slice(0, 8)
+        : [];
 
     // NOT: Kart bileşeni her ürün için parent'ta key={discount.id} ile
     // yeniden mount ediliyor, bu yüzden yukarıdaki useState başlangıç
@@ -49,15 +57,35 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ discount, feedback, onAdvance }) 
     // üretiyor; buna bağlı bir effect, kullanıcı sebep kutusuna yazarken
     // (kart değişmemişken) yazdığını sessizce silerdi.
 
-    const persist = async (nextRating: 'positive' | 'negative') => {
-        await saveProductFeedback(discount, nextRating, reason);
+    const persist = async (nextRating: 'positive' | 'negative', explicitReason?: string) => {
+        const finalReason = explicitReason ?? reason;
+        await saveProductFeedback(discount, nextRating, finalReason);
         return {
-            id: discount.id, discountId: discount.id, rating: nextRating, reason,
+            id: discount.id, discountId: discount.id, rating: nextRating, reason: finalReason,
             title: discount.title, brand: discount.brand, category: discount.category,
             storeName: discount.storeName, oldPrice: discount.oldPrice, newPrice: discount.newPrice,
             imageUrl: discount.imageUrl, link: discount.link,
             ratedAt: feedback?.ratedAt as any, updatedAt: undefined,
         } as ProductFeedbackType;
+    };
+
+    // Hızlı sebep butonu seçimi: tek dokunuşla kaydet + bir sonraki ürüne geç
+    // (elle yazıp "Kaydet ve İleri"ye basmaya gerek kalmasın — tekrar eden
+    // durumlarda değerlendirme hızı bunun için önemliydi).
+    const handleQuickReason = async (rate: 'positive' | 'negative', text: string) => {
+        if (isSaving) return;
+        setIsSaving(true);
+        try {
+            const saved = await persist(rate, text);
+            setRating(rate);
+            setReason(text);
+            onReasonUsed(rate, text);
+            onAdvance(discount.id, saved);
+        } catch {
+            showToast('Kaydedilemedi.', 'error');
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     const handleRate = async (next: 'positive' | 'negative') => {
@@ -82,6 +110,7 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ discount, feedback, onAdvance }) 
         try {
             if (rating) {
                 const saved = await persist(rating);
+                if (reason.trim()) onReasonUsed(rating, reason.trim());
                 onAdvance(discount.id, saved);
             } else {
                 onAdvance(discount.id, feedback ?? null);
@@ -185,11 +214,31 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ discount, feedback, onAdvance }) 
                     </button>
                 </div>
 
+                {rating && quickReasons.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                        {quickReasons.map(r => (
+                            <button
+                                key={r.id}
+                                type="button"
+                                disabled={isSaving}
+                                onClick={() => handleQuickReason(rating, r.text)}
+                                className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors disabled:opacity-50 ${
+                                    reason === r.text
+                                        ? (rating === 'positive' ? 'bg-green-600 border-green-600 text-white' : 'bg-red-600 border-red-600 text-white')
+                                        : 'bg-gray-900 border-gray-700 text-gray-300 hover:border-gray-500'
+                                }`}
+                            >
+                                {r.text}
+                            </button>
+                        ))}
+                    </div>
+                )}
+
                 {rating && (
                     <textarea
                         value={reason}
                         onChange={(e) => setReason(e.target.value)}
-                        placeholder={rating === 'positive' ? 'Neden beğendin? (opsiyonel)' : 'Neden yayınlanmamalıydı? (opsiyonel)'}
+                        placeholder={rating === 'positive' ? 'Yukarıdakilerden yoksa yeni bir sebep yaz (opsiyonel) — bu da bir sonraki için butona dönüşür' : 'Yukarıdakilerden yoksa yeni bir sebep yaz (opsiyonel) — bu da bir sonraki için butona dönüşür'}
                         rows={2}
                         className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 resize-none focus:outline-none focus:border-blue-500"
                     />
@@ -240,8 +289,30 @@ const ProductFeedback: React.FC = () => {
     const cursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
     const [sessionPositive, setSessionPositive] = useState(0);
     const [sessionNegative, setSessionNegative] = useState(0);
+    const [reasons, setReasons] = useState<FeedbackReason[]>([]);
     // fetchPage'in bağımlılık listesi sabit kalsın diye currentIndex'i ref'te tutuyoruz.
     const currentIndexRef = useRef(0);
+
+    useEffect(() => {
+        getFeedbackReasons().then(setReasons).catch(() => {});
+    }, []);
+
+    // Bir sebep kullanıldığında (buton seçildi ya da elle yeni yazıldı) hem
+    // Firestore'a yazılır (usageCount artar / yeni sebep oluşur) hem de yerel
+    // listede anında güncellenir — yeni yazılan bir sebep sonraki karta hemen
+    // buton olarak yansısın diye yeniden sunucudan çekmeyi beklemeyiz.
+    const handleReasonUsed = useCallback((rating: 'positive' | 'negative', text: string) => {
+        recordFeedbackReason(rating, text).catch(() => {});
+        setReasons(prev => {
+            const idx = prev.findIndex(r => r.rating === rating && r.text.toLowerCase() === text.toLowerCase());
+            if (idx === -1) {
+                return [...prev, { id: `${rating}_${text}`, rating, text, usageCount: 1 }];
+            }
+            const next = [...prev];
+            next[idx] = { ...next[idx], usageCount: (next[idx].usageCount || 0) + 1 };
+            return next;
+        });
+    }, []);
 
     // Reklamlar (isAd) VE daha önce (bu oturumda veya geçmiş bir oturumda)
     // zaten değerlendirilmiş ürünler kuyruğa hiç girmiyor — kullanıcı isteği:
@@ -350,7 +421,14 @@ const ProductFeedback: React.FC = () => {
             ) : error ? (
                 <p className="text-red-400 text-center py-12">{error}</p>
             ) : current ? (
-                <SwipeCard key={current.id} discount={current} feedback={feedbackMap.get(current.id)} onAdvance={handleAdvance} />
+                <SwipeCard
+                    key={current.id}
+                    discount={current}
+                    feedback={feedbackMap.get(current.id)}
+                    onAdvance={handleAdvance}
+                    reasons={reasons}
+                    onReasonUsed={handleReasonUsed}
+                />
             ) : hasMore || isFetchingMore ? (
                 <div className="flex justify-center py-24">
                     <div className="w-6 h-6 border-2 border-gray-600 border-t-blue-500 rounded-full animate-spin" />
