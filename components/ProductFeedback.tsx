@@ -1,187 +1,203 @@
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { getDiscountsPage, getProductFeedbackMap, saveProductFeedback, deleteProductFeedback } from '../services/firebase';
 import type { Discount, ProductFeedback as ProductFeedbackType } from '../types';
 import { useToast } from './ToastProvider';
 import type { QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 
 const PAGE_SIZE = 6;
-
-type RatingFilter = 'all' | 'rated' | 'unrated' | 'positive' | 'negative';
+// Kuyrukta bu kadar veya daha az ürün kalınca sessizce bir sayfa daha çekilir
+// — kullanıcı butona basmadan "Tinder" akışı asla durmasın.
+const PREFETCH_THRESHOLD = 2;
 
 const formatPrice = (price: number) =>
     Math.floor(price).toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
-interface FeedbackCardProps {
+interface SwipeCardProps {
     discount: Discount;
     feedback: ProductFeedbackType | undefined;
-    onSaved: (discountId: string, feedback: ProductFeedbackType | null) => void;
+    onAdvance: (discountId: string, feedback: ProductFeedbackType | null) => void;
 }
 
-const FeedbackCard: React.FC<FeedbackCardProps> = ({ discount, feedback, onSaved }) => {
+const SwipeCard: React.FC<SwipeCardProps> = ({ discount, feedback, onAdvance }) => {
     const { showToast } = useToast();
     const [rating, setRating] = useState<'positive' | 'negative' | null>(feedback?.rating ?? null);
     const [reason, setReason] = useState(feedback?.reason || '');
     const [isSaving, setIsSaving] = useState(false);
-    const [showReasonBox, setShowReasonBox] = useState(!!feedback?.reason);
-    const [isSavingReason, setIsSavingReason] = useState(false);
-    const [reasonJustSaved, setReasonJustSaved] = useState(false);
 
-    // Firestore'dan gelen feedback değişirse (ör. sayfa filtre değişince yeniden yüklendiğinde) senkronize et
-    useEffect(() => {
-        setRating(feedback?.rating ?? null);
-        setReason(feedback?.reason || '');
-        setShowReasonBox(!!feedback?.reason);
-    }, [feedback]);
+    // NOT: Kart bileşeni her ürün için parent'ta key={discount.id} ile
+    // yeniden mount ediliyor, bu yüzden yukarıdaki useState başlangıç
+    // değerleri her yeni kart için doğru şekilde sıfırlanıyor. `feedback`
+    // prop'una bağlı bir senkronizasyon effect'i BİLEREK yok — handleRate'in
+    // optimistic güncellemesi parent'ta yeni bir `feedback` referansı
+    // üretiyor; buna bağlı bir effect, kullanıcı sebep kutusuna yazarken
+    // (kart değişmemişken) yazdığını sessizce silerdi.
 
-    const reasonDirty = reason.trim() !== (feedback?.reason || '').trim();
+    const persist = async (nextRating: 'positive' | 'negative') => {
+        await saveProductFeedback(discount, nextRating, reason);
+        return {
+            id: discount.id, discountId: discount.id, rating: nextRating, reason,
+            title: discount.title, brand: discount.brand, category: discount.category,
+            storeName: discount.storeName, oldPrice: discount.oldPrice, newPrice: discount.newPrice,
+            imageUrl: discount.imageUrl, link: discount.link,
+            ratedAt: feedback?.ratedAt as any, updatedAt: undefined,
+        } as ProductFeedbackType;
+    };
 
     const handleRate = async (next: 'positive' | 'negative') => {
         if (isSaving) return;
-        // Aynı butona tekrar basınca değerlendirmeyi kaldır (geri al)
-        if (rating === next) {
-            setIsSaving(true);
-            try {
-                await deleteProductFeedback(discount.id);
-                setRating(null);
-                setReason('');
-                setShowReasonBox(false);
-                onSaved(discount.id, null);
-                showToast('Değerlendirme kaldırıldı.', 'success');
-            } catch {
-                showToast('İşlem başarısız oldu.', 'error');
-            } finally {
-                setIsSaving(false);
-            }
-            return;
-        }
-        setRating(next);
         setIsSaving(true);
         try {
-            await saveProductFeedback(discount, next, reason);
-            onSaved(discount.id, {
-                id: discount.id, discountId: discount.id, rating: next, reason,
-                title: discount.title, brand: discount.brand, category: discount.category,
-                storeName: discount.storeName, oldPrice: discount.oldPrice, newPrice: discount.newPrice,
-                imageUrl: discount.imageUrl, link: discount.link,
-                ratedAt: feedback?.ratedAt as any, updatedAt: undefined,
-            });
+            const saved = await persist(next);
+            setRating(next);
             showToast(next === 'positive' ? '👍 Kaydedildi' : '👎 Kaydedildi', 'success');
+            // Sadece rating'i güncelle; ekrandan çıkmadan (sebep yazma imkanı kalsın)
+            onAdvance('__update__' as any, saved as any);
         } catch {
             showToast('Değerlendirme kaydedilemedi.', 'error');
-            setRating(feedback?.rating ?? null);
         } finally {
             setIsSaving(false);
         }
     };
 
-    const handleReasonSave = async () => {
-        if (!rating || isSavingReason) return;
-        if (reason.trim() === (feedback?.reason || '').trim()) return;
-        setIsSavingReason(true);
+    const handleSaveAndNext = async () => {
+        if (isSaving) return;
+        setIsSaving(true);
         try {
-            await saveProductFeedback(discount, rating, reason);
-            onSaved(discount.id, {
-                id: discount.id, discountId: discount.id, rating, reason,
-                title: discount.title, brand: discount.brand, category: discount.category,
-                storeName: discount.storeName, oldPrice: discount.oldPrice, newPrice: discount.newPrice,
-                imageUrl: discount.imageUrl, link: discount.link,
-                ratedAt: feedback?.ratedAt as any, updatedAt: undefined,
-            });
-            showToast('Sebep kaydedildi.', 'success');
-            setReasonJustSaved(true);
-            setTimeout(() => setReasonJustSaved(false), 2500);
+            if (rating) {
+                const saved = await persist(rating);
+                onAdvance(discount.id, saved);
+            } else {
+                onAdvance(discount.id, feedback ?? null);
+            }
         } catch {
-            showToast('Sebep kaydedilemedi.', 'error');
+            showToast('Kaydedilemedi.', 'error');
         } finally {
-            setIsSavingReason(false);
+            setIsSaving(false);
         }
     };
 
+    const handleSkip = () => {
+        if (isSaving) return;
+        onAdvance(discount.id, feedback ?? null);
+    };
+
+    const handleClear = async () => {
+        if (isSaving) return;
+        setIsSaving(true);
+        try {
+            await deleteProductFeedback(discount.id);
+            setRating(null);
+            setReason('');
+            onAdvance(discount.id, null);
+            showToast('Değerlendirme kaldırıldı.', 'success');
+        } catch {
+            showToast('İşlem başarısız oldu.', 'error');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const discountPct = discount.oldPrice > 0 && discount.newPrice > 0
+        ? Math.round(((discount.oldPrice - discount.newPrice) / discount.oldPrice) * 100)
+        : 0;
+
     return (
-        <div className={`bg-gray-800 rounded-xl overflow-hidden border flex flex-col ${
-            rating === 'positive' ? 'border-green-600/60' : rating === 'negative' ? 'border-red-600/60' : 'border-gray-700'
+        <div className={`w-full max-w-md mx-auto bg-gray-800 rounded-2xl overflow-hidden border-2 transition-colors ${
+            rating === 'positive' ? 'border-green-600/70' : rating === 'negative' ? 'border-red-600/70' : 'border-gray-700'
         }`}>
             <div className="relative aspect-square w-full bg-gray-900">
-                <img src={discount.imageUrl} alt={discount.title} className="absolute inset-0 w-full h-full object-cover" loading="lazy" />
-                {discount.oldPrice > 0 && discount.newPrice > 0 && (
-                    <span className="absolute top-1.5 right-1.5 bg-orange-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
-                        %{Math.round(((discount.oldPrice - discount.newPrice) / discount.oldPrice) * 100)}
+                <img src={discount.imageUrl} alt={discount.title} className="absolute inset-0 w-full h-full object-cover" />
+                {discountPct > 0 && (
+                    <span className="absolute top-3 right-3 bg-orange-500 text-white text-sm font-bold px-2.5 py-1 rounded-lg shadow">
+                        %{discountPct}
+                    </span>
+                )}
+                {rating && (
+                    <span className={`absolute top-3 left-3 text-white text-sm font-bold px-2.5 py-1 rounded-lg shadow ${
+                        rating === 'positive' ? 'bg-green-600' : 'bg-red-600'
+                    }`}>
+                        {rating === 'positive' ? '👍 Beğenildi' : '👎 Beğenilmedi'}
                     </span>
                 )}
             </div>
 
-            <div className="p-2.5 flex flex-col flex-1 gap-1">
+            <div className="p-4 flex flex-col gap-1.5">
                 {(discount.category || discount.brand) && (
-                    <p className="text-[10px] text-orange-400 font-bold uppercase tracking-wide truncate">
-                        {[discount.category, discount.brand].filter(Boolean).join(' · ')}
+                    <p className="text-xs text-orange-400 font-bold uppercase tracking-wide truncate">
+                        {[discount.category, discount.brand, discount.storeName].filter(Boolean).join(' · ')}
                     </p>
                 )}
-                <p className="text-sm font-semibold text-white leading-tight line-clamp-2 flex-1">{discount.title}</p>
-                <div className="flex items-center gap-1.5 mt-1">
-                    {discount.oldPrice > 0 && <span className="text-xs text-gray-500 line-through">{formatPrice(discount.oldPrice)}₺</span>}
-                    <span className="text-sm font-extrabold text-orange-400">{formatPrice(discount.newPrice)}₺</span>
+                <p className="text-base font-semibold text-white leading-snug">{discount.title}</p>
+                <div className="flex items-center gap-2 mt-1">
+                    {discount.oldPrice > 0 && <span className="text-sm text-gray-500 line-through">{formatPrice(discount.oldPrice)}₺</span>}
+                    <span className="text-lg font-extrabold text-orange-400">{formatPrice(discount.newPrice)}₺</span>
                 </div>
             </div>
 
-            <div className="border-t border-gray-700 p-2 flex flex-col gap-2">
-                <div className="flex gap-2">
-                    <button
-                        type="button"
-                        disabled={isSaving}
-                        onClick={() => handleRate('positive')}
-                        className={`flex-1 py-2 rounded-lg text-sm font-bold transition-colors disabled:opacity-50 ${
-                            rating === 'positive' ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-green-900/40 hover:text-green-300'
-                        }`}
-                    >
-                        👍 Beğendim
-                    </button>
+            <div className="border-t border-gray-700 p-4 flex flex-col gap-3">
+                <div className="flex gap-3">
                     <button
                         type="button"
                         disabled={isSaving}
                         onClick={() => handleRate('negative')}
-                        className={`flex-1 py-2 rounded-lg text-sm font-bold transition-colors disabled:opacity-50 ${
+                        className={`flex-1 py-3.5 rounded-xl text-base font-bold transition-colors disabled:opacity-50 ${
                             rating === 'negative' ? 'bg-red-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-red-900/40 hover:text-red-300'
                         }`}
                     >
                         👎 Beğenmedim
                     </button>
-                </div>
-
-                {rating && !showReasonBox && (
                     <button
                         type="button"
-                        onClick={() => setShowReasonBox(true)}
-                        className="text-xs text-gray-500 hover:text-gray-300 text-left"
+                        disabled={isSaving}
+                        onClick={() => handleRate('positive')}
+                        className={`flex-1 py-3.5 rounded-xl text-base font-bold transition-colors disabled:opacity-50 ${
+                            rating === 'positive' ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-green-900/40 hover:text-green-300'
+                        }`}
                     >
-                        + Sebep ekle (opsiyonel)
+                        👍 Beğendim
                     </button>
+                </div>
+
+                {rating && (
+                    <textarea
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                        placeholder={rating === 'positive' ? 'Neden beğendin? (opsiyonel)' : 'Neden yayınlanmamalıydı? (opsiyonel)'}
+                        rows={2}
+                        className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 resize-none focus:outline-none focus:border-blue-500"
+                    />
                 )}
-                {rating && showReasonBox && (
-                    <div className="flex flex-col gap-1">
-                        <textarea
-                            value={reason}
-                            onChange={(e) => { setReason(e.target.value); setReasonJustSaved(false); }}
-                            onBlur={handleReasonSave}
-                            placeholder={rating === 'positive' ? 'Neden beğendin? (opsiyonel)' : 'Neden yayınlanmamalıydı? (opsiyonel)'}
-                            rows={2}
-                            className="w-full bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200 resize-none focus:outline-none focus:border-blue-500"
-                        />
-                        <div className="flex items-center justify-between gap-2">
-                            {reasonJustSaved ? (
-                                <span className="text-[11px] text-green-400 font-semibold">✓ Kaydedildi</span>
-                            ) : <span />}
-                            <button
-                                type="button"
-                                disabled={!reasonDirty || isSavingReason}
-                                onClick={handleReasonSave}
-                                className="text-[11px] font-bold px-2.5 py-1 rounded-md bg-blue-600 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-blue-500 transition-colors"
-                            >
-                                {isSavingReason ? 'Kaydediliyor…' : 'Kaydet'}
-                            </button>
-                        </div>
-                    </div>
-                )}
+
+                <div className="flex items-center gap-2">
+                    {rating && (
+                        <button
+                            type="button"
+                            onClick={handleClear}
+                            disabled={isSaving}
+                            className="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-50 shrink-0"
+                        >
+                            Kaldır
+                        </button>
+                    )}
+                    <div className="flex-1" />
+                    <button
+                        type="button"
+                        onClick={handleSkip}
+                        disabled={isSaving}
+                        className="px-4 py-2.5 rounded-xl text-sm font-bold bg-gray-700 text-gray-300 hover:bg-gray-600 disabled:opacity-50 transition-colors"
+                    >
+                        Atla
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleSaveAndNext}
+                        disabled={isSaving || !rating}
+                        className="px-5 py-2.5 rounded-xl text-sm font-bold bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                        {isSaving ? 'Kaydediliyor…' : 'Kaydet ve İleri →'}
+                    </button>
+                </div>
             </div>
         </div>
     );
@@ -190,16 +206,17 @@ const FeedbackCard: React.FC<FeedbackCardProps> = ({ discount, feedback, onSaved
 const ProductFeedback: React.FC = () => {
     const [discounts, setDiscounts] = useState<Discount[]>([]);
     const [feedbackMap, setFeedbackMap] = useState<Map<string, ProductFeedbackType>>(new Map());
+    const [currentIndex, setCurrentIndex] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
-    const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [isFetchingMore, setIsFetchingMore] = useState(false);
     const [hasMore, setHasMore] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [searchQuery, setSearchQuery] = useState('');
-    const [ratingFilter, setRatingFilter] = useState<RatingFilter>('all');
     const cursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
+    const [sessionPositive, setSessionPositive] = useState(0);
+    const [sessionNegative, setSessionNegative] = useState(0);
 
     // Reklamlar (isAd) yayın sırasına serpiştirilmiş olabilir — bir sayfada
-    // hepsi reklamsa görünürde 0 kart kalmasın diye, boş çıkan sayfayı otomatik
+    // hepsi reklamsa kuyruk boş görünmesin diye, boş çıkan sayfayı otomatik
     // olarak bir sonrakiyle tamamlıyoruz (en fazla 5 tur, sonsuz döngü olmasın).
     const fetchPage = useCallback(async (): Promise<void> => {
         let addedAny = false;
@@ -223,6 +240,9 @@ const ProductFeedback: React.FC = () => {
         setError(null);
         setDiscounts([]);
         setFeedbackMap(new Map());
+        setCurrentIndex(0);
+        setSessionPositive(0);
+        setSessionNegative(0);
         cursorRef.current = null;
         setHasMore(true);
         try {
@@ -234,94 +254,50 @@ const ProductFeedback: React.FC = () => {
         }
     }, [fetchPage]);
 
-    const handleLoadMore = useCallback(async () => {
-        if (isLoadingMore || !hasMore) return;
-        setIsLoadingMore(true);
-        try {
-            await fetchPage();
-        } catch {
-            /* sessizce yut — "Daha Fazla Yükle" butonu tekrar denenebilir */
-        } finally {
-            setIsLoadingMore(false);
-        }
-    }, [fetchPage, isLoadingMore, hasMore]);
-
     useEffect(() => { load(); }, [load]);
 
-    const handleSaved = useCallback((discountId: string, feedback: ProductFeedbackType | null) => {
+    // Kuyrukta az ürün kalınca sessizce arkadan yenisini çek — "Tinder" akışı
+    // kullanıcı elle bir şey yapmadan devam etsin.
+    useEffect(() => {
+        if (isLoading || isFetchingMore || !hasMore) return;
+        if (discounts.length - currentIndex > PREFETCH_THRESHOLD) return;
+        setIsFetchingMore(true);
+        fetchPage().finally(() => setIsFetchingMore(false));
+    }, [currentIndex, discounts.length, hasMore, isLoading, isFetchingMore, fetchPage]);
+
+    const handleAdvance = useCallback((discountId: string, feedback: ProductFeedbackType | null) => {
+        const isUpdateOnly = discountId === '__update__';
         setFeedbackMap(prev => {
             const next = new Map(prev);
-            if (feedback) next.set(discountId, feedback);
-            else next.delete(discountId);
+            const id = isUpdateOnly ? feedback?.discountId : discountId;
+            if (id) {
+                if (feedback) next.set(id, feedback); else next.delete(id);
+            }
             return next;
         });
+        if (isUpdateOnly) return; // sadece rating güncellendi, kart değişmedi (kullanıcı sebep yazabilsin)
+        if (feedback?.rating === 'positive') setSessionPositive(v => v + 1);
+        else if (feedback?.rating === 'negative') setSessionNegative(v => v + 1);
+        setCurrentIndex(i => i + 1);
     }, []);
 
-    const filtered = useMemo(() => {
-        let result = discounts;
-        switch (ratingFilter) {
-            case 'rated':    result = result.filter(d => feedbackMap.has(d.id)); break;
-            case 'unrated':  result = result.filter(d => !feedbackMap.has(d.id)); break;
-            case 'positive': result = result.filter(d => feedbackMap.get(d.id)?.rating === 'positive'); break;
-            case 'negative': result = result.filter(d => feedbackMap.get(d.id)?.rating === 'negative'); break;
-        }
-        if (searchQuery.trim()) {
-            const q = searchQuery.toLowerCase().trim();
-            result = result.filter(d =>
-                d.title?.toLowerCase().includes(q) ||
-                d.brand?.toLowerCase().includes(q) ||
-                d.category?.toLowerCase().includes(q)
-            );
-        }
-        return result;
-    }, [discounts, feedbackMap, ratingFilter, searchQuery]);
-
-    const ratedCount = discounts.filter(d => feedbackMap.has(d.id)).length;
-    const positiveCount = discounts.filter(d => feedbackMap.get(d.id)?.rating === 'positive').length;
-    const negativeCount = discounts.filter(d => feedbackMap.get(d.id)?.rating === 'negative').length;
-
-    const filterButtons: { id: RatingFilter; label: string; count: number }[] = [
-        { id: 'all',      label: 'Tümü',          count: discounts.length },
-        { id: 'unrated',  label: 'Değerlendirilmemiş', count: discounts.length - ratedCount },
-        { id: 'rated',    label: 'Değerlendirilmiş',   count: ratedCount },
-        { id: 'positive', label: '👍 Beğenilen',   count: positiveCount },
-        { id: 'negative', label: '👎 Beğenilmeyen', count: negativeCount },
-    ];
+    const current = discounts[currentIndex];
+    const totalRatedThisSession = sessionPositive + sessionNegative;
 
     return (
         <div>
-            <div className="mb-6">
+            <div className="mb-6 text-center">
                 <h2 className="text-3xl font-bold text-white">Ürün Değerlendirme</h2>
                 <p className="text-sm text-gray-400 mt-1">
-                    Yayınlanan ürünleri beğen/beğenme — bu değerlendirmeler, gelecekte AI'nın benzer ürünleri
-                    değerlendirmesi için eğitim verisi olarak kullanılacak.
+                    Yayınlanan ürünleri tek tek beğen/beğenme — bu değerlendirmeler, gelecekte AI'nın benzer
+                    ürünleri değerlendirmesi için eğitim verisi olarak kullanılacak.
                 </p>
-                <p className="text-xs text-gray-500 mt-1">
-                    En yeniden eskiye, {PAGE_SIZE}'lı gruplar halinde yükleniyor. Filtreler/sayaçlar sadece o ana kadar yüklenmiş ürünleri kapsar.
-                </p>
+                {totalRatedThisSession > 0 && (
+                    <p className="text-xs text-gray-500 mt-1">
+                        Bu oturumda: 👍 {sessionPositive} · 👎 {sessionNegative}
+                    </p>
+                )}
             </div>
-
-            <div className="flex flex-wrap gap-2 mb-4">
-                {filterButtons.map(btn => (
-                    <button
-                        key={btn.id}
-                        onClick={() => setRatingFilter(btn.id)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
-                            ratingFilter === btn.id ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                        }`}
-                    >
-                        {btn.label} ({btn.count})
-                    </button>
-                ))}
-            </div>
-
-            <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Ürün, marka veya kategori ara..."
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 mb-6 focus:outline-none focus:border-blue-500"
-            />
 
             {isLoading ? (
                 <div className="flex justify-center py-24">
@@ -329,29 +305,24 @@ const ProductFeedback: React.FC = () => {
                 </div>
             ) : error ? (
                 <p className="text-red-400 text-center py-12">{error}</p>
-            ) : filtered.length === 0 ? (
-                <p className="text-gray-500 text-center py-12">Bu filtreye uyan ürün yok.</p>
+            ) : current ? (
+                <SwipeCard key={current.id} discount={current} feedback={feedbackMap.get(current.id)} onAdvance={handleAdvance} />
+            ) : hasMore || isFetchingMore ? (
+                <div className="flex justify-center py-24">
+                    <div className="w-6 h-6 border-2 border-gray-600 border-t-blue-500 rounded-full animate-spin" />
+                </div>
             ) : (
-                <>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-                        {filtered.map(d => (
-                            <FeedbackCard key={d.id} discount={d} feedback={feedbackMap.get(d.id)} onSaved={handleSaved} />
-                        ))}
-                    </div>
-
-                    {hasMore && (
-                        <div className="flex justify-center mt-6">
-                            <button
-                                type="button"
-                                onClick={handleLoadMore}
-                                disabled={isLoadingMore}
-                                className="px-5 py-2.5 rounded-lg text-sm font-bold bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-50 transition-colors"
-                            >
-                                {isLoadingMore ? 'Yükleniyor…' : `Daha Fazla Yükle (${PAGE_SIZE})`}
-                            </button>
-                        </div>
-                    )}
-                </>
+                <div className="text-center py-24">
+                    <p className="text-4xl mb-3">🎉</p>
+                    <p className="text-gray-300 font-semibold">Yayınlanan tüm ürünleri değerlendirdin.</p>
+                    <button
+                        type="button"
+                        onClick={load}
+                        className="mt-4 px-4 py-2 rounded-lg text-sm font-bold bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors"
+                    >
+                        Baştan Başla
+                    </button>
+                </div>
             )}
         </div>
     );
