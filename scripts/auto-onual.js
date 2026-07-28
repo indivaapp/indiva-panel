@@ -244,7 +244,14 @@ async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, me
             config: {
                 // Not: SDK'da v1alpha/v1beta farkına göre response_format değişebilir
                 // Ama standart generateContent için text parse etmek daha güvenlidir
-                temperature: 0.2
+                temperature: 0.2,
+                // KRİTİK: maxOutputTokens/thinkingBudget hiç sınırlanmamıştı — bu basit
+                // (45-60 kelimelik açıklama üreten) görev için Gemini 2.5 Flash'ın
+                // varsayılan "thinking" modu bazen on binlerce gizli token harcıyordu
+                // (görülen bir çağrıda ~59.000 output token). Bu görev derin akıl
+                // yürütme gerektirmiyor, thinking kapatılıp çıktı sınırlanıyor.
+                maxOutputTokens: 700,
+                thinkingConfig: { thinkingBudget: 0 },
             }
         });
         await trackGeminiUsage(db, response, MODEL, 'auto-onual:ai-sentiment');
@@ -452,7 +459,9 @@ Her kart için çıkart:
 SADECE JSON array döndür, kesinlikle başka metin yok. Maks 20 ürün.
 Örnek: [{"id":"126081","title":"Protex Sabun","newPrice":52,"imageUrl":"https://m.media-amazon.com/...","storeName":"Amazon","productUrl":"https://www.onual.com/urun/...","storeUrl":"https://www.amazon.com.tr/dp/..."}]` }]
             }],
-            config: { tools: [{ urlContext: {} }], temperature: 0 },
+            // thinkingBudget: 0 — bu da salt veri çıkarma görevi, derin akıl
+            // yürütmeye ihtiyacı yok (bkz. generateAISentiments'taki aynı düzeltme).
+            config: { tools: [{ urlContext: {} }], temperature: 0, maxOutputTokens: 3000, thinkingConfig: { thinkingBudget: 0 } },
         });
         await trackGeminiUsage(db, response, 'gemini-2.5-flash', 'auto-onual:cloudflare-bypass');
 
@@ -700,7 +709,24 @@ async function filterExistingIds(db, docIds) {
 
 // ─── Main Pipeline ───────────────────────────────────────────────────────────
 
+// Self-chain her run bittiğinde hemen bir sonrakini tetikliyordu — "yeni ürün
+// yok" durumunda bir run birkaç saniyede bitip zincirin ~40-60sn'de bir
+// dönmesine yol açıyordu (auto-indirimradar.js'deki 5dk'lık tempo sınırlamasının
+// eşdeğeri burada yoktu). Bu hem gereksiz GitHub Actions/Firestore okuma
+// tüketiyor hem de onual.com + Jina üzerindeki 429 baskısını artırıyordu.
+const TARGET_WINDOW_MS = 290_000; // 290s — auto-indirimradar.js ile aynı tempo
+
+async function padToTargetWindow(mainStartTime) {
+    const elapsed = Date.now() - mainStartTime;
+    const remaining = TARGET_WINDOW_MS - elapsed;
+    if (remaining > 0) {
+        console.log(`⏳ Pencereyi tamamlamak için ${Math.round(remaining / 1000)}sn bekleniyor...`);
+        await sleep(remaining);
+    }
+}
+
 async function main() {
+    const mainStartTime = Date.now();
     console.log('\n🚀 INDIVA Auto-Onual Pipeline Başlatıldı');
     console.log('═══════════════════════════════════════════');
     console.log(`⏰ ${new Date().toLocaleString('tr-TR')}\n`);
@@ -742,6 +768,7 @@ async function main() {
 
     if (toProcess.length === 0) {
         console.log('✅ İşlenecek yeni ürün yok. Pipeline tamamlandı.');
+        await padToTargetWindow(mainStartTime);
         return;
     }
 
@@ -973,6 +1000,8 @@ async function main() {
     console.log(`   ❌ Başarısız: ${failCount}`);
     console.log(`   ⏰ ${new Date().toLocaleString('tr-TR')}`);
     console.log('═══════════════════════════════════════════\n');
+
+    await padToTargetWindow(mainStartTime);
 }
 
 main().catch(async (err) => {
