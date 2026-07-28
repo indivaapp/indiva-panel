@@ -20,6 +20,7 @@ import { runQualityGate } from './qualityGate.js';
 import { maybeNotifyHighScoreDeal } from './notifyGate.js';
 import { maybeQueueSocialContent } from './socialContentGate.js';
 import { trackGeminiUsage, isDailyBudgetExceeded } from './aiUsageTracker.js';
+import { loadIdCache, isCached, markCached, saveIdCache } from './idCache.js';
 
 
 
@@ -720,17 +721,11 @@ async function main() {
     // Daha önce işlediğimiz ID'leri yerel bir dosyada tutarak Firebase Read kotasını koruyoruz.
     const CACHE_DIR = path.join(ROOT_DIR, 'data');
     const CACHE_FILE = path.join(CACHE_DIR, 'processed_onual_ids.json');
-    if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR);
-
-    let idCache = { ids: {}, lastUpdate: new Date().toISOString() };
-    if (fs.existsSync(CACHE_FILE)) {
-        try {
-            idCache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
-            // Cache 7 günden eskiyse temizle
-            const cacheAgeDays = (new Date() - new Date(idCache.lastUpdate)) / (1000 * 60 * 60 * 24);
-            if (cacheAgeDays > 7) idCache = { ids: {}, lastUpdate: new Date().toISOString() };
-        } catch (e) { console.error("Cache okuma hatası:", e.message); }
-    }
+    // TTL, discounts'un gerçek ömrüyle (bkz. expiresAt: 12h, cleanup-discounts.js)
+    // AYNI — bir ürün uygulamadan silindiğinde, kaynakta hâlâ varsa yeniden
+    // değerlendirilebilsin diye önbellek damgası da o zamana kadar geçerli olmalı.
+    const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+    let idCache = loadIdCache(CACHE_FILE, CACHE_TTL_MS);
 
     // YENİ MANTIK: onual.com en yeni ürünleri sayfanın en başına koyar (ID'leri küçük olsa bile).
     // O yüzden ID'ye göre sıralamak yerine, sayfadaki orijinal sırayı koruyoruz (en baştakiler en yeni).
@@ -749,7 +744,7 @@ async function main() {
     let failCount = 0;
 
     // QUOTA SAVING: Önce yerel cache ile ele
-    const uncachedProducts = toProcess.filter(p => !idCache.ids[`onual_${p.id}`]);
+    const uncachedProducts = toProcess.filter(p => !isCached(idCache, `onual_${p.id}`, CACHE_TTL_MS));
     const skippedLocal = toProcess.length - uncachedProducts.length;
     if (skippedLocal > 0) console.log(`   ⏭️  ${skippedLocal} ürün yerel cache'den dolayı elendi.`);
 
@@ -759,7 +754,7 @@ async function main() {
 
     if (existingIdsInDb.size > 0) {
         console.log(`   ⏭️  ${existingIdsInDb.size} ürün Firebase'de zaten var, cache'e alınıyor.`);
-        existingIdsInDb.forEach(id => idCache.ids[id] = true);
+        existingIdsInDb.forEach(id => markCached(idCache, id));
     }
 
     // Gerçekten işlenecekler: Ne cache'de ne de DB'de olanlar
@@ -794,7 +789,7 @@ async function main() {
 
             if (details.isExpired) {
                 console.log(`   ⏭️  İndirim sona ermiş, atlanıyor: ${product.id}`);
-                idCache.ids[docId] = true;
+                markCached(idCache, docId);
                 continue;
             }
 
@@ -858,7 +853,7 @@ async function main() {
             const verdict = gateMap.get(item.docId);
             if (!verdict || !verdict.publish) {
                 console.log(`   🚫 Reddedildi (${item.docId}): ${verdict?.reason || 'bilinmeyen'}`);
-                idCache.ids[item.docId] = true; // tekrar tekrar değerlendirme
+                markCached(idCache, item.docId); // tekrar tekrar değerlendirme
                 rejectedCount++;
                 continue;
             }
@@ -930,7 +925,7 @@ async function main() {
                     oldPrice,
                 }, 'auto-onual:social-caption').catch(() => {});
 
-                idCache.ids[docId] = true;
+                markCached(idCache, docId);
                 successCount++;
             } catch (itemErr) {
                 console.error(`   ❌ Ürün yazma hatası: ${itemErr.message}`);
@@ -941,9 +936,8 @@ async function main() {
 
     // Cache'i kaydet
     try {
-        idCache.lastUpdate = new Date().toISOString();
-        fs.writeFileSync(CACHE_FILE, JSON.stringify(idCache, null, 2));
-        console.log(`💾 ID Cache güncellendi (${Object.keys(idCache.ids).length} ürün)`);
+        saveIdCache(CACHE_FILE, CACHE_DIR, idCache);
+        console.log(`💾 ID Cache güncellendi (${Object.keys(idCache).length} ürün)`);
     } catch (e) { console.error("Cache kaydetme hatası:", e.message); }
 
     // ── 4. Özet ───────────────────────────────────────────────────────────

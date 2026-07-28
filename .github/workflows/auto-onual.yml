@@ -1,19 +1,29 @@
 name: Auto Onual Deal Fetcher
 
-# TAMAMEN DURDURULDU (2026-07-13) — kullanıcı kararı: onual.com'dan yeterli/doğru
-# veri çekilemiyor, indirimradar zaten ihtiyacı karşılıyor. Otomatik/zincirleme
-# TETİKLEME YOK — schedule kapalı, kendi kendini tetikleyen adım tamamen
-# kaldırıldı (aşağıya bakın). Bu workflow SADECE elle "Run workflow" ile
-# (GitHub Actions sekmesinden) çalıştırılabilir, hiçbir otomatik run/komut
-# göndermez, Firestore okuma tüketmez. İleride tekrar gerekirse:
-# 1) schedule/self-chain adımını geri ekleyin, 2) ya da elle tetikleyin.
+# YENİDEN AKTİF (2026-07-28) — önceki durdurma (2026-07-13) sebebi
+# onual.com'dan yeterli/doğru veri çekilememesi değil, auto-indirimradar.js
+# ile paylaşılan bir önbellek hatasıydı (idCache.js commit mesajına bakın):
+# "zaten işlendi" damgası hiç süresi dolmuyordu, discounts ise ~12 saatte
+# siliniyordu — bu yüzden site hâlâ ürün sunsa da pipeline'lar giderek daha
+# az yeni ürün buluyordu. Düzeltildi, indirimradar'daki kanıtlanmış
+# self-chain deseniyle tekrar aktif ediliyor.
 on:
+  schedule:
+    - cron: '*/30 * * * *'  # Yedek: zincir kırılırsa 30 dk'da bir devreye girer
   workflow_dispatch:
+
+# Aynı anda sadece bir run çalışsın; yenisi gelirse beklesin (iptal etmesin)
+concurrency:
+  group: auto-onual-chain
+  cancel-in-progress: false
 
 jobs:
   fetch-and-publish:
     runs-on: ubuntu-latest
     timeout-minutes: 12
+
+    permissions:
+      actions: write  # workflow_dispatch tetiklemek için
 
     steps:
       - name: Checkout
@@ -32,10 +42,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: data/processed_onual_ids.json
-          key: onual-ids-v2-${{ github.run_number }}
+          key: onual-ids-v3-${{ github.run_number }}
           restore-keys: |
-            onual-ids-v2-
-            onual-ids-v1-
+            onual-ids-v3-
 
       - name: Run Auto-Onual Pipeline
         env:
@@ -44,5 +53,26 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           AI_ENABLED: ${{ secrets.AI_ENABLED || 'false' }}
         run: node scripts/auto-onual.js
-        # NOT: Kendi kendini tetikleyen adım kasıtlı olarak kaldırıldı — bu
-        # workflow artık otomatik zincirlenmiyor, hiçbir komut/istek göndermiyor.
+
+      # auto-indirimradar.yml ile aynı desen: art arda 3 run başarısız olursa
+      # (sistemik bir hata var demektir) checkChainHealth.js zinciri durdurur,
+      # 30 dk'lık yedek schedule cron'u yine de devrede kalır.
+      - name: Sonraki çalışmayı planla
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          sleep 10
+          if node scripts/checkChainHealth.js auto-onual.yml 3; then
+            curl -s -o /dev/null -w "%{http_code}" -X POST \
+              -H "Authorization: token ${{ github.token }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/auto-onual.yml/dispatches" \
+              -d '{"ref":"main"}' \
+            | grep -q "^204$" \
+              && echo "✅ Sonraki run planlandı." \
+              || echo "⚠️ Dispatch başarısız (yedek schedule devralır)."
+          else
+            echo "⛔ Zincir art arda hatalar nedeniyle durduruldu, sonraki run tetiklenmedi (30 dk'lık yedek schedule devam eder)."
+          fi

@@ -29,6 +29,7 @@ import { maybeQueueSocialContent } from './socialContentGate.js';
 import { logPipelineRun } from './pipelineRunLogger.js';
 import { isDailyBudgetExceeded } from './aiUsageTracker.js';
 import { buildEmbeddingText, getEmbedding, judgeBySimilarity, loadFeedbackEmbeddings } from './embeddingUtil.js';
+import { loadIdCache, isCached, markCached, saveIdCache } from './idCache.js';
 
 // ─── .env Yükle (lokal geliştirme) ─────────────────────────────────────────
 const ROOT_DIR = process.cwd();
@@ -259,26 +260,21 @@ async function main() {
     // yapmasını (günde binlerce gereksiz okuma) neredeyse sıfıra indirir.
     const CACHE_DIR = path.join(ROOT_DIR, 'data');
     const CACHE_FILE = path.join(CACHE_DIR, 'processed_indirimradar_ids.json');
-    if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-
-    let idCache = { ids: {}, lastUpdate: new Date().toISOString() };
-    if (fs.existsSync(CACHE_FILE)) {
-        try {
-            idCache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
-            const cacheAgeDays = (new Date() - new Date(idCache.lastUpdate)) / (1000 * 60 * 60 * 24);
-            if (cacheAgeDays > 7) idCache = { ids: {}, lastUpdate: new Date().toISOString() };
-        } catch (e) { console.error('Cache okuma hatası:', e.message); }
-    }
+    // TTL, discounts'un gerçek ömrüyle (bkz. expiresAt: 24h, cleanup-discounts.js)
+    // AYNI — bir ürün uygulamadan silindiğinde, kaynakta hâlâ varsa yeniden
+    // değerlendirilebilsin diye önbellek damgası da o zamana kadar geçerli olmalı.
+    const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+    let idCache = loadIdCache(CACHE_FILE, CACHE_TTL_MS);
 
     const withIds = withDiscount.map(p => ({ ...p, _docId: `indirimradar_${p.raw.id}` }));
-    const uncachedIds = withIds.filter(p => !idCache.ids[p._docId]);
+    const uncachedIds = withIds.filter(p => !isCached(idCache, p._docId, CACHE_TTL_MS));
     const skippedLocal = withIds.length - uncachedIds.length;
     if (skippedLocal > 0) console.log(`   ⏭️  ${skippedLocal} ürün yerel cache'den dolayı elendi (Firestore okunmadı)`);
 
     const existingInDb = await filterExistingIds(db, uncachedIds.map(p => p._docId));
     if (existingInDb.size > 0) {
         console.log(`   ⏭️  ${existingInDb.size} ürün Firebase'de zaten var, cache'e alınıyor`);
-        existingInDb.forEach(id => { idCache.ids[id] = true; });
+        existingInDb.forEach(id => markCached(idCache, id));
     }
 
     const dedupedList = uncachedIds.filter(p => !existingInDb.has(p._docId));
@@ -288,8 +284,7 @@ async function main() {
     const finalList = dedupedList.slice(0, MAX_NEW_PRODUCTS);
     console.log(`   🆕 İşlenecek net yeni ürün: ${finalList.length}${dedupedList.length > finalList.length ? ` (${dedupedList.length} yeni üründen ilk ${MAX_NEW_PRODUCTS} tanesi)` : ''}\n`);
 
-    idCache.lastUpdate = new Date().toISOString();
-    fs.writeFileSync(CACHE_FILE, JSON.stringify(idCache, null, 2));
+    saveIdCache(CACHE_FILE, CACHE_DIR, idCache);
 
     if (finalList.length === 0) {
         console.log('✅ Yeni ürün yok. Pipeline tamamlandı.');
@@ -399,7 +394,7 @@ async function main() {
             };
 
             await db.collection('discounts').doc(item._docId).set(discountData);
-            idCache.ids[item._docId] = true;
+            markCached(idCache, item._docId);
             console.log(`   🔥 Kaydedildi ✅ (${item._docId}): ${title.substring(0, 50)} | ${item.oldPrice} TL -> ${item.newPrice} TL (%${item.discountPct})`);
 
             await maybeNotifyHighScoreDeal(db, getMessaging(), {
@@ -434,8 +429,7 @@ async function main() {
         }
     }
 
-    idCache.lastUpdate = new Date().toISOString();
-    fs.writeFileSync(CACHE_FILE, JSON.stringify(idCache, null, 2));
+    saveIdCache(CACHE_FILE, CACHE_DIR, idCache);
 
     console.log('\n═══════════════════════════════════════════');
     console.log('📊 INDIRIMRADAR PIPELINE TAMAMLANDI');
