@@ -53,7 +53,13 @@ const ONUAL_URL = 'https://www.onual.com';
 // olmayan GERCEKTEN yeni urunler icin calisiyor, bu limit sadece "aday havuzu"nu
 // buyutuyor - maliyeti artirmiyor.
 const MAX_NEW_PRODUCTS = 50;
-const REQUEST_DELAY_MS = 1000; // İstekler arası bekleme (ms)
+// 1000 -> 3000: yeniden aktif edilince (2026-07-28) 50 ürünlük bir turda
+// onual.com'un DOĞRUDAN çekimi VE Jina Reader fallback'i (ücretsiz r.jina.ai,
+// düşük hız limiti) neredeyse tüm isteklerde HTTP 429 dönüyordu — istekler
+// arası boşluk yetersizdi. Bunu hafifletmek için 3 katına çıkarıldı; hâlâ
+// çok sık 429 görülürse daha da artırılması ya da MAX_NEW_PRODUCTS'ın
+// düşürülmesi gerekebilir.
+const REQUEST_DELAY_MS = 3000; // İstekler arası bekleme (ms)
 
 // AI Config
 // flash-lite'in bu projede gunluk 20 istek gibi asiri dusuk (muhtemelen throttle
@@ -898,18 +904,22 @@ async function main() {
                     aiFomoScore: aiData.aiFomoScore || 5,
                     expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000),
                     priceHistory: [{ price: newPrice, at: Timestamp.now() }],
-                    qualityScore: verdict.score,
+                    // NOT: runQualityGate artık AI puanlaması yapmıyor (kullanıcı isteğiyle
+                    // kaldırıldı, bkz. qualityGate.js), verdict.score hiç dönmüyor. Sabit nötr
+                    // puan — auto-indirimradar.js'deki aynı yaklaşım — bildirim/sosyal-içerik
+                    // eşiklerinin (9+) kırılmaması için.
+                    qualityScore: verdict.score ?? 6,
                     normalizedLink: verdict.normalizedLink || '',
                 };
 
                 await docRef.set(discountData);
-                console.log(`   🔥 Firebase'e kaydedildi ✅ (ID: ${docId}) - Kalite: ${verdict.score}/10, FOMO: ${discountData.aiFomoScore}`);
+                console.log(`   🔥 Firebase'e kaydedildi ✅ (ID: ${docId}) - Kalite: ${discountData.qualityScore}/10, FOMO: ${discountData.aiFomoScore}`);
 
                 await maybeNotifyHighScoreDeal(db, getMessaging(), {
                     docId,
                     title: discountData.title,
                     imageUrl: discountData.imageUrl,
-                    score: verdict.score,
+                    score: discountData.qualityScore,
                     newPrice,
                     oldPrice,
                 }).catch(() => {});
@@ -920,7 +930,7 @@ async function main() {
                     imageUrl: discountData.imageUrl,
                     category: discountData.category,
                     storeName: discountData.storeName,
-                    score: verdict.score,
+                    score: discountData.qualityScore,
                     newPrice,
                     oldPrice,
                 }, 'auto-onual:social-caption').catch(() => {});
