@@ -710,7 +710,7 @@ async function main() {
     const db = initFirebase();
     const budgetExceeded = await isDailyBudgetExceeded(db);
     if (budgetExceeded) console.warn('💰 Günlük AI bütçe tavanı aşıldı — bu çalıştırmada AI zenginleştirme atlanıyor.');
-    const aiKey = budgetExceeded ? null : getGeminiKey();
+    let aiKey = budgetExceeded ? null : getGeminiKey();
     const qualityGateKey = budgetExceeded ? null : getQualityGateKey();
     if (aiKey) {
         console.log('✅ Servisler hazır. (AI açıklama üretimi: AÇIK)');
@@ -855,7 +855,22 @@ async function main() {
 
         console.log(`\n🛡️  Kalite kapısı: ${gateResults.filter(r => r.publish).length}/${gateResults.length} onaylandı\n`);
 
+        // NOT: Bütçe tavanı önceden sadece run BAŞLARKEN bir kez kontrol
+        // ediliyordu — tek bir run, işlediği onlarca üründen dolayı tavanı
+        // ORTASINDA aşabiliyor ama yine de sonuna kadar (pahalı AI çağrılarına
+        // devam ederek) çalışıyordu. Şimdi her birkaç üründe bir tekrar
+        // kontrol edilip aşılırsa bu run'ın geri kalanında AI çağrısı
+        // kapatılıyor (keyword tabanlı devam eder, ek maliyet oluşmaz).
+        const BUDGET_RECHECK_EVERY = 5;
+        let itemIndex = 0;
+
         for (const item of prepared) {
+            itemIndex++;
+            if (aiKey && itemIndex % BUDGET_RECHECK_EVERY === 0 && await isDailyBudgetExceeded(db)) {
+                console.warn('💰 Günlük AI bütçe tavanı bu run SIRASINDA aşıldı — kalan ürünler için AI çağrısı kapatılıyor.');
+                aiKey = null;
+            }
+
             const verdict = gateMap.get(item.docId);
             if (!verdict || !verdict.publish) {
                 console.log(`   🚫 Reddedildi (${item.docId}): ${verdict?.reason || 'bilinmeyen'}`);
