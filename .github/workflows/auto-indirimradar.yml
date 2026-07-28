@@ -13,7 +13,11 @@ concurrency:
 jobs:
   fetch-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 16
+    # 16 -> 22: önbellek TTL düzeltmesi (bkz. idCache.js) sonrası birikmiş
+    # stok (haftalar/aylarca "yasaklı" kalmış ürünler) tek seferde ortaya
+    # çıktı — bir run'da 738 yeni ürün bulunup 250'si işlenirken ~14 dakika
+    # sürdü. Stok eriyene kadar bu geçici olarak yüksek kalabilir.
+    timeout-minutes: 22
 
     permissions:
       actions: write  # workflow_dispatch tetiklemek için
