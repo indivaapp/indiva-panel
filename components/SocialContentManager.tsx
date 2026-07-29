@@ -2986,10 +2986,9 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                         </div>
                                         <button
                                             onClick={() => handleManualCreate(d)}
-                                            disabled={creatingId === d.id}
                                             className="shrink-0 text-xs font-bold px-3 py-2 rounded-lg bg-gradient-to-r from-orange-600 to-red-600 disabled:opacity-40 text-white transition-all active:scale-95"
                                         >
-                                            {creatingId === d.id ? 'Oluşturuluyor…' : 'Oluştur'}
+                                            Oluştur
                                         </button>
                                     </div>
                                 ))}
@@ -3327,7 +3326,7 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                                 {multiSelectIds.size} ürün seçildi{multiSelectIds.size === 2 ? ' (1 veya 3 olmalı)' : ''}
                                             </p>
                                             <button
-                                                onClick={multiGenerateContentFirst ? handleGenerateMultiContentOnly : handleCreateMultiVideo}
+                                                onClick={multiGenerateContentFirst ? () => handleGenerateMultiContentOnly() : handleCreateMultiVideo}
                                                 disabled={multiSelectIds.size !== 1 && multiSelectIds.size !== 3}
                                                 className="shrink-0 px-4 py-2 text-xs font-semibold bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
                                             >
