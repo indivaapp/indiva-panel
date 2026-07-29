@@ -121,6 +121,54 @@ function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
     return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
 }
 
+// Ürün kartının arkasındaki bulanık "cover" zemin (bkz. renderDealImage) —
+// ctx.filter = 'blur(45px)...' Canvas 2D'nin en pahalı işlemlerinden biri.
+// Video kaydında renderDealImage saniyede VIDEO_FPS kez (giriş animasyonu
+// boyunca HER karede) çağrılıyor ve bu blur, ürün görseli/kart boyutu
+// SABİT olduğu için her seferinde birebir aynı sonucu üretiyordu — asıl
+// FPS düşüşü/takılmanın kaynağı buydu. Artık görsel başına BİR KEZ
+// hesaplanıp (kart konumuna göre önceden clip'lenmiş halde) önbelleğe
+// alınıyor, sonraki her karede sadece ucuz bir drawImage kopyası yapılıyor.
+// Anahtar sadece görsel değil, kart geometrisini de içeriyor — bkz.
+// drawBlurCoverFill'deki aynı gerekçe (aynı görsel farklı bir boyutta
+// tekrar kullanılırsa yanlış önbelleğe düşmesin diye).
+const blurredCoverCache = new WeakMap<HTMLImageElement, Map<string, HTMLCanvasElement>>();
+function getBlurredCoverLayer(
+    img: HTMLImageElement,
+    cardX: number, cardY: number, cardW: number, cardH: number,
+): HTMLCanvasElement {
+    const key = `${cardX},${cardY},${cardW},${cardH}`;
+    let byGeometry = blurredCoverCache.get(img);
+    if (!byGeometry) {
+        byGeometry = new Map();
+        blurredCoverCache.set(img, byGeometry);
+    }
+    const cached = byGeometry.get(key);
+    if (cached) return cached;
+
+    const off = document.createElement('canvas');
+    off.width = CANVAS_W;
+    off.height = CANVAS_H;
+    const octx = off.getContext('2d')!;
+    octx.save();
+    drawRoundedRect(octx, cardX + 10, cardY + 10, cardW - 20, cardH - 20, 36);
+    octx.clip();
+    const coverScale = Math.max(cardW / img.width, cardH / img.height);
+    const coverW = img.width * coverScale, coverH = img.height * coverScale;
+    octx.filter = 'blur(45px) brightness(0.75) saturate(1.15)';
+    octx.drawImage(
+        img,
+        cardX + (cardW - coverW) / 2,
+        cardY + (cardH - coverH) / 2,
+        coverW, coverH,
+    );
+    octx.filter = 'none';
+    octx.restore();
+
+    byGeometry.set(key, off);
+    return off;
+}
+
 function blobToBase64(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -380,6 +428,24 @@ function pickVitrinPalette(seed: string): [string, string, string] {
     return VITRIN_BG_PALETTES[hash % VITRIN_BG_PALETTES.length];
 }
 
+// renderDealImage'ın her karesinde (progress'ten BAĞIMSIZ, sadece palete göre)
+// koşulsuz yeniden çiziliyordu — gradyan + blur'lu ışık lekeleri + % işaretleri
+// + parıltılar birebir aynı sonucu üretiyordu. Palet başına (palet sayısı
+// sabit/az) bir kez render edip önbelleğe alıyoruz, video kaydında her kare
+// için ucuz bir drawImage yeterli oluyor.
+const backgroundLayerCache = new Map<string, HTMLCanvasElement>();
+function getBackgroundLayer(palette: [string, string, string]): HTMLCanvasElement {
+    const key = palette.join(',');
+    const cached = backgroundLayerCache.get(key);
+    if (cached) return cached;
+    const off = document.createElement('canvas');
+    off.width = CANVAS_W;
+    off.height = CANVAS_H;
+    drawBackground(off.getContext('2d')!, palette);
+    backgroundLayerCache.set(key, off);
+    return off;
+}
+
 // ── Arka plan: gradyan + ışık lekeleri + % işaretleri + parıltılar ──────────
 // renderDealImage VE promo sayfası (renderPromoFrame) ortak kullanır — marka
 // kimliği (İNDİVA renkleri, "indirim çılgınlığı" dokusu) her yerde aynı kalsın.
@@ -616,7 +682,7 @@ async function renderDealImage(
     const ctaP        = easeOutBack(segProgress(progress, 0.380, 0.470));
 
     const palette = pickPalette(item.discountId || item.id, item.category);
-    drawBackground(ctx, palette);
+    ctx.drawImage(getBackgroundLayer(palette), 0, 0);
 
     // ── Ürün kartı: beyaz zemin + altın çerçeve (hafif zıplayarak büyür) ─────
     // NOT: cardH 860'tan 740'a küçültüldü — geri kalan her şey (uyarı, başlık,
@@ -650,20 +716,9 @@ async function renderDealImage(
             // kare/dikey değildir) kalan boşluk çıplak beyazdı — Instagram
             // Stories'in yaptığı gibi, aynı görselin bulanık "cover" halini
             // arkaya doldurup boş/amatör görünümü ortadan kaldırıyoruz.
-            ctx.save();
-            drawRoundedRect(ctx, cardX + 10, cardY + 10, cardW - 20, cardH - 20, 36);
-            ctx.clip();
-            const coverScale = Math.max(cardW / loadedImg.width, cardH / loadedImg.height);
-            const coverW = loadedImg.width * coverScale, coverH = loadedImg.height * coverScale;
-            ctx.filter = 'blur(45px) brightness(0.75) saturate(1.15)';
-            ctx.drawImage(
-                loadedImg,
-                cardX + (cardW - coverW) / 2,
-                cardY + (cardH - coverH) / 2,
-                coverW, coverH,
-            );
-            ctx.filter = 'none';
-            ctx.restore();
+            // (Blur önceden hesaplanıp önbelleğe alınıyor — bkz. getBlurredCoverLayer.)
+            const coverLayer = getBlurredCoverLayer(loadedImg, cardX, cardY, cardW, cardH);
+            ctx.drawImage(coverLayer, 0, 0);
 
             // NOT: Üst sınır tamamen kaldırıldı — görsel, dar olan eksende
             // (genişlik ya da yükseklik) çerçeveyi UCA KADAR doldursun istendi.
@@ -1086,16 +1141,39 @@ function drawHeroGlow(ctx: CanvasRenderingContext2D, cardX: number, cardY: numbe
 // Ürün görselinin arkasını, kutuyu tam doldurmayan (dar/yüksek vb.) fotoğraflarda
 // çıplak zemin yerine AYNI görselin bulanıklaştırılmış "cover" haliyle dolduruyor
 // — kullanıcı isteği: kenarlar düz bir renkle değil, blurlanarak doldurulsun.
+// (Aynı önbellekleme mantığı — bkz. getBlurredCoverLayer: bu kart, video kaydı
+// boyunca sabit bir geometriyle her karede render edildiği için blur SADECE
+// görsel başına bir kez hesaplanıp yeniden kullanılıyor.)
+// Anahtar sadece görsel değil, geometriyi de içeriyor (boxX/boxY/boxW/boxH/radius)
+// — aynı görsel ileride farklı bir kart boyutunda (örn. tekli/vitrin şablonu
+// arası) tekrar kullanılırsa yanlış (eski geometriyle çizilmiş) önbelleğe
+// düşmesin diye.
+const blurCoverFillCache = new WeakMap<HTMLImageElement, Map<string, HTMLCanvasElement>>();
 function drawBlurCoverFill(ctx: CanvasRenderingContext2D, img: HTMLImageElement, boxX: number, boxY: number, boxW: number, boxH: number, radius: number) {
-    ctx.save();
-    drawRoundedRect(ctx, boxX, boxY, boxW, boxH, radius);
-    ctx.clip();
-    const coverScale = Math.max(boxW / img.width, boxH / img.height);
-    const coverW = img.width * coverScale, coverH = img.height * coverScale;
-    ctx.filter = 'blur(30px) brightness(0.82) saturate(1.15)';
-    ctx.drawImage(img, boxX + (boxW - coverW) / 2, boxY + (boxH - coverH) / 2, coverW, coverH);
-    ctx.filter = 'none';
-    ctx.restore();
+    const key = `${boxX},${boxY},${boxW},${boxH},${radius}`;
+    let byGeometry = blurCoverFillCache.get(img);
+    if (!byGeometry) {
+        byGeometry = new Map();
+        blurCoverFillCache.set(img, byGeometry);
+    }
+    let off = byGeometry.get(key);
+    if (!off) {
+        off = document.createElement('canvas');
+        off.width = CANVAS_W;
+        off.height = CANVAS_H;
+        const octx = off.getContext('2d')!;
+        octx.save();
+        drawRoundedRect(octx, boxX, boxY, boxW, boxH, radius);
+        octx.clip();
+        const coverScale = Math.max(boxW / img.width, boxH / img.height);
+        const coverW = img.width * coverScale, coverH = img.height * coverScale;
+        octx.filter = 'blur(30px) brightness(0.82) saturate(1.15)';
+        octx.drawImage(img, boxX + (boxW - coverW) / 2, boxY + (boxH - coverH) / 2, coverW, coverH);
+        octx.filter = 'none';
+        octx.restore();
+        byGeometry.set(key, off);
+    }
+    ctx.drawImage(off, 0, 0);
 }
 
 interface CardGeometry {
