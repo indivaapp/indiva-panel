@@ -511,6 +511,24 @@ function drawBackground(ctx: CanvasRenderingContext2D, palette: [string, string,
         [60, 1300, 18, 'rgba(255,224,140,0.4)'],
     ];
     sparkles.forEach(([x, y, s, c]) => drawSparkle(ctx, x, y, s, c));
+
+    // Uçan indirim emojileri (sepet/hediye/konfeti/ateş) — "indirim çılgınlığı"
+    // hissini güçlendirir. Vitrin şablonundaki hareketli versiyonun
+    // (BG_EMOJI_PARTICLES/drawDecorativeBackground, aşağıda tanımlı — modül
+    // tam yüklendikten sonra çağrıldığı için sırası önemli değil) sabit,
+    // tek-kare hali; bu fonksiyon animasyon oynatmadığı için hareket YOK.
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    BG_EMOJI_PARTICLES.forEach(p => {
+        ctx.save();
+        ctx.globalAlpha = 0.85;
+        ctx.translate(p.x, p.y);
+        ctx.font = `${p.size}px Arial`;
+        ctx.fillText(p.emoji, 0, 0);
+        ctx.restore();
+    });
+    ctx.restore();
 }
 
 // ── "Vitrin" şablonu (renderHeroScene/renderPromoFrame) için SÜREKLİ hareket
@@ -743,45 +761,33 @@ async function renderDealImage(
         }
     });
 
-    // ── Slogan: ürün görselinin TAM ÜSTÜNDE, el yazısı tarzı (Caveat) ────────
-    // Kullanıcı defalarca görselin üstüne bindiğini belirtti — artık kartın
-    // dışında, header ile kart arasındaki boşlukta, gerçek bir "slogan" gibi.
-    // İki satıra bölündü (altlı üstlü) — tek satırken sol taraftaki indirim
-    // yıldızının altına giriyordu; alt alta durunca yatayda daha dar bir alan
-    // kaplıyor ve yıldıza çarpmıyor.
-    // KÖK NEDEN (video yırtılması — bulundu): bu satır KOŞULSUZ olarak await
-    // ediliyordu — video kaydı sırasında renderDealImage saniyede onlarca kez
-    // çağrıldığı için, HER karede fonksiyon tam ortasında (arka plan+kart
-    // çizilmiş ama başlık/fiyat/CTA henüz çizilmemişken) askıya alınıp
-    // tarayıcının başka işler (setInterval tüketicisi dahil) yapmasına izin
-    // veriyordu — tüketici bu ANDA arabelleği kopyalarsa YARIM ÇİZİLMİŞ
-    // (yırtık) bir kare kaydediliyordu. document.fonts.check() SENKRON bir
-    // kontrol — font zaten yüklenmişse (ilk çağrıdan sonra hep öyle olur)
-    // await'e hiç uğramadan devam ediyoruz, animasyon döngüsü artık gerçekten
-    // bölünmez/atomik çalışıyor.
-    if (!document.fonts.check("700 80px Caveat")) {
-        try { await document.fonts.load("700 80px Caveat"); } catch { /* font yoksa sistem fontuna düşer */ }
-    }
+    // ── Başlık: ürün görselinin TAM ÜSTÜNDE, kalın/vurgulu "çılgınlık" tarzı ──
+    // Kullanıcı isteği: eskiden ince el yazısı (Caveat) bir slogandı — daha
+    // enerjik, afiş/kampanya hissi veren kalın bir başlık istendi (örnek
+    // referans: siyah kontürlü, turuncu dolgulu, iri Arial Black tarzı metin).
+    // Caveat fontuna artık ihtiyaç yok, bu yüzden font ısıtma adımı da kaldırıldı.
     withSlideFade(ctx, (1 - headerP) * -12, headerP, () => {
         ctx.save();
-        ctx.translate(CANVAS_W / 2, 195);
-        ctx.rotate(-3 * Math.PI / 180);
+        ctx.translate(CANVAS_W / 2, 175);
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const sloganLine1 = 'İNDİVA\'da';
-        const sloganLine2 = 'İndirim Var!';
-        const maxSloganW = CANVAS_W - 160;
-        let sloganSize = 76;
-        ctx.font = `700 ${sloganSize}px Caveat, cursive`;
-        const maxRawW = Math.max(ctx.measureText(sloganLine1).width, ctx.measureText(sloganLine2).width);
-        if (maxRawW > maxSloganW) sloganSize = Math.floor(sloganSize * (maxSloganW / maxRawW));
-        ctx.font = `700 ${sloganSize}px Caveat, cursive`;
-        ctx.shadowColor = 'rgba(0,0,0,0.45)';
-        ctx.shadowBlur = 16;
-        ctx.fillStyle = '#ffffff';
-        const sloganLineGap = sloganSize * 0.64;
-        ctx.fillText(sloganLine1, 0, -sloganLineGap / 2);
-        ctx.fillText(sloganLine2, 0, sloganLineGap / 2);
+        const headline = 'FLAŞ İNDİRİM ÇILGINLIĞI!';
+        const maxHeadlineW = CANVAS_W - 120;
+        let headlineSize = 58;
+        ctx.font = `900 ${headlineSize}px Arial`;
+        const rawW = ctx.measureText(headline).width;
+        if (rawW > maxHeadlineW) headlineSize = Math.floor(headlineSize * (maxHeadlineW / rawW));
+        ctx.font = `900 ${headlineSize}px Arial`;
+        ctx.lineJoin = 'round';
+        ctx.miterLimit = 2;
+        ctx.lineWidth = headlineSize * 0.16;
+        ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+        ctx.shadowColor = 'rgba(0,0,0,0.35)';
+        ctx.shadowBlur = 14;
+        ctx.strokeText(headline, 0, 0);
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#FFD966';
+        ctx.fillText(headline, 0, 0);
         ctx.restore();
     });
 
@@ -1744,11 +1750,6 @@ async function recordSequenceVideo(
 
     let appIconImg: HTMLImageElement | null = null;
     try { appIconImg = await loadAppIcon(); } catch { appIconImg = null; }
-    // Kayıt başlamadan ÖNCE "Caveat" fontunu bir kez ısıt — böylece animasyon
-    // döngüsündeki İLK kare bile document.fonts.check() ile senkron geçer,
-    // hiçbir kare yarım çizilmiş halde yakalanamaz (bkz. renderDealImage
-    // içindeki kök neden notu).
-    try { await document.fonts.load("700 80px Caveat"); } catch { /* yoksa sorun değil */ }
 
     // Geçiş ve ikinci sayfa kendi içinde ayrıca animasyon oynatmıyor (statik) —
     // önceden her karede İKİ tam sahneyi (blur filtreleri dahil) yeniden çizmek
