@@ -6,6 +6,10 @@ import {
     type SocialContentCandidate,
 } from '../services/firebase';
 import { uploadImageFromUrl } from '../services/dealFinder';
+import { extractProductFromScreenshot, type VisualProductData } from '../services/geminiVisionService';
+import { cropImageByBox } from '../services/imageCrop';
+import { uploadToImgbb } from '../services/imgbb';
+import { CATEGORIES } from '../constants/categories';
 import { Clipboard } from '@capacitor/clipboard';
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
@@ -2569,6 +2573,104 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     const [multiCaptionCopied, setMultiCaptionCopied] = useState(false);
     const [multiVoiceoverCopied, setMultiVoiceoverCopied] = useState(false);
 
+    // ── Influencer story'sinden özgün İNDİVA içeriği üretme ─────────────────
+    // Admin bir influencer/mağaza story ekran görüntüsü yükler → Gemini Vision
+    // (services/geminiVisionService.ts, QuickProductShareOverlay.tsx'teki ile
+    // AYNI servis) başlık/fiyat/kategoriyi ve ürün fotoğrafının konumunu okur
+    // → o fotoğraf kırpılıp (cropImageByBox) ImgBB'ye yüklenir → admin
+    // bilgileri gözden geçirip düzeltir → onaylayınca zaten var olan İNDİVA
+    // marka şablonuyla (handleManualCreate ile AYNI akış) video/görsel üretilir.
+    // Yani ekran görüntüsündeki TASARIM hiç kopyalanmıyor — sadece ürün
+    // bilgisi ve fotoğrafı çıkarılıp %100 kendi şablonumuza besleniyor.
+    const [storyImportOpen, setStoryImportOpen] = useState(false);
+    const [storyStage, setStoryStage] = useState<'idle' | 'analyzing' | 'review' | 'uploading'>('idle');
+    const [storyError, setStoryError] = useState<string | null>(null);
+    const [storyCroppedBlob, setStoryCroppedBlob] = useState<Blob | null>(null);
+    const [storyPreviewUrl, setStoryPreviewUrl] = useState<string | null>(null);
+    const [storyConfidence, setStoryConfidence] = useState<number | null>(null);
+    const [storyTitle, setStoryTitle] = useState('');
+    const [storyBrand, setStoryBrand] = useState('');
+    const [storyCategory, setStoryCategory] = useState<string>(CATEGORIES[0]);
+    const [storyOldPrice, setStoryOldPrice] = useState('');
+    const [storyNewPrice, setStoryNewPrice] = useState('');
+    const storyFileInputRef = useRef<HTMLInputElement>(null);
+
+    const resetStoryImport = () => {
+        setStoryStage('idle');
+        setStoryError(null);
+        setStoryCroppedBlob(null);
+        if (storyPreviewUrl) URL.revokeObjectURL(storyPreviewUrl);
+        setStoryPreviewUrl(null);
+        setStoryConfidence(null);
+        setStoryTitle('');
+        setStoryBrand('');
+        setStoryCategory(CATEGORIES[0]);
+        setStoryOldPrice('');
+        setStoryNewPrice('');
+        if (storyFileInputRef.current) storyFileInputRef.current.value = '';
+    };
+
+    const handleStoryFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setStoryStage('analyzing');
+        setStoryError(null);
+        try {
+            const buffer = await file.arrayBuffer();
+            const product: VisualProductData = await extractProductFromScreenshot(buffer, file.type || 'image/jpeg');
+
+            if (product.confidence < 30) {
+                throw new Error(`Yapay zeka görseli yeterince analiz edemedi (${product.confidence}/100). Daha net/yakın bir ekran görüntüsü deneyin.`);
+            }
+
+            const cropped = product.productImageBox
+                ? await cropImageByBox(buffer, file.type || 'image/jpeg', product.productImageBox)
+                : new Blob([buffer], { type: file.type || 'image/jpeg' });
+
+            setStoryCroppedBlob(cropped);
+            setStoryPreviewUrl(URL.createObjectURL(cropped));
+            setStoryConfidence(product.confidence);
+            setStoryTitle(product.title || '');
+            setStoryBrand(product.brand || '');
+            setStoryCategory((CATEGORIES as readonly string[]).includes(product.category) ? product.category : 'Diğer');
+            setStoryOldPrice(product.oldPrice > 0 ? String(product.oldPrice) : '');
+            setStoryNewPrice(product.newPrice > 0 ? String(product.newPrice) : '');
+            setStoryStage('review');
+        } catch (e: any) {
+            setStoryError(e?.message || 'Görsel analiz edilemedi.');
+            setStoryStage('idle');
+        }
+    };
+
+    const handleStoryConfirm = async () => {
+        if (!storyCroppedBlob || !storyTitle.trim() || !storyNewPrice) return;
+        setStoryStage('uploading');
+        setStoryError(null);
+        try {
+            const imageFile = new File([storyCroppedBlob], `indiva-story-${Date.now()}.jpg`, { type: storyCroppedBlob.type || 'image/jpeg' });
+            const { downloadURL } = await uploadToImgbb(imageFile);
+
+            const product: AiPickProduct = {
+                id: `story_${Date.now()}`,
+                title: storyTitle.trim(),
+                imageUrl: downloadURL,
+                link: '',
+                category: storyCategory,
+                brand: storyBrand.trim(),
+                oldPrice: Number(storyOldPrice) || 0,
+                newPrice: Number(storyNewPrice) || 0,
+                reviewCount: undefined,
+            };
+
+            setStoryImportOpen(false);
+            resetStoryImport();
+            handleManualCreate(product);
+        } catch (e: any) {
+            setStoryError(e?.message || 'Görsel yüklenemedi, tekrar deneyin.');
+            setStoryStage('review');
+        }
+    };
+
     const fetchItems = useCallback(async () => {
         setIsLoading(true);
         setError(null);
@@ -2965,10 +3067,14 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     // BİREBİR AYNI deneyimi izliyor — önce AI ürün açıklaması + seslendirme
     // metni üretir, sonra 1./2. ekran süresi sorulur, ardından video üretme
     // aşamasına geçilir (bkz. handleGenerateMultiContentOnly / multiContentStageOpen).
-    const handleManualCreate = (discount: Discount) => {
+    // NOT: Parametre tipi Discount yerine AiPickProduct — hem picker'dan gelen
+    // gerçek Discount'ları (yapısal olarak uyumlu) HEM DE story'den çıkarılıp
+    // ImgBB'ye yüklenmiş, henüz Firestore'da karşılığı olmayan "sahte" ürünleri
+    // (bkz. handleStoryConfirm) kabul edebilsin diye.
+    const handleManualCreate = (discount: AiPickProduct) => {
         setPickerOpen(false);
         setPickerQuery('');
-        const item = { candidate: { productId: discount.id, score: 0, reasoning: '' }, product: discount as AiPickProduct };
+        const item = { candidate: { productId: discount.id, score: 0, reasoning: '' }, product: discount };
         setAiCandidates([item]);
         setMultiSelectIds(new Set([discount.id]));
         setMultiGenerateContentFirst(true);
@@ -3070,6 +3176,130 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                                         </button>
                                     </div>
                                 ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+
+            <div className="mb-6 bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
+                <button
+                    onClick={() => { setStoryImportOpen(v => !v); if (storyImportOpen) resetStoryImport(); }}
+                    className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-gray-750 transition-colors"
+                >
+                    <span className="text-white font-semibold text-sm">📸 Influencer Story'sinden İçerik Üret</span>
+                    <span className="text-gray-400 text-lg">{storyImportOpen ? '−' : '+'}</span>
+                </button>
+                {storyImportOpen && (
+                    <div className="px-5 pb-5 space-y-3">
+                        <p className="text-gray-500 text-xs -mt-1">
+                            Bir influencer/mağaza story ekran görüntüsü yükle — yapay zeka sadece ürün adı/fiyat/
+                            fotoğrafını okur, tasarımı KOPYALAMAZ; onayladığın bilgiler kendi İNDİVA şablonumuzla
+                            (marka renkleri, kart, video) yeniden üretilir.
+                        </p>
+
+                        {storyStage === 'idle' && (
+                            <label className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-600 hover:border-orange-500 rounded-xl py-8 cursor-pointer transition-colors">
+                                <span className="text-3xl">📷</span>
+                                <span className="text-gray-300 text-sm font-medium">Ekran görüntüsü seç</span>
+                                <input
+                                    ref={storyFileInputRef}
+                                    type="file"
+                                    accept="image/*"
+                                    onChange={handleStoryFileChange}
+                                    className="hidden"
+                                />
+                            </label>
+                        )}
+
+                        {storyStage === 'analyzing' && (
+                            <div className="flex items-center justify-center gap-2 py-8 text-gray-400 text-sm">
+                                <span className="w-4 h-4 border-2 border-gray-500 border-t-orange-400 rounded-full animate-spin" />
+                                Yapay zeka görseli analiz ediyor…
+                            </div>
+                        )}
+
+                        {storyError && (
+                            <div className="bg-red-950/50 border border-red-500/20 rounded-xl px-3 py-2.5 space-y-2">
+                                <p className="text-red-300 text-xs">❌ {storyError}</p>
+                                <button
+                                    onClick={resetStoryImport}
+                                    className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
+                                >
+                                    Tekrar Dene
+                                </button>
+                            </div>
+                        )}
+
+                        {(storyStage === 'review' || storyStage === 'uploading') && storyPreviewUrl && (
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-3">
+                                    <img src={storyPreviewUrl} alt="" className="w-20 h-20 rounded-lg object-contain bg-white shrink-0" />
+                                    <div className="min-w-0 flex-1">
+                                        <p className="text-gray-400 text-[11px]">
+                                            Ürün fotoğrafı otomatik kırpıldı
+                                            {storyConfidence !== null && ` · güven: %${storyConfidence}`}
+                                        </p>
+                                        <p className="text-gray-500 text-[11px] mt-0.5">Aşağıdaki bilgileri kontrol et/düzelt.</p>
+                                    </div>
+                                </div>
+
+                                <input
+                                    type="text"
+                                    value={storyTitle}
+                                    onChange={(e) => setStoryTitle(e.target.value)}
+                                    placeholder="Ürün adı"
+                                    className="w-full bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-orange-500"
+                                />
+                                <div className="flex gap-2">
+                                    <input
+                                        type="text"
+                                        value={storyBrand}
+                                        onChange={(e) => setStoryBrand(e.target.value)}
+                                        placeholder="Marka (opsiyonel)"
+                                        className="flex-1 bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-orange-500"
+                                    />
+                                    <select
+                                        value={storyCategory}
+                                        onChange={(e) => setStoryCategory(e.target.value)}
+                                        className="bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500"
+                                    >
+                                        {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                </div>
+                                <div className="flex gap-2">
+                                    <input
+                                        type="number"
+                                        value={storyOldPrice}
+                                        onChange={(e) => setStoryOldPrice(e.target.value)}
+                                        placeholder="Eski fiyat (TL, opsiyonel)"
+                                        className="flex-1 bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-orange-500"
+                                    />
+                                    <input
+                                        type="number"
+                                        value={storyNewPrice}
+                                        onChange={(e) => setStoryNewPrice(e.target.value)}
+                                        placeholder="Yeni fiyat (TL) *"
+                                        className="flex-1 bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-orange-500"
+                                    />
+                                </div>
+
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={resetStoryImport}
+                                        disabled={storyStage === 'uploading'}
+                                        className="flex-1 py-2 text-xs font-semibold bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-200 rounded-lg transition-colors"
+                                    >
+                                        İptal
+                                    </button>
+                                    <button
+                                        onClick={handleStoryConfirm}
+                                        disabled={storyStage === 'uploading' || !storyTitle.trim() || !storyNewPrice}
+                                        className="flex-1 py-2 text-xs font-semibold bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-500 hover:to-red-500 disabled:opacity-40 text-white rounded-lg transition-all"
+                                    >
+                                        {storyStage === 'uploading' ? 'Yükleniyor…' : 'İNDİVA İçeriği Üret'}
+                                    </button>
+                                </div>
                             </div>
                         )}
                     </div>
