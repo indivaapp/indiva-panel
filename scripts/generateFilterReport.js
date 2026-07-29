@@ -13,16 +13,15 @@
  * basılır; kullanıcı onaylamadan pipeline'a bağlanmaz.
  *
  * Kullanım: node scripts/generateFilterReport.js
- * Env: FIREBASE_SERVICE_ACCOUNT, GEMINI_API_KEY
+ * Env: FIREBASE_SERVICE_ACCOUNT, OPENROUTER_API_KEY
  */
 
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import { GoogleGenAI } from '@google/genai';
-import { trackGeminiUsage } from './aiUsageTracker.js';
+import { callOpenRouter } from './openRouterUtil.js';
 import { buildReportPrompt } from './filterReportPrompt.js';
 
-const MODEL = 'gemini-2.5-flash';
+const MODEL = 'google/gemini-2.5-flash';
 
 function initFirebase() {
     const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
@@ -32,8 +31,8 @@ function initFirebase() {
 }
 
 async function main() {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error('GEMINI_API_KEY yok.');
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) throw new Error('OPENROUTER_API_KEY yok.');
 
     const db = initFirebase();
     const snap = await db.collection('product_feedback').get();
@@ -47,18 +46,15 @@ async function main() {
         console.warn('⚠️ Çok az veri var, rapor güvenilir olmayabilir. Yine de devam ediliyor...\n');
     }
 
-    const genAI = new GoogleGenAI({ apiKey });
-
-    console.log('🤖 Rapor üretiliyor (Gemini)...\n');
-    const response = await genAI.models.generateContent({
+    console.log('🤖 Rapor üretiliyor (OpenRouter)...\n');
+    const report = await callOpenRouter(db, {
+        apiKey,
         model: MODEL,
-        contents: [{ role: 'user', parts: [{ text: buildReportPrompt(docs) }] }],
-        config: { temperature: 0.2 },
+        prompt: buildReportPrompt(docs),
+        temperature: 0.2,
+        source: 'generateFilterReport',
     });
-    await trackGeminiUsage(db, response, MODEL, 'generateFilterReport');
-
-    const report = response.text || '';
-    if (!report) throw new Error('Gemini boş cevap döndü.');
+    if (!report) throw new Error('OpenRouter boş cevap döndü.');
 
     await db.collection('aiConfig').doc('productFilterReport').set({
         report,

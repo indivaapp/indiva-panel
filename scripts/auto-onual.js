@@ -7,7 +7,6 @@
  * Çalıştırma: node scripts/auto-onual.js
  */
 
-import { GoogleGenAI } from '@google/genai';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore, FieldValue, FieldPath, Timestamp } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
@@ -19,7 +18,7 @@ import { sendAdminAlert } from './alertService.js';
 import { runQualityGate } from './qualityGate.js';
 import { maybeNotifyHighScoreDeal } from './notifyGate.js';
 import { maybeQueueSocialContent } from './socialContentGate.js';
-import { trackGeminiUsage, isDailyBudgetExceeded } from './aiUsageTracker.js';
+import { trackGeminiUsage, trackOpenRouterUsage, isDailyBudgetExceeded } from './aiUsageTracker.js';
 import { loadIdCache, isCached, markCached, saveIdCache } from './idCache.js';
 
 
@@ -62,11 +61,14 @@ const MAX_NEW_PRODUCTS = 50;
 const REQUEST_DELAY_MS = 3000; // İstekler arası bekleme (ms)
 
 // AI Config
-// flash-lite'in bu projede gunluk 20 istek gibi asiri dusuk (muhtemelen throttle
-// edilmis) bir ucretsiz kotasi var; flash modelinin kendi ayri kota havuzu var
-// ve ucretsiz katmanda cok daha cömert (1500/gun) - odeme yapmadan once gecici
-// cozum olarak buraya gecildi.
-const MODEL = 'gemini-2.5-flash';
+// Gemini'nin ücretsiz katmanı, model adı ne olursa olsun paylaşımlı bir
+// "GenerateRequestsPerDayPerProjectPerModel-FreeTier" kotasına tabi — gerçek
+// limit günde 20 istek olduğu görüldü (flash-lite'ın "daha düşük" olduğu
+// varsayımı da yanlış çıktı, flash da aynı sınıra takıldı). Bu yüzden
+// üretim (description/kategori) çağrıları OpenRouter'a taşındı — orada
+// istek başına kota yok, bakiyeden token bazlı ücretlendirme var.
+// Basit/yapılandırılmış bu görev için Gemini 2.5 Flash Lite yeterli.
+const MODEL = 'google/gemini-2.5-flash-lite';
 
 // Kategorileri tespit için anahtar kelimeler — uygulama kategori isimleriyle BİREBİR eşleşmeli
 const CATEGORY_MAP = [
@@ -148,15 +150,15 @@ function initFirebase() {
 //
 // ÖNEMLİ: Kalite kapısı / bildirim / sosyal içerik puanlaması (getQualityGateKey)
 // BUNDAN AYRIDIR ve AI_ENABLED'a bağlı DEĞİLDİR — bunlar artık pipeline'ın temel,
-// hep-açık bir parçası. Daha önce ikisi aynı anahtarı (getGeminiKey) paylaştığı
+// hep-açık bir parçası. Daha önce ikisi aynı anahtarı (getAiKey) paylaştığı
 // için AI_ENABLED kapalıyken kalite puanlaması da sessizce devre dışı kalıyordu
 // ve hiçbir ürün 9/10 eşiğine ulaşamıyordu — bu yüzden ayrıldı.
 
-function getGeminiKey() {
+function getAiKey() {
     if (process.env.AI_ENABLED !== 'true') return null;
-    const key = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+    const key = process.env.OPENROUTER_API_KEY;
     if (!key) {
-        console.warn('⚠️  AI_ENABLED=true ama GEMINI_API_KEY eksik — AI devre dışı bırakıldı.');
+        console.warn('⚠️  AI_ENABLED=true ama OPENROUTER_API_KEY eksik — AI devre dışı bırakıldı.');
         return null;
     }
     return key;
@@ -208,14 +210,12 @@ function simulateOldPrice(newPrice) {
 }
 
 /**
- * Gemini SDK kullanarak yapay zeka analizi yapar (Model: gemini-2.5-flash)
+ * OpenRouter (google/gemini-2.5-flash-lite) kullanarak yapay zeka analizi yapar.
  */
 async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, metaDescription = '', db) {
     if (!apiKey) return { category: detectCategory(productTitle), aiFomoScore: 5 };
 
-    const genAI = new GoogleGenAI({ apiKey });
-
-    const systemInstruction = `Sen INDIVA uygulamasının kıdemli Teknik Ürün Analisti ve e-ticaret metin yazarı uzmanısın. 
+    const systemInstruction = `Sen INDIVA uygulamasının kıdemli Teknik Ürün Analisti ve e-ticaret metin yazarı uzmanısın.
     Görevin, paylaşılan ürün başlığını ve detaylarını analiz ederek "profesyonel bir inceleme ve kategori tespiti" yapmaktır.
 
     GÖREV KURALLARI:
@@ -238,25 +238,37 @@ async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, me
     }`;
 
     try {
-        const response = await genAI.models.generateContent({
-            model: MODEL,
-            contents: [{ role: 'user', parts: [{ text: `${systemInstruction}\n\n${prompt}` }] }],
-            config: {
-                // Not: SDK'da v1alpha/v1beta farkına göre response_format değişebilir
-                // Ama standart generateContent için text parse etmek daha güvenlidir
+        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+                'HTTP-Referer': 'https://indiva-proxy.vercel.app',
+                'X-Title': 'INDIVA Panel Auto-Onual',
+            },
+            body: JSON.stringify({
+                model: MODEL,
+                messages: [
+                    { role: 'system', content: systemInstruction },
+                    { role: 'user', content: prompt },
+                ],
                 temperature: 0.2,
-                // KRİTİK: maxOutputTokens/thinkingBudget hiç sınırlanmamıştı — bu basit
-                // (45-60 kelimelik açıklama üreten) görev için Gemini 2.5 Flash'ın
-                // varsayılan "thinking" modu bazen on binlerce gizli token harcıyordu
-                // (görülen bir çağrıda ~59.000 output token). Bu görev derin akıl
-                // yürütme gerektirmiyor, thinking kapatılıp çıktı sınırlanıyor.
-                maxOutputTokens: 700,
-                thinkingConfig: { thinkingBudget: 0 },
-            }
+                // Bu basit (45-60 kelimelik açıklama üreten) görev derin akıl
+                // yürütme gerektirmiyor — bkz. eski Gemini SDK'daki aynı düzeltme
+                // (bir çağrıda ~59.000 gizli "thinking" token harcanması).
+                max_tokens: 700,
+                usage: { include: true },
+            }),
+            signal: AbortSignal.timeout(30000),
         });
-        await trackGeminiUsage(db, response, MODEL, 'auto-onual:ai-sentiment');
+        if (!response.ok) {
+            const errText = await response.text().catch(() => '');
+            throw new Error(`OpenRouter ${response.status}: ${errText.slice(0, 200)}`);
+        }
+        const data = await response.json();
+        await trackOpenRouterUsage(db, data, 'auto-onual:ai-sentiment');
 
-        const text = response.text || '';
+        const text = data?.choices?.[0]?.message?.content || '';
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         const jsonStr = jsonMatch ? jsonMatch[0] : text;
         const aiData = JSON.parse(jsonStr.trim());
@@ -313,35 +325,6 @@ async function generateAISentiments(apiKey, productTitle, newPrice, oldPrice, me
         };
     }
 }
-
-/**
- * AI to generate push notifications using Google SDK
- */
-async function generatePushNotifications(apiKey, productTitle, discountPercent) {
-    if (!apiKey || discountPercent < 10) return [];
-
-    const genAI = new GoogleGenAI({ apiKey });
-    const prompt = `Şu e-ticaret ürünü için 3 farklı Push Bildirimi oluştur (Kısa, Mizahi, FOMO):
-    Ürün: "${productTitle}" | İndirim: %${discountPercent}
-    SADECE JSON array döndür: ["bildirim1", "bildirim2", "bildirim3"]`;
-
-    try {
-        const response = await genAI.models.generateContent({
-            model: MODEL,
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            config: { temperature: 0.7 }
-        });
-
-        const text = response.text || '';
-        const match = text.match(/\[[\s\S]*\]/);
-        if (match) return JSON.parse(match[0]);
-        return [];
-    } catch (err) {
-        console.warn(`      ⚠️  Bildirim Üretme Hatası: ${err.message}`);
-        return [];
-    }
-}
-
 
 /**
  * AI başarısız olduğunda ürüne özel bir fallback açıklama oluştur
@@ -433,6 +416,11 @@ function sleep(ms) {
 /**
  * Cloudflare engeli olduğunda Gemini URL Context ile onual.com ana sayfasını çek.
  * Google sunucuları Cloudflare'in güven listesinde — challenge sayfası görmezler.
+ * NOT: Bu, OpenRouter'a TAŞINMADI — bypass, isteğin gerçekten Google'ın kendi
+ * sunucusundan çıkmasına dayanıyor (urlContext aracı da Gemini'ye özel);
+ * OpenRouter üzerinden gitse bile istek OpenRouter altyapısından çıkacağından
+ * bu özelliği koruyup korumayacağı garanti değil. Zaten nadiren tetiklenen bir
+ * fallback olduğu için doğrudan Gemini ücretsiz kotasında kalması sorun değil.
  */
 async function fetchOnualViaGemini(apiKey, db) {
     const { GoogleGenAI } = await import('@google/genai');
@@ -736,7 +724,7 @@ async function main() {
     const db = initFirebase();
     const budgetExceeded = await isDailyBudgetExceeded(db);
     if (budgetExceeded) console.warn('💰 Günlük AI bütçe tavanı aşıldı — bu çalıştırmada AI zenginleştirme atlanıyor.');
-    let aiKey = budgetExceeded ? null : getGeminiKey();
+    let aiKey = budgetExceeded ? null : getAiKey();
     const qualityGateKey = budgetExceeded ? null : getQualityGateKey();
     if (aiKey) {
         console.log('✅ Servisler hazır. (AI açıklama üretimi: AÇIK)');

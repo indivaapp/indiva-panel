@@ -17,16 +17,15 @@
  * amaçlı `aiConfig/productFilterReportEval` dokümanına da yazılır).
  *
  * Kullanım: node scripts/evaluateFilterReport.js
- * Env: FIREBASE_SERVICE_ACCOUNT, GEMINI_API_KEY, HOLDOUT_SIZE (opsiyonel, varsayılan 50)
+ * Env: FIREBASE_SERVICE_ACCOUNT, OPENROUTER_API_KEY, HOLDOUT_SIZE (opsiyonel, varsayılan 50)
  */
 
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import { GoogleGenAI } from '@google/genai';
-import { trackGeminiUsage } from './aiUsageTracker.js';
+import { callOpenRouter } from './openRouterUtil.js';
 import { buildReportPrompt } from './filterReportPrompt.js';
 
-const MODEL = 'gemini-2.5-flash';
+const MODEL = 'google/gemini-2.5-flash';
 const BATCH_SIZE = 10;
 
 function initFirebase() {
@@ -68,12 +67,11 @@ Cevabını SADECE şu JSON formatında ver, başka hiçbir açıklama ekleme:
 }
 
 async function main() {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error('GEMINI_API_KEY yok.');
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) throw new Error('OPENROUTER_API_KEY yok.');
     const HOLDOUT_SIZE = Number(process.env.HOLDOUT_SIZE) || 50;
 
     const db = initFirebase();
-    const genAI = new GoogleGenAI({ apiKey });
 
     const snap = await db.collection('product_feedback').get();
     const allDocs = snap.docs
@@ -90,13 +88,13 @@ async function main() {
     console.log(`📊 Eğitim seti: ${train.length} kayıt | Test (holdout) seti: ${holdout.length} kayıt\n`);
 
     console.log('🤖 Sadece eğitim setiyle rapor üretiliyor...\n');
-    const reportRes = await genAI.models.generateContent({
+    const report = await callOpenRouter(db, {
+        apiKey,
         model: MODEL,
-        contents: [{ role: 'user', parts: [{ text: buildReportPrompt(train) }] }],
-        config: { temperature: 0.2 },
+        prompt: buildReportPrompt(train),
+        temperature: 0.2,
+        source: 'evaluateFilterReport:report',
     });
-    await trackGeminiUsage(db, reportRes, MODEL, 'evaluateFilterReport:report');
-    const report = reportRes.text || '';
     if (!report) throw new Error('Rapor üretilemedi (boş cevap).');
 
     const predictions = new Map(); // index in holdout -> {decision, why}
@@ -104,13 +102,13 @@ async function main() {
         const batch = holdout.slice(start, start + BATCH_SIZE);
         console.log(`   ... ${start + 1}-${start + batch.length} arası ürünler değerlendiriliyor`);
         try {
-            const res = await genAI.models.generateContent({
+            const text = await callOpenRouter(db, {
+                apiKey,
                 model: MODEL,
-                contents: [{ role: 'user', parts: [{ text: buildJudgePrompt(report, batch) }] }],
-                config: { temperature: 0 },
+                prompt: buildJudgePrompt(report, batch),
+                temperature: 0,
+                source: 'evaluateFilterReport:judge',
             });
-            await trackGeminiUsage(db, res, MODEL, 'evaluateFilterReport:judge');
-            const text = res.text || '';
             const match = text.match(/\[[\s\S]*\]/);
             if (!match) { console.warn('   ⚠️ JSON bulunamadı, bu grup atlanıyor'); continue; }
             const parsed = JSON.parse(match[0]);
