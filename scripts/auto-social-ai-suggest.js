@@ -66,11 +66,12 @@ function initFirebase() {
 }
 
 async function fetchRecentDiscounts(db) {
-    // NOT: 100 ürünle canlı testte gerçek (uzun) başlıklarla bazen Vercel
-    // Hobby planının 60sn sunucusuz fonksiyon sınırını aşıp zaman aşımına
-    // yol açtı (vercel-proxy/api/social-content.ts) — tutarlı olsun diye
-    // burası da 60'a düşürüldü.
-    const snap = await db.collection('discounts').orderBy('createdAt', 'desc').limit(60).get();
+    // NOT: vercel-proxy/api/social-content.ts'deki 60'lık sınır Vercel Hobby'nin
+    // 60sn sunucusuz fonksiyon sınırından kaynaklanıyor — bu script GitHub
+    // Actions'ta çalışıyor (10dk bütçe, bkz. auto-social-ai-suggest.yml) ve
+    // OpenRouter'ı doğrudan (Vercel'den geçmeden) çağırıyor, o sınıra tabi
+    // değil. 200'e çıkarıldı.
+    const snap = await db.collection('discounts').orderBy('createdAt', 'desc').limit(200).get();
     return snap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(d => !d.isAd);

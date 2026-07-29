@@ -629,8 +629,8 @@ export const getAiUsageStats = async (): Promise<{ today: AiUsageStats; month: A
 // planının 60sn sunucusuz fonksiyon sınırını aşıp zaman aşımına yol açtı —
 // 60'a düşürüldü, hâlâ eski 3'lü sistemin (50) üzerinde.
 
-/** Sosyal medya AI önerisi için son N ilanı getirir (reklamlar hariç, varsayılan 60). */
-export const getRecentDiscountsForSocialAi = async (limitCount: number = 60): Promise<Discount[]> => {
+/** Sosyal medya AI önerisi için son N ilanı getirir (reklamlar hariç, varsayılan 200). */
+export const getRecentDiscountsForSocialAi = async (limitCount: number = 200): Promise<Discount[]> => {
     const q = query(collection(db, 'discounts'), orderBy('createdAt', 'desc'), limit(limitCount));
     const querySnapshot = await getDocs(q);
     return querySnapshot.docs
@@ -644,8 +644,15 @@ export interface SocialContentCandidate {
     reasoning: string;
 }
 
-/** Son ~100 ilan içinden en iyi 10 adayı puanlatır — henüz başlık/caption üretilmez. */
-export const suggestSocialCandidates = async (discounts: Discount[]): Promise<SocialContentCandidate[]> => {
+// vercel-proxy/api/social-content.ts her istekte en fazla 60 ürünü işliyor
+// (Vercel Hobby planının 60sn sunucusuz fonksiyon sınırı — geçmişte 100
+// ürünle bu sınır aşılıp zaman aşımı yaşanmıştı, bkz. oradaki not). 200
+// ürünü tek istekte göndermek yerine ≤60'lık parçalara bölüp PARALEL
+// isteklerle gönderiyoruz — her istek kendi 60sn'lik bütçesinde kalır,
+// sonuçlar client'ta birleştirilip yeniden puana göre sıralanır.
+const CANDIDATE_CHUNK_SIZE = 60;
+
+async function requestCandidatesChunk(discounts: Discount[]): Promise<SocialContentCandidate[]> {
     // NOT: social-content.ts ile aynı uç (ayrı bir dosya Vercel Hobby planının
     // 12 fonksiyon sınırını aşıyordu) — body'de "discounts" (dizi) gönderilirse
     // aday puanlama moduna, "discount" (tekil) gönderilirse tek ürün içerik
@@ -694,6 +701,35 @@ export const suggestSocialCandidates = async (discounts: Discount[]): Promise<So
         }
     }
     throw lastErr;
+}
+
+/** Son ~200 ilan içinden en iyi 20 adayı puanlatır — henüz başlık/caption üretilmez. */
+export const suggestSocialCandidates = async (discounts: Discount[]): Promise<SocialContentCandidate[]> => {
+    const chunks: Discount[][] = [];
+    for (let i = 0; i < discounts.length; i += CANDIDATE_CHUNK_SIZE) {
+        chunks.push(discounts.slice(i, i + CANDIDATE_CHUNK_SIZE));
+    }
+
+    const results = await Promise.allSettled(chunks.map(requestCandidatesChunk));
+
+    const merged = new Map<string, SocialContentCandidate>();
+    let allFailed = true;
+    for (const r of results) {
+        if (r.status !== 'fulfilled') continue;
+        allFailed = false;
+        for (const c of r.value) {
+            const existing = merged.get(c.productId);
+            if (!existing || c.score > existing.score) merged.set(c.productId, c);
+        }
+    }
+    if (allFailed) {
+        const firstError = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+        throw firstError?.reason ?? new Error('AI önerisi alınamadı');
+    }
+
+    return Array.from(merged.values())
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 20);
 };
 
 /** Seçilen TEK ürün için başlık+caption+seslendirme metni üretir. "Yeniden Üret"
