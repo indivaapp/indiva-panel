@@ -99,7 +99,26 @@ function dedupeByTitle(discounts) {
     return Array.from(bestByTitle.values()).map(v => v.discount);
 }
 
+// Bazen model (deepseek/deepseek-v4-flash) geçici olarak formata uymayan bir
+// yanıt döndürüyor ("AI JSON döndürmedi") — panel tarafındaki eşdeğer
+// çağrılar (services/firebase.ts: suggestSocialCandidates) bu yüzden 3 kez
+// otomatik deniyor, bu script tek denemede pes edip dailyOpsWatchdog.js'yi
+// gereksiz yere tetikliyordu. Aynı desen burada da uygulandı.
 async function suggestCandidates(discounts, db) {
+    let lastErr;
+    for (let i = 0; i < 3; i++) {
+        try {
+            return await attemptSuggestCandidates(discounts, db);
+        } catch (err) {
+            lastErr = err;
+            console.warn(`   ⚠️  Deneme ${i + 1}/3 başarısız: ${err.message}`);
+            if (i < 2) await new Promise(r => setTimeout(r, 1200));
+        }
+    }
+    throw lastErr;
+}
+
+async function attemptSuggestCandidates(discounts, db) {
     const deduped = dedupeByTitle(discounts);
     const compact = deduped.map((d, i) => ({
         index: i + 1,

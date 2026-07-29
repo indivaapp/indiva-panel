@@ -60,6 +60,15 @@ async function main() {
         const { reportId } = await runAnalyst(db, mode);
         console.log(`✅ Rapor kaydedildi: ${reportId}`);
     } catch (err) {
+        // Günlük bütçe tavanının aşılması kasıtlı bir "dur" sinyali — gerçek bir
+        // hata değil (isDailyBudgetExceeded, bkz. aiAnalystCore.js). Bunu exit(1)
+        // ile bitirmek GitHub Actions'ta "workflow başarısız" olarak işaretlenip
+        // dailyOpsWatchdog.js'yi gereksiz yere tetikliyordu — ne alert ne de
+        // hata çıkışı gerekiyor, sadece atlandığını logla.
+        if (err.message.includes('bütçe tavanı aşıldı')) {
+            console.log(`ℹ️  ${err.message}`);
+            return;
+        }
         await reportAnalystFailure(db, mode, err);
         process.exit(1);
     }
