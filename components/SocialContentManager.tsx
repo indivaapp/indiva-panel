@@ -2577,14 +2577,28 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     // Admin bir influencer/mağaza story ekran görüntüsü yükler → Gemini Vision
     // (services/geminiVisionService.ts, QuickProductShareOverlay.tsx'teki ile
     // AYNI servis) başlık/fiyat/kategoriyi ve ürün fotoğrafının konumunu okur
-    // → o fotoğraf kırpılıp (cropImageByBox) ImgBB'ye yüklenir → admin
-    // bilgileri gözden geçirip düzeltir → onaylayınca zaten var olan İNDİVA
-    // marka şablonuyla (handleManualCreate ile AYNI akış) video/görsel üretilir.
-    // Yani ekran görüntüsündeki TASARIM hiç kopyalanmıyor — sadece ürün
-    // bilgisi ve fotoğrafı çıkarılıp %100 kendi şablonumuza besleniyor.
+    // → admin bu kırpma kutusunu SÜRÜKLEYEREK/kaydırıcılarla onaylar-düzeltir
+    // → kırpılan fotoğraf ImgBB'ye yüklenir → bilgiler gözden geçirilir →
+    // onaylanınca zaten var olan İNDİVA marka şablonuyla (handleManualCreate
+    // ile AYNI akış) video/görsel üretilir. Yani ekran görüntüsündeki TASARIM
+    // hiç kopyalanmıyor — sadece ürün bilgisi ve fotoğrafı çıkarılıp %100
+    // kendi şablonumuza besleniyor.
+    // NOT: Kırpma kutusu AI'nın tahminine (productImageBox) KÖRÜ KÖRÜNE
+    // güvenmiyor — kutu bulunamazsa/yanlışsa admin elle düzeltebilsin diye
+    // ayrı bir "crop" aşaması var. Bunsuz, AI kutuyu bulamadığında ham ekran
+    // görüntüsü OLDUĞU GİBİ "ürün fotoğrafı" olarak kullanılıyordu — kullanıcı
+    // geri bildirimi: "yüklediğim görsel hiçbir değişiklik olmadan aynen
+    // yayınlandı" (dış görünüm İNDİVA çerçevesiyle sarılsa da, kart içindeki
+    // asıl fotoğraf hâlâ influencer'ın tüm arayüzünü içeren ham ekran
+    // görüntüsüydü).
     const [storyImportOpen, setStoryImportOpen] = useState(false);
-    const [storyStage, setStoryStage] = useState<'idle' | 'analyzing' | 'review' | 'uploading'>('idle');
+    const [storyStage, setStoryStage] = useState<'idle' | 'analyzing' | 'crop' | 'review' | 'uploading'>('idle');
     const [storyError, setStoryError] = useState<string | null>(null);
+    const [storyOriginalBuffer, setStoryOriginalBuffer] = useState<ArrayBuffer | null>(null);
+    const [storyOriginalMimeType, setStoryOriginalMimeType] = useState('image/jpeg');
+    const [storyOriginalPreviewUrl, setStoryOriginalPreviewUrl] = useState<string | null>(null);
+    // Kırpma kutusu — % cinsinden (0-100), orijinal görselin tam boyutundan bağımsız.
+    const [storyBox, setStoryBox] = useState({ x: 10, y: 10, w: 80, h: 60 });
     const [storyCroppedBlob, setStoryCroppedBlob] = useState<Blob | null>(null);
     const [storyPreviewUrl, setStoryPreviewUrl] = useState<string | null>(null);
     const [storyConfidence, setStoryConfidence] = useState<number | null>(null);
@@ -2594,10 +2608,16 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
     const [storyOldPrice, setStoryOldPrice] = useState('');
     const [storyNewPrice, setStoryNewPrice] = useState('');
     const storyFileInputRef = useRef<HTMLInputElement>(null);
+    const storyCropBoxDragRef = useRef<{ startX: number; startY: number; boxX: number; boxY: number } | null>(null);
+    const storyCropContainerRef = useRef<HTMLDivElement>(null);
 
     const resetStoryImport = () => {
         setStoryStage('idle');
         setStoryError(null);
+        setStoryOriginalBuffer(null);
+        if (storyOriginalPreviewUrl) URL.revokeObjectURL(storyOriginalPreviewUrl);
+        setStoryOriginalPreviewUrl(null);
+        setStoryBox({ x: 10, y: 10, w: 80, h: 60 });
         setStoryCroppedBlob(null);
         if (storyPreviewUrl) URL.revokeObjectURL(storyPreviewUrl);
         setStoryPreviewUrl(null);
@@ -2617,28 +2637,74 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
         setStoryError(null);
         try {
             const buffer = await file.arrayBuffer();
-            const product: VisualProductData = await extractProductFromScreenshot(buffer, file.type || 'image/jpeg');
+            const mimeType = file.type || 'image/jpeg';
+            const product: VisualProductData = await extractProductFromScreenshot(buffer, mimeType);
 
             if (product.confidence < 30) {
                 throw new Error(`Yapay zeka görseli yeterince analiz edemedi (${product.confidence}/100). Daha net/yakın bir ekran görüntüsü deneyin.`);
             }
 
-            const cropped = product.productImageBox
-                ? await cropImageByBox(buffer, file.type || 'image/jpeg', product.productImageBox)
-                : new Blob([buffer], { type: file.type || 'image/jpeg' });
-
-            setStoryCroppedBlob(cropped);
-            setStoryPreviewUrl(URL.createObjectURL(cropped));
+            setStoryOriginalBuffer(buffer);
+            setStoryOriginalMimeType(mimeType);
+            setStoryOriginalPreviewUrl(URL.createObjectURL(new Blob([buffer], { type: mimeType })));
+            // AI'nın önerdiği kutu varsa (0-1000 normalize) başlangıç noktası
+            // olarak kullan, yoksa ortalanmış makul bir varsayılana düş —
+            // admin her iki durumda da aşağıda sürükleyip/kaydırarak düzeltebilir.
+            if (product.productImageBox) {
+                const [y1, x1, y2, x2] = product.productImageBox;
+                setStoryBox({
+                    x: x1 / 10, y: y1 / 10,
+                    w: Math.max(5, (x2 - x1) / 10), h: Math.max(5, (y2 - y1) / 10),
+                });
+            } else {
+                setStoryBox({ x: 10, y: 10, w: 80, h: 60 });
+            }
             setStoryConfidence(product.confidence);
             setStoryTitle(product.title || '');
             setStoryBrand(product.brand || '');
             setStoryCategory((CATEGORIES as readonly string[]).includes(product.category) ? product.category : 'Diğer');
             setStoryOldPrice(product.oldPrice > 0 ? String(product.oldPrice) : '');
             setStoryNewPrice(product.newPrice > 0 ? String(product.newPrice) : '');
-            setStoryStage('review');
+            setStoryStage('crop');
         } catch (e: any) {
             setStoryError(e?.message || 'Görsel analiz edilemedi.');
             setStoryStage('idle');
+        }
+    };
+
+    // Kırpma kutusunu sürükleme (taşıma) — kutunun kendi üstünde pointer down/move/up.
+    const handleStoryBoxPointerDown = (e: React.PointerEvent) => {
+        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        storyCropBoxDragRef.current = { startX: e.clientX, startY: e.clientY, boxX: storyBox.x, boxY: storyBox.y };
+    };
+    const handleStoryBoxPointerMove = (e: React.PointerEvent) => {
+        const drag = storyCropBoxDragRef.current;
+        const container = storyCropContainerRef.current;
+        if (!drag || !container) return;
+        const rect = container.getBoundingClientRect();
+        const dxPct = ((e.clientX - drag.startX) / rect.width) * 100;
+        const dyPct = ((e.clientY - drag.startY) / rect.height) * 100;
+        setStoryBox(b => ({
+            ...b,
+            x: Math.min(100 - b.w, Math.max(0, drag.boxX + dxPct)),
+            y: Math.min(100 - b.h, Math.max(0, drag.boxY + dyPct)),
+        }));
+    };
+    const handleStoryBoxPointerUp = () => { storyCropBoxDragRef.current = null; };
+
+    const handleStoryCropConfirm = async () => {
+        if (!storyOriginalBuffer) return;
+        try {
+            const box1000: [number, number, number, number] = [
+                Math.round(storyBox.y * 10), Math.round(storyBox.x * 10),
+                Math.round((storyBox.y + storyBox.h) * 10), Math.round((storyBox.x + storyBox.w) * 10),
+            ];
+            const cropped = await cropImageByBox(storyOriginalBuffer, storyOriginalMimeType, box1000);
+            setStoryCroppedBlob(cropped);
+            setStoryPreviewUrl(URL.createObjectURL(cropped));
+            setStoryStage('review');
+        } catch (e: any) {
+            setStoryError(e?.message || 'Görsel kırpılamadı.');
         }
     };
 
@@ -3216,6 +3282,65 @@ const SocialContentManager: React.FC<SocialContentManagerProps> = () => {
                             <div className="flex items-center justify-center gap-2 py-8 text-gray-400 text-sm">
                                 <span className="w-4 h-4 border-2 border-gray-500 border-t-orange-400 rounded-full animate-spin" />
                                 Yapay zeka görseli analiz ediyor…
+                            </div>
+                        )}
+
+                        {storyStage === 'crop' && storyOriginalPreviewUrl && (
+                            <div className="space-y-3">
+                                <p className="text-gray-400 text-[11px]">
+                                    Kutuyu sürükleyerek SADECE ürün fotoğrafının üstüne getir — dışında kalan
+                                    her şey (mağaza arayüzü, yazılar, butonlar) atılacak.
+                                </p>
+                                <div
+                                    ref={storyCropContainerRef}
+                                    className="relative select-none touch-none"
+                                    style={{ userSelect: 'none' }}
+                                >
+                                    <img src={storyOriginalPreviewUrl} alt="" className="w-full rounded-lg" draggable={false} />
+                                    <div
+                                        onPointerDown={handleStoryBoxPointerDown}
+                                        onPointerMove={handleStoryBoxPointerMove}
+                                        onPointerUp={handleStoryBoxPointerUp}
+                                        className="absolute border-2 border-orange-500 cursor-move"
+                                        style={{
+                                            left: `${storyBox.x}%`, top: `${storyBox.y}%`,
+                                            width: `${storyBox.w}%`, height: `${storyBox.h}%`,
+                                            boxShadow: '0 0 0 9999px rgba(0,0,0,0.6)',
+                                        }}
+                                    />
+                                </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <label className="flex items-center gap-2 text-[11px] text-gray-400">
+                                        Genişlik
+                                        <input
+                                            type="range" min={5} max={100 - storyBox.x} value={storyBox.w}
+                                            onChange={(e) => setStoryBox(b => ({ ...b, w: Number(e.target.value) }))}
+                                            className="flex-1"
+                                        />
+                                    </label>
+                                    <label className="flex items-center gap-2 text-[11px] text-gray-400">
+                                        Yükseklik
+                                        <input
+                                            type="range" min={5} max={100 - storyBox.y} value={storyBox.h}
+                                            onChange={(e) => setStoryBox(b => ({ ...b, h: Number(e.target.value) }))}
+                                            className="flex-1"
+                                        />
+                                    </label>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={resetStoryImport}
+                                        className="flex-1 py-2 text-xs font-semibold bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg transition-colors"
+                                    >
+                                        İptal
+                                    </button>
+                                    <button
+                                        onClick={handleStoryCropConfirm}
+                                        className="flex-1 py-2 text-xs font-semibold bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-500 hover:to-red-500 text-white rounded-lg transition-all"
+                                    >
+                                        ✂️ Kırp ve Devam Et
+                                    </button>
+                                </div>
                             </div>
                         )}
 
