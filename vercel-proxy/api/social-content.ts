@@ -423,64 +423,6 @@ SADECE aşağıdaki JSON formatında cevap ver, başka hiçbir şey yazma:
     return res.status(200).json({ success: true, title, caption, voiceover });
 }
 
-async function handleDescriptionProcessing(req: VercelRequest, res: VercelResponse) {
-    const { descriptionText, productTitle } = req.body || {};
-
-    const prompt = `Aşağıda bir e-ticaret kampanya metni var. Bu metni kısa, açık ve okunaklı bir ürün açıklamasına dönüştür.
-
-${productTitle ? `Ürün: ${productTitle}` : ''}
-
-Ham kampanya metni:
-${String(descriptionText).trim()}
-
-KURALLAR:
-- Maksimum 4 satır yaz
-- Her satır kısa ve anlaşılır olsun
-- İndirim oranlarını, sepet kodlarını ve kampanya detaylarını sade bir dille açıkla
-- URL'leri metne dahil ETME, "bağlantıdan ulaşılabilir" gibi bir ifadeyle belirt
-- Türkçe yaz, doğal ve samimi bir dil kullan
-- Sadece JSON formatında yanıt ver: {"description": "satır1\\nsatır2\\nsatır3"}`;
-
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-            'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://indiva-proxy.vercel.app',
-            'X-Title': 'INDIVA Panel Story Description',
-        },
-        body: JSON.stringify({
-            model: MODEL,
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.5,
-            max_tokens: 400,
-            usage: { include: true },
-        }),
-        signal: AbortSignal.timeout(15000),
-    });
-
-    if (!response.ok) {
-        const errText = await response.text();
-        return res.status(502).json({ success: false, error: `OpenRouter ${response.status}: ${errText.substring(0, 200)}` });
-    }
-
-    const data = await response.json();
-    await trackOpenRouterUsage(data, 'story-description');
-    const text = data?.choices?.[0]?.message?.content || '';
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-        return res.status(502).json({ success: false, error: 'AI JSON döndürmedi' });
-    }
-
-    const parsed = JSON.parse(jsonMatch[0]);
-    const description = String(parsed.description || '').trim();
-    if (!description) {
-        return res.status(502).json({ success: false, error: 'AI açıklama döndürmedi' });
-    }
-
-    return res.status(200).json({ success: true, description });
-}
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     corsHeaders(res);
     if (req.method === 'OPTIONS') return res.status(200).end();
@@ -497,9 +439,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         if (Array.isArray(body.products)) {
             return await handleMultiContent(req, res);
-        }
-        if (typeof body.descriptionText === 'string' && body.descriptionText.trim()) {
-            return await handleDescriptionProcessing(req, res);
         }
         return await handleSingleContent(req, res);
     } catch (err: any) {
