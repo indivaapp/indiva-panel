@@ -769,7 +769,7 @@ async function renderDealImage(
         ctx.translate(CANVAS_W / 2, 175);
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const headline = 'FLAŞ İNDİRİM ÇILGINLIĞI!';
+        const headline = 'İNDİVADA İNDİRİM VAR!';
         const maxHeadlineW = CANVAS_W - 120;
         let headlineSize = 58;
         ctx.font = `900 ${headlineSize}px Arial`;
