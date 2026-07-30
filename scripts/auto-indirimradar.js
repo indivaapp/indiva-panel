@@ -146,30 +146,59 @@ async function filterExistingIds(db, docIds) {
 // art arda çekip birleştiriyoruz. Bir sayfa 50'den az dönerse ("son sayfa")
 // ya da PAGE_CAP'e ulaşılırsa duruyoruz.
 const PAGE_SIZE = 50;
-const PAGE_CAP = 15; // 15 x 50 = en fazla 750 ürün/tarama
+// 40 sayfa × 50 = en fazla 2000 ürün/tarama — önceki 750 sınırı çok kısıtlayıcıydı,
+// sitenin daha fazla ürün akıtabildiği live feed'den tam faydalanmak için artırıldı.
+const PAGE_CAP = 40;
+
+// Farklı API modları — her taramada sırayla denenir. 'live' mod güncel
+// ürünleri, 'deals' modu indirimli ürünleri, varsayılan ise genel listeyi döndürüyor.
+const API_MODES = ['live', 'deals', null];
+
+async function fetchPageWithMode(page, mode) {
+    const body = { limit: PAGE_SIZE, offset: page * PAGE_SIZE };
+    if (mode) body.mode = mode;
+    const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(20000),
+    });
+    if (!response.ok) return { ok: false, status: response.status, products: [] };
+    const data = await response.json();
+    return { ok: true, products: data.products || [] };
+}
 
 async function fetchIndirimRadarProducts() {
+    const seenIds = new Set();
     const all = [];
-    for (let page = 0; page < PAGE_CAP; page++) {
-        const response = await fetch(API_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            },
-            body: JSON.stringify({ limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
-            signal: AbortSignal.timeout(20000),
-        });
-        if (!response.ok) {
-            if (page === 0) throw new Error(`API HTTP ${response.status}`);
-            console.warn(`   ⚠️ Sayfa ${page + 1} çekilemedi (HTTP ${response.status}), elde olanla devam ediliyor.`);
-            break;
+
+    for (const mode of API_MODES) {
+        const modeLabel = mode || 'varsayılan';
+        console.log(`   📡 Mod: ${modeLabel}`);
+        for (let page = 0; page < PAGE_CAP; page++) {
+            const { ok, status, products } = await fetchPageWithMode(page, mode);
+            if (!ok) {
+                if (page === 0) console.warn(`   ⚠️ Mod '${modeLabel}' ilk sayfada HTTP ${status} döndü, atlanıyor.`);
+                else console.warn(`   ⚠️ Mod '${modeLabel}' sayfa ${page + 1}: HTTP ${status}, elde olanla devam.`);
+                break;
+            }
+            let newInPage = 0;
+            for (const p of products) {
+                if (p.id && !seenIds.has(String(p.id))) {
+                    seenIds.add(String(p.id));
+                    all.push(p);
+                    newInPage++;
+                }
+            }
+            if (products.length < PAGE_SIZE) break; // son sayfa
+            if (newInPage === 0) break; // bu modda artık yeni ürün yok
         }
-        const data = await response.json();
-        const products = data.products || [];
-        all.push(...products);
-        if (products.length < PAGE_SIZE) break; // son sayfa
+        console.log(`   ✅ Mod '${modeLabel}' sonrası toplam tekil ürün: ${all.length}`);
     }
+
     return all;
 }
 
