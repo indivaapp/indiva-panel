@@ -1,11 +1,10 @@
 name: Auto Social AI Suggest
 
 on:
-  # 12:57 / 16:57 / 20:57 TR (UTC+3, DST yok) = 09:57 / 13:57 / 17:57 UTC —
-  # admin'e gönderilen 13:00/17:00/21:00 bildirimlerinden 3 dakika önce, öneri
-  # hazır olsun diye.
-  schedule:
-    - cron: '57 9,13,17 * * *'
+  # DURAKLATILDI: AI tüketimi geçici olarak durduruldu.
+  # Yeniden etkinleştirmek için aşağıdaki satırların başındaki # işaretini kaldır:
+  # schedule:
+  #   - cron: '57 9,13,17 * * *'
   workflow_dispatch:
 
 jobs:

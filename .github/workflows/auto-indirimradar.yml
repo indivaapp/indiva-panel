@@ -1,11 +1,12 @@
 name: Auto IndirimRadar Deal Fetcher
 
 on:
-  schedule:
-    - cron: '*/30 * * * *'  # Yedek: zincir kırılırsa 30 dk'da bir devreye girer
+  # DURAKLATILDI: AI tüketimi geçici olarak durduruldu.
+  # Yeniden etkinleştirmek için aşağıdaki satırların başındaki # işaretini kaldır:
+  # schedule:
+  #   - cron: '*/30 * * * *'
   workflow_dispatch:
 
-# Aynı anda sadece bir run çalışsın; yenisi gelirse beklesin (iptal etmesin)
 concurrency:
   group: auto-indirimradar-chain
   cancel-in-progress: false
@@ -13,14 +14,10 @@ concurrency:
 jobs:
   fetch-and-publish:
     runs-on: ubuntu-latest
-    # 16 -> 22: önbellek TTL düzeltmesi (bkz. idCache.js) sonrası birikmiş
-    # stok (haftalar/aylarca "yasaklı" kalmış ürünler) tek seferde ortaya
-    # çıktı — bir run'da 738 yeni ürün bulunup 250'si işlenirken ~14 dakika
-    # sürdü. Stok eriyene kadar bu geçici olarak yüksek kalabilir.
     timeout-minutes: 22
 
     permissions:
-      actions: write  # workflow_dispatch tetiklemek için
+      actions: write
 
     steps:
       - name: Checkout
@@ -49,29 +46,7 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: node scripts/auto-indirimradar.js
 
-      # ~5 dakikalik bekleme artik script'in kendi icinde (bulunan urunleri
-      # pencereye yayarak yayinlama sirasinda) yapiliyor - burada sadece,
-      # script cok erken cokerse (orn. Firebase baglanti hatasi) art arda
-      # hizli tetiklenmeyi onlemek icin kucuk bir guvenlik payi birakiyoruz.
-      # Art arda 3 run da başarısız olduysa (sistemik bir hata var demektir)
-      # checkChainHealth.js zinciri durdurur ve uyarı gönderir — 30 dk'lık
-      # yedek schedule cron'u yine de devrede kalır (tam bir sessiz kalış olmaz).
       - name: Sonraki çalışmayı planla
         if: always()
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: |
-          sleep 10
-          if node scripts/checkChainHealth.js auto-indirimradar.yml 3; then
-            curl -s -o /dev/null -w "%{http_code}" -X POST \
-              -H "Authorization: token ${{ github.token }}" \
-              -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/auto-indirimradar.yml/dispatches" \
-              -d '{"ref":"main"}' \
-            | grep -q "^204$" \
-              && echo "✅ Sonraki run planlandı." \
-              || echo "⚠️ Dispatch başarısız (yedek schedule devralır)."
-          else
-            echo "⛔ Zincir art arda hatalar nedeniyle durduruldu, sonraki run tetiklenmedi (30 dk'lık yedek schedule devam eder)."
-          fi
+          echo "⏸️ Pipeline duraklatıldı — otomatik zincir tetiklenmedi."
